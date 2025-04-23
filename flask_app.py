@@ -26,7 +26,7 @@ def status():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 🧾 실시간 주가 중계 예시 (향후 구현 확장 가능)
+# 🧾 실시간 주가 중계 Relay (PythonAnywhere로 전송)
 @app.route("/price", methods=["GET"])
 def price():
     ticker = request.args.get("ticker")
