@@ -164,15 +164,6 @@ class SlackNotifier:
             snapshots, all_diffs, all_insights, global_hits
         )
 
-        # Add note about threads not available
-        blocks.append({
-            "type": "context",
-            "elements": [{
-                "type": "mrkdwn",
-                "text": "💡 _Set SLACK_BOT_TOKEN to enable thread details_"
-            }]
-        })
-
         message = {
             "text": f"📊 Game Ranking Report - {snapshots[0].date}",
             "blocks": blocks
@@ -222,24 +213,6 @@ class SlackNotifier:
             })
 
         blocks.append({"type": "divider"})
-
-        # Thread notice
-        if self.use_threads:
-            blocks.append({
-                "type": "context",
-                "elements": [{
-                    "type": "mrkdwn",
-                    "text": "_Full Top 20 + Market Insights in thread_"
-                }]
-            })
-        else:
-            blocks.append({
-                "type": "context",
-                "elements": [{
-                    "type": "mrkdwn",
-                    "text": "_Set SLACK_BOT_TOKEN for detailed thread reports_"
-                }]
-            })
 
         return blocks
 
