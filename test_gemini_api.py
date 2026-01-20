@@ -13,7 +13,8 @@ load_dotenv()
 
 # Gemini API 설정
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-GEMINI_API_URL = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}'
+# 안정적인 gemini-pro 모델 사용
+GEMINI_API_URL = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}'
 
 def test_gemini_api():
     """Gemini API 테스트"""

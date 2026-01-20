@@ -12,7 +12,8 @@ import pytz
 
 # Gemini API 설정
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-GEMINI_API_URL = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}'
+# 안정적인 gemini-pro 모델 사용
+GEMINI_API_URL = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}'
 
 # Slack Webhook 설정
 SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL')
@@ -76,13 +77,21 @@ Requirements:
             headers={'Content-Type': 'application/json'},
             timeout=30
         )
-        response.raise_for_status()
+
+        # 상태 코드와 응답 로깅
+        print(f"📊 API Response Status: {response.status_code}")
+
+        if response.status_code != 200:
+            print(f"❌ API 오류 응답: {response.text[:500]}")
+            response.raise_for_status()
 
         result = response.json()
 
         # Gemini 응답에서 텍스트 추출
         if 'candidates' in result and len(result['candidates']) > 0:
             text = result['candidates'][0]['content']['parts'][0]['text']
+
+            print(f"✅ API 응답 텍스트 길이: {len(text)} 문자")
 
             # JSON 코드 블록 제거
             text = text.replace('```json', '').replace('```', '').strip()
@@ -91,16 +100,23 @@ Requirements:
             data = json.loads(text)
             return data
         else:
-            raise Exception("No valid response from Gemini API")
+            error_msg = f"No valid response from Gemini API. Response: {str(result)[:200]}"
+            print(f"❌ {error_msg}")
+            raise Exception(error_msg)
 
     except requests.exceptions.RequestException as e:
         print(f"❌ Gemini API 요청 실패: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"상세 오류: {e.response.text[:500]}")
         return None
     except json.JSONDecodeError as e:
         print(f"❌ JSON 파싱 실패: {e}")
+        print(f"받은 텍스트 일부: {text[:300] if 'text' in locals() else 'N/A'}")
         return None
     except Exception as e:
         print(f"❌ 예상치 못한 오류: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
