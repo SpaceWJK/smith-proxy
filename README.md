@@ -1,16 +1,19 @@
 # 🎮 Google Play Store Game Ranking Crawler
 
-매일 오전 9시(KST)에 Google Play Store TOP 5 게임 랭킹을 자동으로 수집하여 Slack으로 알림하는 시스템입니다.
+매일 오전 9시(KST)에 여러 국가의 Google Play Store TOP 5 게임 랭킹을 자동으로 수집하여 Slack으로 알림하는 시스템입니다.
 
 ## ✨ 주요 기능
 
 - 🤖 **Gemini API** 활용 (완전 무료, 월 1,500 요청)
 - ⏰ **매일 오전 9시(KST)** 자동 실행 (GitHub Actions)
-- 📱 **TOP 5 게임** 정보 수집
-  - 게임 제목
+- 🌏 **다국가 랭킹** 수집
+  - 🇰🇷 South Korea
+  - 🇯🇵 Japan
+  - 🇺🇸 United States
+  - 🇹🇼 Taiwan
+- 📱 **각 국가별 TOP 5 게임** 정보
+  - 게임 제목 (현지 언어)
   - 퍼블리셔
-  - 카테고리
-  - Android 패키지명
 - 💬 **Slack 알림** (#sgpqa_epiczero 채널)
 
 ## 🚀 설치 및 실행
@@ -52,16 +55,35 @@ GitHub Repository → **Settings** → **Secrets and variables** → **Actions**
 ## 📋 출력 예시
 
 ```
-🎮 Google Play Store TOP 5 게임 랭킹
-📅 2024-01-20 09:00 (KST) | 🤖 Gemini API
-─────────────────────────────────────
-🥇 게임 제목 1
-📱 퍼블리셔: Publisher Name
-🏷️ 카테고리: Game
-📦 Package: com.example.game1
+Game Rankings(Android) • 2026-01-20
 
-🥈 게임 제목 2
-...
+🇰🇷 South Korea
+1 메이플스토리: 아이돌 RPG • 넥슨
+2 라스트 워: 서바이벌 게임 • FUNFLY
+3 화이트아웃 서바이벌 • Century Games
+4 라스트 Z: 서바이벌 슈터 • Florere Game
+5 원신 • 호요버스
+
+🇯🇵 Japan
+1 Fate/Grand Order • Aniplex
+2 Monster Strike • MIXI
+3 Puzzle & Dragons • GungHo
+4 Dragon Quest Walk • Square Enix
+5 Uma Musume Pretty Derby • Cygames
+
+🇺🇸 United States
+1 MONOPOLY GO! • Scopely
+2 Royal Match • Dream Games
+3 Candy Crush Saga • King
+4 Coin Master • Moon Active
+5 Roblox • Roblox Corporation
+
+🇹🇼 Taiwan
+1 Lineage M • NCSOFT
+2 Lineage W • NCSOFT
+3 Ragnarok X: Next Generation • Gravity
+4 Garena 傳說對決 • Garena
+5 Fate/Grand Order • Aniplex
 ```
 
 ## 🔧 기술 스택

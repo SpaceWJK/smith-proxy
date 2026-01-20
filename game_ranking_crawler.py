@@ -18,30 +18,35 @@ GEMINI_API_URL = f'https://generativelanguage.googleapis.com/v1beta/models/gemin
 SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL')
 
 def get_game_rankings():
-    """Gemini API를 통해 Google Play Store TOP 5 게임 랭킹 수집"""
+    """Gemini API를 통해 여러 국가의 Google Play Store TOP 5 게임 랭킹 수집"""
 
     prompt = """
-Please provide the current TOP 5 games from Google Play Store (Korea region) in the following JSON format:
+Please provide the current TOP 5 games from Google Play Store for multiple regions in the following JSON format:
 
 ```json
 {
   "ranking_date": "2024-01-20",
-  "games": [
+  "countries": [
     {
-      "rank": 1,
-      "title": "Game Name",
-      "publisher": "Publisher Name",
-      "category": "Category",
-      "android_label": "com.example.package"
+      "country": "South Korea",
+      "flag": "🇰🇷",
+      "games": [
+        {
+          "rank": 1,
+          "title": "Game Name",
+          "publisher": "Publisher Name"
+        }
+      ]
     }
   ]
 }
 ```
 
 Requirements:
-- Only include the top 5 games
-- Use Korean game titles if available
-- Include the Android package name (label)
+- Include rankings for: South Korea, Japan, United States, Taiwan
+- Provide TOP 5 games for each country
+- Use local language for game titles (Korean for Korea, Japanese for Japan, etc.)
+- Keep format simple: rank, title, publisher only
 - Return only valid JSON without any markdown or extra text
 """
 
@@ -96,76 +101,38 @@ Requirements:
 def send_slack_notification(ranking_data):
     """Slack으로 랭킹 정보 전송"""
 
-    if not ranking_data or 'games' not in ranking_data:
+    if not ranking_data or 'countries' not in ranking_data:
         send_error_notification("랭킹 데이터를 가져오지 못했습니다.")
         return False
 
     # KST 시간
     kst = pytz.timezone('Asia/Seoul')
     now = datetime.now(kst)
+    date_str = now.strftime('%Y-%m-%d')
 
-    # Slack 메시지 구성
-    blocks = [
-        {
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": "🎮 Google Play Store TOP 5 게임 랭킹",
-                "emoji": True
-            }
-        },
-        {
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"📅 {now.strftime('%Y년 %m월 %d일 %H:%M')} (KST) | 🤖 Gemini API"
-                }
-            ]
-        },
-        {
-            "type": "divider"
-        }
-    ]
+    # 메시지 텍스트 구성
+    message_lines = [f"*Game Rankings(Android) • {date_str}*\n"]
 
-    # 각 게임 정보 추가
-    for game in ranking_data.get('games', [])[:5]:
-        rank = game.get('rank', '?')
-        title = game.get('title', 'Unknown')
-        publisher = game.get('publisher', 'Unknown')
-        category = game.get('category', 'Game')
-        android_label = game.get('android_label', 'N/A')
+    # 각 국가별 랭킹 추가
+    for country_data in ranking_data.get('countries', []):
+        country_name = country_data.get('country', 'Unknown')
+        flag = country_data.get('flag', '🌍')
+        games = country_data.get('games', [])
 
-        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}.")
+        message_lines.append(f"\n{flag} *{country_name}*")
 
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*{medal} {title}*\n"
-                        f"📱 퍼블리셔: {publisher}\n"
-                        f"🏷️ 카테고리: {category}\n"
-                        f"📦 Package: `{android_label}`"
-            }
-        })
+        for game in games[:5]:
+            rank = game.get('rank', '?')
+            title = game.get('title', 'Unknown')
+            publisher = game.get('publisher', 'Unknown')
+            message_lines.append(f"{rank} {title} • {publisher}")
 
-    blocks.append({
-        "type": "divider"
-    })
-
-    blocks.append({
-        "type": "context",
-        "elements": [
-            {
-                "type": "mrkdwn",
-                "text": "💡 매일 오전 9시(KST) 자동 업데이트 | Powered by Gemini API"
-            }
-        ]
-    })
+    # 전체 메시지 조합
+    full_message = "\n".join(message_lines)
 
     payload = {
-        "blocks": blocks,
-        "text": f"Google Play Store TOP 5 게임 랭킹 ({now.strftime('%Y-%m-%d')})"
+        "text": full_message,
+        "mrkdwn": True
     }
 
     try:
@@ -245,7 +212,9 @@ def main():
     ranking_data = get_game_rankings()
 
     if ranking_data:
-        print(f"\n✅ 랭킹 수집 완료: {len(ranking_data.get('games', []))}개 게임")
+        countries = ranking_data.get('countries', [])
+        total_games = sum(len(c.get('games', [])) for c in countries)
+        print(f"\n✅ 랭킹 수집 완료: {len(countries)}개 국가, {total_games}개 게임")
         print("\n📤 Slack으로 알림 전송 중...")
         send_slack_notification(ranking_data)
     else:
