@@ -19,12 +19,68 @@ GEMINI_API_URL = f'https://generativelanguage.googleapis.com/v1beta/models/gemin
 # Slack Webhook 설정
 SLACK_WEBHOOK_URL = os.getenv('SLACK_WEBHOOK_URL')
 
-def get_game_rankings(max_retries=3, retry_delay=5):
+def get_sample_data():
+    """샘플 게임 랭킹 데이터 (API 실패 시 fallback)"""
+    from datetime import date
+    return {
+        "ranking_date": str(date.today()),
+        "is_sample_data": True,
+        "countries": [
+            {
+                "country": "South Korea",
+                "flag": "🇰🇷",
+                "games": [
+                    {"rank": 1, "title": "리니지M", "publisher": "NCSOFT"},
+                    {"rank": 2, "title": "메이플스토리", "publisher": "넥슨"},
+                    {"rank": 3, "title": "원신", "publisher": "호요버스"},
+                    {"rank": 4, "title": "배틀그라운드 모바일", "publisher": "KRAFTON"},
+                    {"rank": 5, "title": "쿠키런: 킹덤", "publisher": "Devsisters"}
+                ]
+            },
+            {
+                "country": "Japan",
+                "flag": "🇯🇵",
+                "games": [
+                    {"rank": 1, "title": "ウマ娘 プリティーダービー", "publisher": "Cygames"},
+                    {"rank": 2, "title": "モンスターストライク", "publisher": "MIXI"},
+                    {"rank": 3, "title": "Fate/Grand Order", "publisher": "Aniplex"},
+                    {"rank": 4, "title": "パズル&ドラゴンズ", "publisher": "GungHo"},
+                    {"rank": 5, "title": "プロ野球スピリッツA", "publisher": "Konami"}
+                ]
+            },
+            {
+                "country": "United States",
+                "flag": "🇺🇸",
+                "games": [
+                    {"rank": 1, "title": "MONOPOLY GO!", "publisher": "Scopely"},
+                    {"rank": 2, "title": "Royal Match", "publisher": "Dream Games"},
+                    {"rank": 3, "title": "Candy Crush Saga", "publisher": "King"},
+                    {"rank": 4, "title": "Roblox", "publisher": "Roblox Corporation"},
+                    {"rank": 5, "title": "Coin Master", "publisher": "Moon Active"}
+                ]
+            },
+            {
+                "country": "Taiwan",
+                "flag": "🇹🇼",
+                "games": [
+                    {"rank": 1, "title": "天堂M", "publisher": "NCSOFT"},
+                    {"rank": 2, "title": "天堂2M", "publisher": "NCSOFT"},
+                    {"rank": 3, "title": "傳說對決", "publisher": "Garena"},
+                    {"rank": 4, "title": "Fate/Grand Order", "publisher": "Aniplex"},
+                    {"rank": 5, "title": "原神", "publisher": "HoYoverse"}
+                ]
+            }
+        ]
+    }
+
+
+def get_game_rankings(max_retries=2, retry_delay=60, use_fallback=True):
     """Gemini API를 통해 여러 국가의 Google Play Store TOP 5 게임 랭킹 수집
 
     Args:
         max_retries: 최대 재시도 횟수 (429 에러 시)
         retry_delay: 재시도 대기 시간 (초)
+        use_fallback: API 실패 시 샘플 데이터 사용 여부
     """
 
     prompt = """
@@ -94,11 +150,18 @@ Requirements:
                 if attempt < max_retries - 1:
                     wait_time = retry_delay * (attempt + 1)
                     print(f"⏳ Rate limit 초과. {wait_time}초 후 재시도... ({attempt + 1}/{max_retries})")
+                    print(f"💡 API 키의 rate limit이 매우 낮은 것 같습니다.")
                     time.sleep(wait_time)
                     continue
                 else:
                     print(f"❌ Rate limit 초과. 최대 재시도 횟수 도달.")
-                    print(f"💡 해결 방법: 몇 분 후 다시 시도하거나 Google AI Studio에서 quota를 확인하세요.")
+                    print(f"💡 해결 방법:")
+                    print(f"   1. Google AI Studio (https://aistudio.google.com/apikey)에서 API 키 재생성")
+                    print(f"   2. 새 프로젝트로 API 키 생성하여 더 높은 quota 확보")
+                    print(f"   3. 또는 매일 자동 실행만 사용 (수동 테스트 자제)")
+                    if use_fallback:
+                        print(f"\n📦 샘플 데이터로 대체하여 계속 진행합니다...")
+                        return get_sample_data()
                     return None
 
             if response.status_code != 200:
@@ -117,6 +180,9 @@ Requirements:
                 print(f"❌ Gemini API 요청 실패: {e}")
                 if hasattr(e, 'response') and e.response is not None:
                     print(f"상세 오류: {e.response.text[:500]}")
+                if use_fallback:
+                    print(f"\n📦 샘플 데이터로 대체하여 계속 진행합니다...")
+                    return get_sample_data()
                 return None
 
     try:
@@ -141,11 +207,17 @@ Requirements:
     except json.JSONDecodeError as e:
         print(f"❌ JSON 파싱 실패: {e}")
         print(f"받은 텍스트 일부: {text[:300] if 'text' in locals() else 'N/A'}")
+        if use_fallback:
+            print(f"\n📦 샘플 데이터로 대체하여 계속 진행합니다...")
+            return get_sample_data()
         return None
     except Exception as e:
         print(f"❌ 예상치 못한 오류: {e}")
         import traceback
         traceback.print_exc()
+        if use_fallback:
+            print(f"\n📦 샘플 데이터로 대체하여 계속 진행합니다...")
+            return get_sample_data()
         return None
 
 
@@ -162,7 +234,11 @@ def send_slack_notification(ranking_data):
     date_str = now.strftime('%Y-%m-%d')
 
     # 메시지 텍스트 구성
-    message_lines = [f"*Game Rankings(Android) • {date_str}*\n"]
+    is_sample = ranking_data.get('is_sample_data', False)
+    header = f"*Game Rankings(Android) • {date_str}*"
+    if is_sample:
+        header += " [SAMPLE DATA]"
+    message_lines = [header + "\n"]
 
     # 각 국가별 랭킹 추가
     for country_data in ranking_data.get('countries', []):
@@ -265,7 +341,13 @@ def main():
     if ranking_data:
         countries = ranking_data.get('countries', [])
         total_games = sum(len(c.get('games', [])) for c in countries)
-        print(f"\n✅ 랭킹 수집 완료: {len(countries)}개 국가, {total_games}개 게임")
+        is_sample = ranking_data.get('is_sample_data', False)
+
+        if is_sample:
+            print(f"\n✅ 샘플 데이터 사용: {len(countries)}개 국가, {total_games}개 게임")
+        else:
+            print(f"\n✅ 랭킹 수집 완료: {len(countries)}개 국가, {total_games}개 게임")
+
         print("\n📤 Slack으로 알림 전송 중...")
         send_slack_notification(ranking_data)
     else:
