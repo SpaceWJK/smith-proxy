@@ -59,6 +59,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 # Slack settings (from environment variables)
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")  # For thread support
 SLACK_CHANNEL = os.getenv("SLACK_CHANNEL", "#game-rankings")
 
 # User agent for web scraping
