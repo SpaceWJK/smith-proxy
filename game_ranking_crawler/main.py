@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from game_ranking_crawler.collectors.dummy_collector import DummyCollector
 from game_ranking_crawler.collectors.claude_api_collector import ClaudeAPICollector
+from game_ranking_crawler.collectors.sample_real_collector import SampleRealCollector
 from game_ranking_crawler.storage.json_storage import JSONStorage
 from game_ranking_crawler.notifiers.slack_notifier import SlackNotifier
 from game_ranking_crawler.models import RankingSnapshot, CrawlResult
@@ -33,9 +34,13 @@ def run_daily_crawl():
 
     # Initialize components
     # Choose collector based on environment
+    use_sample_real = os.getenv("USE_SAMPLE_REAL", "").lower() == "true"
     use_claude_api = os.getenv("USE_CLAUDE_API", "").lower() == "true" or bool(ANTHROPIC_API_KEY)
 
-    if use_claude_api and ANTHROPIC_API_KEY:
+    if use_sample_real:
+        print("📊 Using sample real data (today's actual rankings)")
+        collector = SampleRealCollector()
+    elif use_claude_api and ANTHROPIC_API_KEY:
         print("🤖 Using Claude API collector (real data via LLM)")
         collector = ClaudeAPICollector()
     else:

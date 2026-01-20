@@ -187,7 +187,7 @@ class SlackNotifier:
         all_insights: Dict,
         global_hits: List[str]
     ) -> List[dict]:
-        """Format compact main message"""
+        """Format ultra-compact main message - TOP 5 only"""
         date = snapshots[0].date if snapshots else datetime.utcnow().strftime("%Y-%m-%d")
 
         blocks = [
@@ -195,66 +195,29 @@ class SlackNotifier:
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"📊 Game Ranking Digest • {date}",
-                    "emoji": True
+                    "text": f"Game Rankings • {date}",
+                    "emoji": False
                 }
-            },
-            {
-                "type": "context",
-                "elements": [{
-                    "type": "mrkdwn",
-                    "text": "📍 *Source:* AppBrain | ⚠️ _24-48h data lag_"
-                }]
             },
             {"type": "divider"}
         ]
 
-        # Highlights section
-        highlights = self._generate_highlights(snapshots, all_insights)
-        if highlights:
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*🔥 Today's Highlights*\n{highlights}"
-                }
-            })
-            blocks.append({"type": "divider"})
-
-        # Country #1 games
-        leaders_text = "*🏆 Today's #1*\n"
+        # Country TOP 5 - Clean and compact
         for snapshot in snapshots:
             country = COUNTRIES.get(snapshot.country_code)
-            if country and snapshot.games:
-                top1 = snapshot.games[0]
-                leaders_text += f"{country.flag_emoji} *{top1.title}*\n"
+            if not country:
+                continue
 
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": leaders_text.strip()
-            }
-        })
+            # Format TOP 5
+            top5_text = f"*{country.flag_emoji} {country.name}*\n"
+            for i, game in enumerate(snapshot.games[:5], 1):
+                top5_text += f"`{i}` {game.title}\n"
 
-        # Market insights
-        if all_insights:
-            insights_text = self._format_market_insights(all_insights)
             blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*💡 Market Insights*\n{insights_text}"
-                }
-            })
-
-        # Global hits
-        if global_hits:
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*🌍 Global Hits (Top 10 in all markets)*\n{', '.join(global_hits[:5])}"
+                    "text": top5_text.strip()
                 }
             })
 
@@ -266,7 +229,15 @@ class SlackNotifier:
                 "type": "context",
                 "elements": [{
                     "type": "mrkdwn",
-                    "text": "👇 *View full Top 20 rankings in thread replies below*"
+                    "text": "_Full Top 20 + Market Insights in thread_"
+                }]
+            })
+        else:
+            blocks.append({
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": "_Set SLACK_BOT_TOKEN for detailed thread reports_"
                 }]
             })
 
@@ -330,10 +301,9 @@ class SlackNotifier:
         diffs: List[GameDiff],
         country
     ) -> str:
-        """Format detailed ranking for thread reply"""
+        """Format detailed ranking for thread reply with market insights"""
         lines = [
-            f"*{country.flag_emoji} {country.name} - Top 20 Full Rankings*",
-            f"━━━━━━━━━━━━━━━━━━━━",
+            f"*{country.flag_emoji} {country.name} - Top 20*",
             ""
         ]
 
@@ -349,11 +319,11 @@ class SlackNotifier:
             elif i == 3:
                 rank_str = "🥉"
             else:
-                rank_str = f"{i:2d}."
+                rank_str = f"`{i:2d}`"
 
             # Game info
             title = game.title
-            publisher = f" • {game.publisher}" if game.publisher != "Unknown" else ""
+            publisher = f" • _{game.publisher}_" if game.publisher != "Unknown" else ""
 
             # Change indicator
             change_str = ""
@@ -363,11 +333,30 @@ class SlackNotifier:
                     change_str = " 🆕"
                 elif diff.rank_change:
                     if diff.rank_change > 0:
-                        change_str = f" ⬆️{diff.rank_change}"
+                        change_str = f" ⬆{diff.rank_change}"
                     elif diff.rank_change < 0:
-                        change_str = f" ⬇️{abs(diff.rank_change)}"
+                        change_str = f" ⬇{abs(diff.rank_change)}"
 
             lines.append(f"{rank_str} {title}{publisher}{change_str}")
+
+        # Add market insights at the end
+        if diffs:
+            lines.append("")
+            lines.append("*Market Insights*")
+
+            # Calculate insights
+            new_count = sum(1 for d in diffs if d.is_new)
+            movers = [(d.game.title, d.rank_change) for d in diffs if d.rank_change]
+            top_movers = sorted(movers, key=lambda x: abs(x[1]), reverse=True)[:3]
+
+            if new_count > 0:
+                lines.append(f"• New Entries: {new_count}")
+
+            if top_movers:
+                lines.append("• Top Movers:")
+                for title, change in top_movers:
+                    direction = "⬆" if change > 0 else "⬇"
+                    lines.append(f"  {direction} {title} ({abs(change)} ranks)")
 
         return "\n".join(lines)
 
