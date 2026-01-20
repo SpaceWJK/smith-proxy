@@ -45,8 +45,14 @@ Please provide the current TOP 5 games from Google Play Store for multiple regio
 Requirements:
 - Include rankings for: South Korea, Japan, United States, Taiwan
 - Provide TOP 5 games for each country
-- Use local language for game titles (Korean for Korea, Japanese for Japan, etc.)
 - Keep format simple: rank, title, publisher only
+
+**Game Title Language Rules:**
+- South Korea: Use Korean title if the game is officially released in Korea. If not available in Korea, use English or original language title.
+- Japan: Use Japanese title (original)
+- United States: Use English title (original)
+- Taiwan: Use Traditional Chinese or English title (original)
+
 - Return only valid JSON without any markdown or extra text
 """
 
