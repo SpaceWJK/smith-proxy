@@ -8,10 +8,11 @@ from typing import List
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from game_ranking_crawler.collectors.dummy_collector import DummyCollector
+from game_ranking_crawler.collectors.claude_api_collector import ClaudeAPICollector
 from game_ranking_crawler.storage.json_storage import JSONStorage
 from game_ranking_crawler.notifiers.slack_notifier import SlackNotifier
 from game_ranking_crawler.models import RankingSnapshot, CrawlResult
-from game_ranking_crawler.config import COUNTRIES, SLACK_WEBHOOK_URL
+from game_ranking_crawler.config import COUNTRIES, SLACK_WEBHOOK_URL, ANTHROPIC_API_KEY
 
 def run_daily_crawl():
     """
@@ -27,7 +28,18 @@ def run_daily_crawl():
     print("=" * 60)
 
     # Initialize components
-    collector = DummyCollector()
+    # Choose collector based on environment
+    use_claude_api = os.getenv("USE_CLAUDE_API", "").lower() == "true" or bool(ANTHROPIC_API_KEY)
+
+    if use_claude_api and ANTHROPIC_API_KEY:
+        print("🤖 Using Claude API collector (real data via LLM)")
+        collector = ClaudeAPICollector()
+    else:
+        print("🎲 Using dummy collector (test data)")
+        if not ANTHROPIC_API_KEY:
+            print("💡 Tip: Set ANTHROPIC_API_KEY to use real data collection")
+        collector = DummyCollector()
+
     storage = JSONStorage()
 
     # Step 1: Crawl all countries

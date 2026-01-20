@@ -31,6 +31,7 @@ jobs:
 
       - name: Run crawler
         env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           python -m game_ranking_crawler.main
