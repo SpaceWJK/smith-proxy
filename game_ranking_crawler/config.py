@@ -54,8 +54,9 @@ RETRY_DELAY = 2  # seconds
 SNAPSHOTS_DIR = "snapshots"
 HISTORY_FILE = "history.json"
 
-# Claude API settings (from environment variables)
+# LLM API settings (from environment variables)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Slack settings (from environment variables)
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
