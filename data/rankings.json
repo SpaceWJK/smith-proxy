@@ -1,0 +1,129 @@
+{
+  "ranking_date": "2026-01-20",
+  "countries": [
+    {
+      "country": "South Korea",
+      "flag": "🇰🇷",
+      "games": [
+        {
+          "rank": 1,
+          "title": "리니지M",
+          "publisher": "NCSOFT"
+        },
+        {
+          "rank": 2,
+          "title": "메이플스토리",
+          "publisher": "넥슨"
+        },
+        {
+          "rank": 3,
+          "title": "원신",
+          "publisher": "호요버스"
+        },
+        {
+          "rank": 4,
+          "title": "배틀그라운드 모바일",
+          "publisher": "KRAFTON"
+        },
+        {
+          "rank": 5,
+          "title": "쿠키런: 킹덤",
+          "publisher": "Devsisters"
+        }
+      ]
+    },
+    {
+      "country": "Japan",
+      "flag": "🇯🇵",
+      "games": [
+        {
+          "rank": 1,
+          "title": "ウマ娘 プリティーダービー",
+          "publisher": "Cygames"
+        },
+        {
+          "rank": 2,
+          "title": "モンスターストライク",
+          "publisher": "MIXI"
+        },
+        {
+          "rank": 3,
+          "title": "Fate/Grand Order",
+          "publisher": "Aniplex"
+        },
+        {
+          "rank": 4,
+          "title": "パズル&ドラゴンズ",
+          "publisher": "GungHo"
+        },
+        {
+          "rank": 5,
+          "title": "プロ野球スピリッツA",
+          "publisher": "Konami"
+        }
+      ]
+    },
+    {
+      "country": "United States",
+      "flag": "🇺🇸",
+      "games": [
+        {
+          "rank": 1,
+          "title": "MONOPOLY GO!",
+          "publisher": "Scopely"
+        },
+        {
+          "rank": 2,
+          "title": "Royal Match",
+          "publisher": "Dream Games"
+        },
+        {
+          "rank": 3,
+          "title": "Candy Crush Saga",
+          "publisher": "King"
+        },
+        {
+          "rank": 4,
+          "title": "Roblox",
+          "publisher": "Roblox Corporation"
+        },
+        {
+          "rank": 5,
+          "title": "Coin Master",
+          "publisher": "Moon Active"
+        }
+      ]
+    },
+    {
+      "country": "Taiwan",
+      "flag": "🇹🇼",
+      "games": [
+        {
+          "rank": 1,
+          "title": "天堂M",
+          "publisher": "NCSOFT"
+        },
+        {
+          "rank": 2,
+          "title": "天堂2M",
+          "publisher": "NCSOFT"
+        },
+        {
+          "rank": 3,
+          "title": "傳說對決",
+          "publisher": "Garena"
+        },
+        {
+          "rank": 4,
+          "title": "Fate/Grand Order",
+          "publisher": "Aniplex"
+        },
+        {
+          "rank": 5,
+          "title": "原神",
+          "publisher": "HoYoverse"
+        }
+      ]
+    }
+  ]
+}

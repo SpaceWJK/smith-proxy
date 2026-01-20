@@ -26,12 +26,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run ranking crawler
+    - name: Send ranking notification
       env:
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       run: |
-        python game_ranking_crawler.py
+        python send_ranking_notification.py
 
     - name: Notify on failure
       if: failure()
