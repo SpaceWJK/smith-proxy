@@ -186,7 +186,7 @@ class SlackNotifier:
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"Game Rankings • {date}",
+                    "text": f"Game Rankings(Android) • {date}",
                     "emoji": False
                 }
             },
@@ -202,7 +202,8 @@ class SlackNotifier:
             # Format TOP 5
             top5_text = f"*{country.flag_emoji} {country.name}*\n"
             for i, game in enumerate(snapshot.games[:5], 1):
-                top5_text += f"`{i}` {game.title}\n"
+                publisher = f" • {game.publisher}" if game.publisher and game.publisher != "Unknown" else ""
+                top5_text += f"`{i}` {game.title}{publisher}\n"
 
             blocks.append({
                 "type": "section",
