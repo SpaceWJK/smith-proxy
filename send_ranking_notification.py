@@ -10,6 +10,10 @@ import sys
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
+
+# .env 파일 로드 (로컬 실행 시)
+load_dotenv()
 
 
 def load_rankings():
