@@ -1,0 +1,11 @@
+# Selenium for browser automation
+selenium==4.16.0
+
+# WebDriver Manager for automatic ChromeDriver installation
+webdriver-manager==4.0.1
+
+# Requests for Slack webhook
+requests==2.31.0
+
+# Python dotenv for environment variables (optional)
+python-dotenv==1.0.0

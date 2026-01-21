@@ -1,0 +1,36 @@
+name: Daily Game Ranking Notification
+
+on:
+  # 매일 UTC 00:00 (KST 09:00) 실행
+  schedule:
+    - cron: '0 0 * * *'
+
+  # 수동 실행 허용
+  workflow_dispatch:
+
+jobs:
+  send-ranking:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+      - name: Send Slack notification
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          python send_ranking_notification.py
+
+      - name: Notification complete
+        run: |
+          echo "✅ Ranking notification sent successfully!"
