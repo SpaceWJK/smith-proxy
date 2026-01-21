@@ -32,3 +32,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 temp/
+
+# Chrome profile (contains login session)
+chrome_profile/

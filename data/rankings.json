@@ -5,16 +5,26 @@
       "country": "South Korea",
       "flag": "KR",
       "games": [
-        {
-          "rank": 1,
-          "title": "Lineage M",
-          "publisher": "NCSOFT"
-        },
-        {
-          "rank": 2,
-          "title": "MapleStory",
-          "publisher": "Nexon"
-        }
+        {"rank": 1, "title": "메이플 키우기", "publisher": "NEXON"},
+        {"rank": 2, "title": "라스트 워: 서바이벌", "publisher": "FirstFun"},
+        {"rank": 3, "title": "화이트아웃 서바이벌", "publisher": "Century Games"},
+        {"rank": 4, "title": "라스트 Z: 서바이벌 슈터", "publisher": "Florere Game"},
+        {"rank": 5, "title": "원신", "publisher": "HoYoverse"},
+        {"rank": 6, "title": "로블록스", "publisher": "Roblox Corp"},
+        {"rank": 7, "title": "로얄 매치", "publisher": "Dream Games"},
+        {"rank": 8, "title": "킹샷", "publisher": "Century Games"},
+        {"rank": 9, "title": "리니지M", "publisher": "NCSOFT"},
+        {"rank": 10, "title": "명조: 워더링 웨이브", "publisher": "Kuro Games"},
+        {"rank": 11, "title": "가십하버", "publisher": "Microfun"},
+        {"rank": 12, "title": "오딘: 발할라 라이징", "publisher": "Kakao Games"},
+        {"rank": 13, "title": "승리의 여신: 니케", "publisher": "Level Infinite"},
+        {"rank": 14, "title": "마비노기 모바일", "publisher": "NEXON"},
+        {"rank": 15, "title": "다크 워 서바이벌", "publisher": "Florere Game"},
+        {"rank": 16, "title": "드래곤 트래블러", "publisher": "GameTree"},
+        {"rank": 17, "title": "FC 모바일", "publisher": "NEXON"},
+        {"rank": 18, "title": "뱀피르", "publisher": "Netmarble"},
+        {"rank": 19, "title": "탑 히어로즈", "publisher": "RiverGame"},
+        {"rank": 20, "title": "아이온2", "publisher": "NCSOFT"}
       ]
     }
   ]
