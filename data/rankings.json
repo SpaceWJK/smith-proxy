@@ -106,6 +106,112 @@
           "publisher": "Microfun Limited"
         }
       ]
+    },
+    {
+      "country": "Japan",
+      "flag": "JP",
+      "games": [
+        {
+          "rank": 1,
+          "title": "Search the web for current top-grossing Google Play Store games in Japan.I need TOP 20 for Japan (game titles in Japanese).List them like this:Japan TOP 20:1. [game]",
+          "publisher": "[publisher]"
+        },
+        {
+          "rank": 2,
+          "title": "原神 (Genshin Impact)",
+          "publisher": "COGNOSPHERE PTE. LTD."
+        },
+        {
+          "rank": 3,
+          "title": "ラストウォー：サバイバル (Last War: Survival Game)",
+          "publisher": "FirstFun"
+        },
+        {
+          "rank": 4,
+          "title": "Fate/Grand Order",
+          "publisher": "Aniplex Inc."
+        },
+        {
+          "rank": 5,
+          "title": "鳴潮 (Wuthering Waves)",
+          "publisher": "HK KURO GAMES LIMITED"
+        },
+        {
+          "rank": 6,
+          "title": "パズル＆サバイバル (Puzzles & Survival)",
+          "publisher": "37GAMES"
+        },
+        {
+          "rank": 7,
+          "title": "ホワイトアウト・サバイバル (Whiteout Survival)",
+          "publisher": "Century Games PTE. LTD."
+        },
+        {
+          "rank": 8,
+          "title": "SDガンダム ジージェネレーション エターナル",
+          "publisher": "Bandai Namco Entertainment Inc."
+        },
+        {
+          "rank": 9,
+          "title": "ドラゴンクエストウォーク (Dragon Quest Walk)",
+          "publisher": "SQUARE ENIX Co.,Ltd."
+        },
+        {
+          "rank": 10,
+          "title": "ロイヤルマッチ (Royal Match)",
+          "publisher": "Dream Games, Ltd."
+        },
+        {
+          "rank": 11,
+          "title": "勝利の女神：NIKKE (GODDESS OF VICTORY: NIKKE)",
+          "publisher": "Level Infinite"
+        },
+        {
+          "rank": 12,
+          "title": "ゴシップハーバー：マージ & ストーリー (Gossip Harbor)",
+          "publisher": "Microfun Limited"
+        },
+        {
+          "rank": 13,
+          "title": "Toon Blast (トゥーンブラスト)",
+          "publisher": "Peak"
+        },
+        {
+          "rank": 14,
+          "title": "ウマ娘 プリティーダービー (Umamusume: Pretty Derby)",
+          "publisher": "Cygames, Inc."
+        },
+        {
+          "rank": 15,
+          "title": "Pokémon GO",
+          "publisher": "Niantic, Inc."
+        },
+        {
+          "rank": 16,
+          "title": "Pokémon TCG Pocket (Pokémon Trading Card Game Pocket)",
+          "publisher": "The Pokémon Company"
+        },
+        {
+          "rank": 17,
+          "title": "パズル＆ドラゴンズ (Puzzle & Dragons)",
+          "publisher": "GungHo Online Entertainment, Inc."
+        },
+        {
+          "rank": 18,
+          "title": "Last Z: Survival Shooter",
+          "publisher": "Florere Game"
+        },
+        {
+          "rank": 19,
+          "title": "アークナイツ (Arknights)",
+          "publisher": "Yostar, Inc."
+        },
+        {
+          "rank": 20,
+          "title": "刀剣乱舞ONLINE (Touken Ranbu ONLINE)",
+          "publisher": "DMMGAMES"
+        }
+      ]
     }
   ]
 }
