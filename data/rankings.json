@@ -17,7 +17,7 @@
         },
         {
           "rank": 3,
-          "title": "WOS: 화이트아웃 서바이벌",
+          "title": "화이트아웃 서바이벌",
           "publisher": "Century Games PTE. LTD."
         },
         {
@@ -27,33 +27,33 @@
         },
         {
           "rank": 5,
-          "title": "로블록스(Roblox)",
-          "publisher": "Roblox Corporation"
+          "title": "원신",
+          "publisher": "COGNOSPHERE PTE. LTD."
         },
         {
           "rank": 6,
-          "title": "리니지M",
-          "publisher": "NCSOFT"
+          "title": "로블록스 (Roblox)",
+          "publisher": "Roblox Corporation"
         },
         {
           "rank": 7,
-          "title": "킹샷:Kingshot",
-          "publisher": "Century Games PTE. LTD."
-        },
-        {
-          "rank": 8,
           "title": "로얄 매치",
           "publisher": "Dream Games, Ltd."
         },
         {
+          "rank": 8,
+          "title": "킹샷: Kingshot",
+          "publisher": "Century Games PTE. LTD."
+        },
+        {
           "rank": 9,
-          "title": "오딘: 발할라 라이징",
-          "publisher": "Kakao Games Corp."
+          "title": "리니지M",
+          "publisher": "NCSOFT"
         },
         {
           "rank": 10,
-          "title": "원신",
-          "publisher": "COGNOSPHERE PTE. LTD."
+          "title": "명조: 워더링 웨이브",
+          "publisher": "HK KURO GAMES LIMITED"
         },
         {
           "rank": 11,
@@ -62,38 +62,38 @@
         },
         {
           "rank": 12,
+          "title": "오딘: 발할라 라이징",
+          "publisher": "Kakao Games Corp."
+        },
+        {
+          "rank": 13,
           "title": "승리의 여신: 니케",
           "publisher": "Level Infinite"
         },
         {
-          "rank": 13,
+          "rank": 14,
           "title": "마비노기 모바일",
           "publisher": "NEXON Company"
         },
         {
-          "rank": 14,
-          "title": "트릭컬 리바이브",
-          "publisher": "EPIDGames"
+          "rank": 15,
+          "title": "다크 워 서바이벌",
+          "publisher": "Florere Game"
         },
         {
-          "rank": 15,
+          "rank": 16,
+          "title": "드래곤 트래블러",
+          "publisher": "HongKong GameTree Limited"
+        },
+        {
+          "rank": 17,
           "title": "FC 모바일",
           "publisher": "NEXON Company"
         },
         {
-          "rank": 16,
-          "title": "명조: 워더링 웨이브",
-          "publisher": "HK KURO GAMES LIMITED"
-        },
-        {
-          "rank": 17,
+          "rank": 18,
           "title": "뱀피르",
           "publisher": "Netmarble"
-        },
-        {
-          "rank": 18,
-          "title": "다크 워 서바이벌",
-          "publisher": "Florere Game"
         },
         {
           "rank": 19,
@@ -102,326 +102,8 @@
         },
         {
           "rank": 20,
-          "title": "Seaside Escape®: 머지 & 스토리",
-          "publisher": "Microfun Limited"
-        }
-      ]
-    },
-    {
-      "country": "Japan",
-      "flag": "JP",
-      "games": [
-        {
-          "rank": 1,
-          "title": "Here are the current top-grossing games on the Google Play Store in Japan as of January 2026. The list follows your requested format: Game Title (Japanese)",
-          "publisher": "Publisher Name."
-        },
-        {
-          "rank": 2,
-          "title": "原神",
-          "publisher": "HoYoverse"
-        },
-        {
-          "rank": 3,
-          "title": "ラストウォー：サバイバル",
-          "publisher": "FirstFun"
-        },
-        {
-          "rank": 4,
-          "title": "Fate/Grand Order",
-          "publisher": "Aniplex Inc."
-        },
-        {
-          "rank": 5,
-          "title": "パズル＆サバイバル",
-          "publisher": "37GAMES"
-        },
-        {
-          "rank": 6,
-          "title": "ホワイトアウト・サバイバル",
-          "publisher": "Century Games"
-        },
-        {
-          "rank": 7,
-          "title": "鳴潮（メイチョウ）",
-          "publisher": "KURO GAMES"
-        },
-        {
-          "rank": 8,
-          "title": "SDガンダム ジージェネレーション エターナル",
-          "publisher": "Bandai Namco Entertainment"
-        },
-        {
-          "rank": 9,
-          "title": "ロイヤルマッチ",
-          "publisher": "Dream Games"
-        },
-        {
-          "rank": 10,
-          "title": "ウマ娘 プリティーダービー",
-          "publisher": "Cygames, Inc."
-        },
-        {
-          "rank": 11,
-          "title": "ゴシップハーバー：マージ & ストーリー",
-          "publisher": "Microfun Limited"
-        },
-        {
-          "rank": 12,
-          "title": "トゥーンブラスト",
-          "publisher": "Peak"
-        },
-        {
-          "rank": 13,
-          "title": "Pokémon GO",
-          "publisher": "Niantic, Inc."
-        },
-        {
-          "rank": 14,
-          "title": "ドラゴンクエストウォーク",
-          "publisher": "SQUARE ENIX"
-        },
-        {
-          "rank": 15,
-          "title": "勝利の女神：NIKKE",
-          "publisher": "Level Infinite"
-        },
-        {
-          "rank": 16,
-          "title": "パズル＆ドラゴンズ",
-          "publisher": "GungHo Online Entertainment"
-        },
-        {
-          "rank": 17,
-          "title": "Last Z: Survival Shooter",
-          "publisher": "Florere Game"
-        },
-        {
-          "rank": 18,
-          "title": "eFootball™",
-          "publisher": "KONAMI"
-        },
-        {
-          "rank": 19,
-          "title": "LINE ポコポコ",
-          "publisher": "LINEヤフー"
-        },
-        {
-          "rank": 20,
-          "title": "プロ野球スピリッツA",
-          "publisher": "KONAMI"
-        }
-      ]
-    },
-    {
-      "country": "United States",
-      "flag": "US",
-      "games": [
-        {
-          "rank": 1,
-          "title": "MONOPOLY GO!",
-          "publisher": "Scopely"
-        },
-        {
-          "rank": 2,
-          "title": "Last War:Survival Game",
-          "publisher": "FUNFLY PTE. LTD."
-        },
-        {
-          "rank": 3,
-          "title": "Royal Match",
-          "publisher": "Dream Games, Ltd."
-        },
-        {
-          "rank": 4,
-          "title": "Candy Crush Saga",
-          "publisher": "King"
-        },
-        {
-          "rank": 5,
-          "title": "Last Z: Survival Shooter",
-          "publisher": "Florere Game"
-        },
-        {
-          "rank": 6,
-          "title": "Gossip Harbor: Merge & Story",
-          "publisher": "Microfun Limited"
-        },
-        {
-          "rank": 7,
-          "title": "Kingshot",
-          "publisher": "Century Games PTE. LTD."
-        },
-        {
-          "rank": 8,
-          "title": "Coin Master",
-          "publisher": "Moon Active"
-        },
-        {
-          "rank": 9,
-          "title": "Royal Kingdom",
-          "publisher": "Dream Games, Ltd."
-        },
-        {
-          "rank": 10,
-          "title": "Whiteout Survival",
-          "publisher": "Century Games PTE. LTD."
-        },
-        {
-          "rank": 11,
-          "title": "Roblox",
-          "publisher": "Roblox Corporation"
-        },
-        {
-          "rank": 12,
-          "title": "Township",
-          "publisher": "Playrix"
-        },
-        {
-          "rank": 13,
-          "title": "Toon Blast",
-          "publisher": "Peak"
-        },
-        {
-          "rank": 14,
-          "title": "Pokémon GO",
-          "publisher": "Niantic, Inc."
-        },
-        {
-          "rank": 15,
-          "title": "Evony: The King's Return",
-          "publisher": "TG Inc."
-        },
-        {
-          "rank": 16,
-          "title": "Jackpot Party Casino Slots",
-          "publisher": "SciPlay"
-        },
-        {
-          "rank": 17,
-          "title": "Match Factory!",
-          "publisher": "Peak"
-        },
-        {
-          "rank": 18,
-          "title": "Bingo Blitz™️",
-          "publisher": "Bingo Games - Playtika Santa Monica"
-        },
-        {
-          "rank": 19,
-          "title": "Homescapes",
-          "publisher": "Playrix"
-        },
-        {
-          "rank": 20,
-          "title": "Fishdom",
-          "publisher": "Playrix"
-        }
-      ]
-    },
-    {
-      "country": "Taiwan",
-      "flag": "TW",
-      "games": [
-        {
-          "rank": 1,
-          "title": "天堂M",
-          "publisher": "Gamania Digital Entertainment Co Ltd"
-        },
-        {
-          "rank": 2,
-          "title": "星城Online-範馬刃牙地表最強SLOT",
-          "publisher": "網銀國際股份有限公司"
-        },
-        {
-          "rank": 3,
-          "title": "Last War:Survival Game",
-          "publisher": "FUNFLY PTE. LTD."
-        },
-        {
-          "rank": 4,
-          "title": "Whiteout Survival",
-          "publisher": "Century Games PTE. LTD."
-        },
-        {
-          "rank": 5,
-          "title": "原神",
-          "publisher": "COGNOSPHERE PTE. LTD."
-        },
-        {
-          "rank": 6,
-          "title": "鳴潮",
-          "publisher": "HK KURO GAMES LIMITED"
-        },
-        {
-          "rank": 7,
-          "title": "楓之谷：設計師RPG",
-          "publisher": "NEXON Company"
-        },
-        {
-          "rank": 8,
-          "title": "包你發-王識賢、安心亞推薦娛樂城",
-          "publisher": "YILE TECHNOLOGY CO., LTD."
-        },
-        {
-          "rank": 9,
-          "title": "Last Z: Survival Shooter",
-          "publisher": "Florere Game"
-        },
-        {
-          "rank": 10,
-          "title": "燕雲十六聲",
-          "publisher": "LongE Play"
-        },
-        {
-          "rank": 11,
-          "title": "Kingshot",
-          "publisher": "Century Games PTE. LTD."
-        },
-        {
-          "rank": 12,
-          "title": "神魔之塔",
-          "publisher": "Mad Head Limited"
-        },
-        {
-          "rank": 13,
-          "title": "神來也麻將－麻將、麻雀",
-          "publisher": "Gamesofa Inc."
-        },
-        {
-          "rank": 14,
-          "title": "棕色塵埃2",
-          "publisher": "Full Burst RPG - NEOWIZ"
-        },
-        {
-          "rank": 15,
-          "title": "Garena 傳說對決：創新紀元版本",
-          "publisher": "Garena Games Online"
-        },
-        {
-          "rank": 16,
-          "title": "金好運－戰神賽特、吉宗、捕魚機",
-          "publisher": "ARC PLAY LTD CO."
-        },
-        {
-          "rank": 17,
-          "title": "Jackpot World™",
-          "publisher": "Slots Casino - SpinX Games Limited"
-        },
-        {
-          "rank": 18,
-          "title": "Candy Crush Saga",
-          "publisher": "King"
-        },
-        {
-          "rank": 19,
-          "title": "Gossip Harbor: Merge & Story",
-          "publisher": "Microfun Limited"
-        },
-        {
-          "rank": 20,
-          "title": "RO仙境傳説：世界之旅",
-          "publisher": "Gravity Game Vision"
+          "title": "아이온2",
+          "publisher": "NCSOFT"
         }
       ]
     }
