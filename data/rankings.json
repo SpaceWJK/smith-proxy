@@ -212,6 +212,218 @@
           "publisher": "DMMGAMES"
         }
       ]
+    },
+    {
+      "country": "United States",
+      "flag": "US",
+      "games": [
+        {
+          "rank": 1,
+          "title": "Search the web for current top-grossing Google Play Store games in United States.I need TOP 20 for United States (game titles in English).CRITICAL: Each line MUST include both game title AND publisher name separated by \"",
+          "publisher": "\".Format (MANDATORY):United States TOP 20:1. Game Title - Publisher Name"
+        },
+        {
+          "rank": 2,
+          "title": "MONOPOLY GO!",
+          "publisher": "Scopely"
+        },
+        {
+          "rank": 3,
+          "title": "Last War: Survival Game",
+          "publisher": "FUNFLY PTE. LTD."
+        },
+        {
+          "rank": 4,
+          "title": "Royal Match",
+          "publisher": "Dream Games, Ltd."
+        },
+        {
+          "rank": 5,
+          "title": "Candy Crush Saga",
+          "publisher": "King"
+        },
+        {
+          "rank": 6,
+          "title": "Last Z: Survival Shooter",
+          "publisher": "Florere Game"
+        },
+        {
+          "rank": 7,
+          "title": "Gossip Harbor: Merge & Story",
+          "publisher": "Microfun Limited"
+        },
+        {
+          "rank": 8,
+          "title": "Kingshot",
+          "publisher": "Century Games PTE. LTD."
+        },
+        {
+          "rank": 9,
+          "title": "Coin Master",
+          "publisher": "Moon Active"
+        },
+        {
+          "rank": 10,
+          "title": "Royal Kingdom",
+          "publisher": "Dream Games, Ltd."
+        },
+        {
+          "rank": 11,
+          "title": "Whiteout Survival",
+          "publisher": "Century Games PTE. LTD."
+        },
+        {
+          "rank": 12,
+          "title": "Roblox",
+          "publisher": "Roblox Corporation"
+        },
+        {
+          "rank": 13,
+          "title": "Township",
+          "publisher": "Playrix"
+        },
+        {
+          "rank": 14,
+          "title": "Toon Blast",
+          "publisher": "Peak"
+        },
+        {
+          "rank": 15,
+          "title": "Pokémon GO",
+          "publisher": "Niantic, Inc."
+        },
+        {
+          "rank": 16,
+          "title": "Evony: The King's Return",
+          "publisher": "TG Inc."
+        },
+        {
+          "rank": 17,
+          "title": "Jackpot Party Casino Slots",
+          "publisher": "SciPlay"
+        },
+        {
+          "rank": 18,
+          "title": "Match Factory!",
+          "publisher": "Peak"
+        },
+        {
+          "rank": 19,
+          "title": "Bingo Blitz",
+          "publisher": "Bingo Games - Playtika Santa Monica"
+        },
+        {
+          "rank": 20,
+          "title": "Homescapes",
+          "publisher": "Playrix"
+        }
+      ]
+    },
+    {
+      "country": "Taiwan",
+      "flag": "TW",
+      "games": [
+        {
+          "rank": 1,
+          "title": "Search the web for current top-grossing Google Play Store games in Taiwan.I need TOP 20 for Taiwan (game titles in Traditional Chinese).CRITICAL: Each line MUST include both game title AND publisher name separated by \"",
+          "publisher": "\".Format (MANDATORY):Taiwan TOP 20:1. Game Title - Publisher Name"
+        },
+        {
+          "rank": 2,
+          "title": "星城Online",
+          "publisher": "網銀國際股份有限公司"
+        },
+        {
+          "rank": 3,
+          "title": "天堂M",
+          "publisher": "Gamania Digital Entertainment Co Ltd"
+        },
+        {
+          "rank": 4,
+          "title": "Last War: Survival Game",
+          "publisher": "FUNFLY PTE. LTD."
+        },
+        {
+          "rank": 5,
+          "title": "Whiteout Survival",
+          "publisher": "Century Games PTE. LTD."
+        },
+        {
+          "rank": 6,
+          "title": "原神 (Genshin Impact)",
+          "publisher": "COGNOSPHERE PTE. LTD."
+        },
+        {
+          "rank": 7,
+          "title": "燕雲十六聲",
+          "publisher": "LongE Play"
+        },
+        {
+          "rank": 8,
+          "title": "MapleStory : Idle RPG",
+          "publisher": "NEXON Company"
+        },
+        {
+          "rank": 9,
+          "title": "包你發娛樂城",
+          "publisher": "YILE TECHNOLOGY CO., LTD."
+        },
+        {
+          "rank": 10,
+          "title": "Last Z: Survival Shooter",
+          "publisher": "Florere Game"
+        },
+        {
+          "rank": 11,
+          "title": "鳴潮 (Wuthering Waves)",
+          "publisher": "HK KURO GAMES LIMITED"
+        },
+        {
+          "rank": 12,
+          "title": "Kingshot",
+          "publisher": "Century Games PTE. LTD."
+        },
+        {
+          "rank": 13,
+          "title": "碧藍航線",
+          "publisher": "JIMI PTE. LTD."
+        },
+        {
+          "rank": 14,
+          "title": "Garena 傳說對決",
+          "publisher": "Garena Games Online"
+        },
+        {
+          "rank": 15,
+          "title": "神來也麻將",
+          "publisher": "Gamesofa Inc."
+        },
+        {
+          "rank": 16,
+          "title": "金好運娛樂城",
+          "publisher": "ARC PLAY LTD CO."
+        },
+        {
+          "rank": 17,
+          "title": "Jackpot World™",
+          "publisher": "Slots Casino - SpinX Games Limited"
+        },
+        {
+          "rank": 18,
+          "title": "Candy Crush Saga",
+          "publisher": "King"
+        },
+        {
+          "rank": 19,
+          "title": "Gossip Harbor: Merge & Story",
+          "publisher": "Microfun Limited"
+        },
+        {
+          "rank": 20,
+          "title": "神魔之塔 (Tower of Saviors)",
+          "publisher": "Mad Head Limited"
+        }
+      ]
     }
   ]
 }
