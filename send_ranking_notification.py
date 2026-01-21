@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Slack 알림 전송 스크립트
 rankings.json 파일을 읽어서 포맷된 메시지를 Slack으로 전송
@@ -11,6 +12,11 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+
+# Windows 콘솔 인코딩 설정
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
 
 # .env 파일 로드 (로컬 실행 시)
 load_dotenv()
