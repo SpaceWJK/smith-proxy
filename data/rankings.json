@@ -3,46 +3,18 @@
   "countries": [
     {
       "country": "South Korea",
-      "flag": "🇰🇷",
+      "flag": "KR",
       "games": [
-        {"rank": 1, "title": "Sample Game 1", "publisher": "Sample Publisher 1"},
-        {"rank": 2, "title": "Sample Game 2", "publisher": "Sample Publisher 2"},
-        {"rank": 3, "title": "Sample Game 3", "publisher": "Sample Publisher 3"},
-        {"rank": 4, "title": "Sample Game 4", "publisher": "Sample Publisher 4"},
-        {"rank": 5, "title": "Sample Game 5", "publisher": "Sample Publisher 5"}
-      ]
-    },
-    {
-      "country": "Japan",
-      "flag": "🇯🇵",
-      "games": [
-        {"rank": 1, "title": "Sample Game 1", "publisher": "Sample Publisher 1"},
-        {"rank": 2, "title": "Sample Game 2", "publisher": "Sample Publisher 2"},
-        {"rank": 3, "title": "Sample Game 3", "publisher": "Sample Publisher 3"},
-        {"rank": 4, "title": "Sample Game 4", "publisher": "Sample Publisher 4"},
-        {"rank": 5, "title": "Sample Game 5", "publisher": "Sample Publisher 5"}
-      ]
-    },
-    {
-      "country": "United States",
-      "flag": "🇺🇸",
-      "games": [
-        {"rank": 1, "title": "Sample Game 1", "publisher": "Sample Publisher 1"},
-        {"rank": 2, "title": "Sample Game 2", "publisher": "Sample Publisher 2"},
-        {"rank": 3, "title": "Sample Game 3", "publisher": "Sample Publisher 3"},
-        {"rank": 4, "title": "Sample Game 4", "publisher": "Sample Publisher 4"},
-        {"rank": 5, "title": "Sample Game 5", "publisher": "Sample Publisher 5"}
-      ]
-    },
-    {
-      "country": "Taiwan",
-      "flag": "🇹🇼",
-      "games": [
-        {"rank": 1, "title": "Sample Game 1", "publisher": "Sample Publisher 1"},
-        {"rank": 2, "title": "Sample Game 2", "publisher": "Sample Publisher 2"},
-        {"rank": 3, "title": "Sample Game 3", "publisher": "Sample Publisher 3"},
-        {"rank": 4, "title": "Sample Game 4", "publisher": "Sample Publisher 4"},
-        {"rank": 5, "title": "Sample Game 5", "publisher": "Sample Publisher 5"}
+        {
+          "rank": 1,
+          "title": "Lineage M",
+          "publisher": "NCSOFT"
+        },
+        {
+          "rank": 2,
+          "title": "MapleStory",
+          "publisher": "Nexon"
+        }
       ]
     }
   ]
