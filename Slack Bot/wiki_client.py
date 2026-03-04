@@ -186,6 +186,54 @@ class ConfluenceCalendarClient:
 
         return {"id": page_id, "title": page_title, "url": page_url, "text": text}, None
 
+    def get_page_by_path(self, ancestors: list, leaf_title: str, space_key: str = None):
+        """
+        조상 페이지 제목(들)을 포함한 계층 경로로 페이지 내용 조회.
+        CQL: title="<leaf>" AND ancestor="<ancestor>" AND space="<sk>"
+
+        Parameters
+        ----------
+        ancestors   : 조상 페이지 제목 목록 (경로 순서, 예: ["프로젝트 현황"])
+        leaf_title  : 대상 페이지 제목 (예: "Game Service 1")
+
+        Returns
+        -------
+        (page_dict | None, error_str | None)
+        page_dict = {"id", "title", "url", "text"}
+        """
+        sk = space_key or os.getenv("CONFLUENCE_SPACE_KEY", _DEFAULT_SPACE_KEY)
+
+        # 조상 조건 구성 (Confluence CQL 의 ancestor 는 직계·간접 상위 모두 매칭)
+        ancestor_conditions = " AND ".join(
+            f'ancestor = "{a.strip()}"' for a in ancestors if a.strip()
+        )
+        cql = f'title = "{leaf_title}" AND space = "{sk}"'
+        if ancestor_conditions:
+            cql += f" AND {ancestor_conditions}"
+        cql += " ORDER BY lastmodified DESC"
+
+        logger.info(f"[wiki] 경로 검색 CQL: {cql}")
+        data, err = self._get(
+            "/rest/api/content/search",
+            params={"cql": cql, "limit": 5, "expand": "body.view"},
+        )
+        if err:
+            return None, err
+
+        results = data.get("results", []) if isinstance(data, dict) else []
+        if not results:
+            path_str = " > ".join(list(ancestors) + [leaf_title])
+            return None, f"'{path_str}' 경로의 페이지를 찾을 수 없습니다. (공간: {sk})"
+
+        page       = results[0]
+        page_id    = page.get("id", "")
+        page_title = page.get("title", leaf_title)
+        page_url   = f"{self.base_url}/pages/viewpage.action?pageId={page_id}"
+        html_body  = page.get("body", {}).get("view", {}).get("value", "")
+        text       = _strip_html(html_body)
+
+        return {"id": page_id, "title": page_title, "url": page_url, "text": text}, None
+
     def search_pages(self, query: str, space_key: str = None):
         """
         CQL 텍스트 검색으로 페이지 목록 반환 (제목 목록 용도).

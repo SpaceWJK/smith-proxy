@@ -49,22 +49,44 @@ def _wiki_help(respond):
     respond(text=(
         "*📄 /wiki 페이지 조회 도움말*\n\n"
         "```\n"
-        "/wiki [페이지 제목]                페이지 내용 전체 조회\n"
-        "/wiki [페이지 제목] | [질문]       페이지 내용 기반 AI 답변 (Claude)\n"
-        "/wiki search [검색어]              키워드로 페이지 목록 검색\n"
-        "/wiki help                         이 도움말\n"
+        "/wiki [페이지 제목]                       페이지 내용 전체 조회\n"
+        "/wiki [상위] > [하위] > [페이지]          계층 경로로 페이지 조회\n"
+        "/wiki [페이지 제목] | [질문]              페이지 내용 기반 AI 답변 (Claude)\n"
+        "/wiki [상위] > [페이지] | [질문]          경로 지정 + AI 답변\n"
+        "/wiki search [검색어]                     키워드로 페이지 목록 검색\n"
+        "/wiki help                                이 도움말\n"
         "```\n\n"
         "예시:\n"
         "• `/wiki Game Service 1`\n"
-        "• `/wiki Game Service 1 | 이 페이지에서 QA 일정 알려줘`\n"
-        "• `/wiki 프로젝트 현황 | 다음 주 릴리즈 일정 요약해줘`\n"
-        "• `/wiki search QA 일정`"
+        "• `/wiki 프로젝트 현황 > Game Service 1`\n"
+        "• `/wiki Game Service 1 | QA 일정 알려줘`\n"
+        "• `/wiki 프로젝트 현황 > Game Service 1 | QA 일정이 어떻게 되나요?`\n"
+        "• `/wiki search QA 일정`\n\n"
+        "💡 `>` 는 Confluence 페이지 계층 구조를 나타냅니다.\n"
+        "동일 제목의 페이지가 여러 곳에 있을 때 조상 경로로 구분하세요."
     ))
 
 
-def _wiki_get_page(client, page_title: str, respond):
-    """페이지 제목으로 내용 조회 후 Slack 에 표시"""
-    page, err = client.get_page_by_title(page_title)
+def _wiki_fetch_page(client, page_part: str):
+    """
+    '>' 구분자 유무에 따라 적합한 방식으로 Confluence 페이지를 조회합니다.
+
+    - '>' 포함 → 조상 기반 CQL 검색 (get_page_by_path)
+    - '>' 없음  → 제목 직접 검색   (get_page_by_title)
+
+    Returns: (page_dict | None, error_str | None)
+    """
+    if ">" in page_part:
+        segments   = [s.strip() for s in page_part.split(">")]
+        leaf_title = segments[-1]
+        ancestors  = segments[:-1]
+        return client.get_page_by_path(ancestors, leaf_title)
+    return client.get_page_by_title(page_part)
+
+
+def _wiki_get_page(client, page_part: str, respond):
+    """경로/페이지 제목으로 내용 조회 후 Slack 에 표시"""
+    page, err = _wiki_fetch_page(client, page_part)
     if err:
         respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
         return
@@ -413,20 +435,20 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 respond(text="❌ 검색어를 입력하세요. 예: `/wiki search QA 일정`")
             return
 
-        # "|" 구분자 → [페이지 제목] | [질문] 으로 Claude AI 답변
+        # "|" 구분자 → [경로/페이지 제목] | [질문] 으로 Claude AI 답변
         if "|" in text:
-            page_title, _, question = text.partition("|")
-            page_title = page_title.strip()
-            question   = question.strip()
-            if page_title and question:
-                page, err = client.get_page_by_title(page_title)
+            page_part, _, question = text.partition("|")
+            page_part = page_part.strip()
+            question  = question.strip()
+            if page_part and question:
+                page, err = _wiki_fetch_page(client, page_part)
                 if err:
                     respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
                     return
                 _wiki_ask_claude(page["title"], page["text"], page["url"], question, respond)
                 return
 
-        # 나머지는 모두 페이지 제목으로 처리 (내용 전체 표시)
+        # 나머지는 모두 경로/페이지 제목으로 처리 (내용 전체 표시)
         _wiki_get_page(client, text, respond)
 
     @app.command("/calendar")
