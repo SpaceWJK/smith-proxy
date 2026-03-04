@@ -1,0 +1,231 @@
+{
+  "timezone": "Asia/Seoul",
+
+  "schedules": [
+
+    {
+      "id": "monthly-qa-checklist",
+      "name": "퍼블리싱QA1팀 월간 체크리스트",
+      "enabled": true,
+      "type": "monthly_last_weekday",
+      "day_of_week": "friday",
+      "time": "10:00",
+      "channel": "C07PHCE4RCM",
+      "message_type": "interactive_checklist",
+      "title": "📋 퍼블리싱QA1팀 월간 체크리스트",
+      "items": [
+        {
+          "value": "item_0",
+          "text": "[에픽세븐] 프로젝트 월간 캘린더 최신화",
+          "mentions": ["U07H17HB4MD"]
+        },
+        {
+          "value": "item_1",
+          "text": "[카제나] 프로젝트 월간 캘린더 최신화",
+          "mentions": ["U07HFLMSYKV"]
+        },
+        {
+          "value": "item_2",
+          "text": "휴가 계획 조사",
+          "mentions": ["U07HFLMSYKV"]
+        },
+        {
+          "value": "item_3",
+          "text": "업무 고도화 미팅",
+          "mentions": [
+            "U07HFLMSYKV",
+            "U07H17HB4MD",
+            "U07H18AD1L7",
+            "U07HJ9JD31A"
+          ]
+        },
+        {
+          "value": "item_4",
+          "text": "[에픽세븐] Monthly QA Report 최신화",
+          "mentions": ["U07H17HB4MD"]
+        },
+        {
+          "value": "item_5",
+          "text": "[카제나] Monthly QA Report 최신화",
+          "mentions": ["U07HFLMSYKV"]
+        },
+        {
+          "value": "item_6",
+          "text": "[에픽세븐] Dashboard DB 월간 최신화",
+          "mentions": ["U07H17HB4MD"]
+        },
+        {
+          "value": "item_7",
+          "text": "[카제나] Dashboard DB 월간 최신화",
+          "mentions": ["U07HFLMSYKV"]
+        }
+      ],
+      "bot_name": "퍼블리싱QA 알림봇",
+      "bot_emoji": ":white_check_mark:"
+    },
+
+    {
+      "id": "epic7-update-checklist",
+      "name": "에픽세븐 업데이트 차수 체크리스트",
+      "enabled": true,
+      "type": "nweekly",
+      "week_interval": 3,
+      "day_of_week": "thursday",
+      "time": "10:00",
+      "start_date": "2026-03-12",
+      "channel": "C07PHCE4RCM",
+      "message_type": "interactive_checklist",
+      "title": "📋 [에픽세븐] 업데이트 차수 체크리스트",
+      "items": [
+        {
+          "value": "item_0",
+          "text": "[에픽세븐] WiKi Game Service 1",
+          "mentions": ["U07H17HB4MD"]
+        },
+        {
+          "value": "item_1",
+          "text": "[에픽세븐] Service QA Report 최신화",
+          "mentions": ["U07H17HB4MD"]
+        },
+        {
+          "value": "item_2",
+          "text": "[에픽세븐] Dashboard DB 차수간 최신화",
+          "mentions": ["U07H17HB4MD"]
+        },
+        {
+          "value": "item_3",
+          "text": "[에픽세븐] Status Board",
+          "mentions": ["U07H17HB4MD"]
+        }
+      ],
+      "bot_name": "퍼블리싱QA 알림봇",
+      "bot_emoji": ":white_check_mark:"
+    },
+
+    {
+      "id": "cazena-update-checklist",
+      "name": "카제나 업데이트 차수 체크리스트",
+      "enabled": true,
+      "type": "nweekly",
+      "week_interval": 3,
+      "day_of_week": "wednesday",
+      "time": "10:00",
+      "start_date": "2026-03-18",
+      "channel": "C07PHCE4RCM",
+      "message_type": "interactive_checklist",
+      "title": "📋 [카제나] 업데이트 차수 체크리스트",
+      "items": [
+        {
+          "value": "item_0",
+          "text": "[카제나] WiKi Game Service 1",
+          "mentions": ["U07HFLMSYKV"]
+        },
+        {
+          "value": "item_1",
+          "text": "[카제나] Service QA Report 최신화",
+          "mentions": ["U07HFLMSYKV"]
+        },
+        {
+          "value": "item_2",
+          "text": "[카제나] Dashboard DB 차수간 최신화",
+          "mentions": ["U07HFLMSYKV"]
+        },
+        {
+          "value": "item_3",
+          "text": "[카제나] Status Board",
+          "mentions": ["U07HFLMSYKV"]
+        }
+      ],
+      "bot_name": "퍼블리싱QA 알림봇",
+      "bot_emoji": ":white_check_mark:"
+    },
+
+    {
+      "id": "daily-morning-checklist",
+      "name": "일일 아침 체크리스트",
+      "enabled": false,
+      "type": "daily",
+      "time": "09:00",
+      "channel": "C07PHCE4RCM",
+      "message_type": "checklist",
+      "title": "📋 오늘의 체크리스트",
+      "items": [
+        "업무 시작 확인",
+        "메일 및 메시지 확인",
+        "오늘 일정 검토",
+        "우선순위 업무 정리"
+      ],
+      "bot_name": "일일 알림봇",
+      "bot_emoji": ":memo:"
+    },
+
+    {
+      "id": "weekly-monday-meeting",
+      "name": "주간 월요일 회의 알림",
+      "enabled": false,
+      "type": "weekly",
+      "day_of_week": "monday",
+      "time": "09:00",
+      "channel": "C07PHCE4RCM",
+      "message_type": "text",
+      "message": "🗓️ *주간 팀 회의 안내*\n오늘 오전 10시에 팀 회의가 있습니다.\n회의 자료와 안건을 미리 확인해주세요.",
+      "bot_name": "주간 알림봇",
+      "bot_emoji": ":calendar:"
+    },
+
+    {
+      "id": "monthly-report-first",
+      "name": "월간 보고 체크리스트",
+      "enabled": false,
+      "type": "monthly",
+      "day_of_month": 1,
+      "time": "09:00",
+      "channel": "C07PHCE4RCM",
+      "message_type": "checklist",
+      "title": "📊 이번 달 보고 체크리스트",
+      "items": [
+        "월간 보고서 작성",
+        "KPI 집계 및 분석",
+        "팀 성과 정리",
+        "다음 달 목표 수립"
+      ],
+      "bot_name": "월간 알림봇",
+      "bot_emoji": ":bar_chart:"
+    },
+
+    {
+      "id": "biweekly-thursday-review",
+      "name": "격주 목요일 스토어 랭킹 리뷰",
+      "enabled": false,
+      "type": "biweekly",
+      "day_of_week": "thursday",
+      "time": "10:00",
+      "start_date": "2026-03-06",
+      "channel": "C07PHCE4RCM",
+      "message_type": "checklist",
+      "title": "🔄 격주 스토어 랭킹 리뷰",
+      "items": [
+        "2주간 스토어 랭킹 데이터 수집",
+        "국가별 변동사항 분석",
+        "주요 이슈 및 트렌드 정리",
+        "다음 2주 모니터링 포인트 설정"
+      ],
+      "bot_name": "격주 알림봇",
+      "bot_emoji": ":arrows_counterclockwise:"
+    },
+
+    {
+      "id": "specific-event-example",
+      "name": "특정 이벤트 알림 예시",
+      "enabled": false,
+      "type": "specific",
+      "datetime": "2026-03-15 10:00",
+      "channel": "C07PHCE4RCM",
+      "message_type": "text",
+      "message": "🎯 *중요 이벤트 알림*\n오늘 오전 10시에 중요한 일정이 있습니다!\n관련 자료를 미리 준비해주세요.",
+      "bot_name": "이벤트 알림봇",
+      "bot_emoji": ":bell:"
+    }
+
+  ]
+}
