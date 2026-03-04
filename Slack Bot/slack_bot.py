@@ -26,6 +26,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 import interaction_handler as ih
 from slack_sender import SlackSender
 from scheduler    import NotificationScheduler
+import wiki_client as wc
 
 # ── 로그 설정 ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -38,6 +39,88 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+# ── /wiki 슬래시 커맨드 헬퍼 ─────────────────────────────────────────────────
+
+def _wiki_help(respond):
+    """도움말 메시지 전송"""
+    respond(text=(
+        "*📅 Confluence 캘린더 슬래시 커맨드 도움말*\n\n"
+        "```\n"
+        "/wiki list                           캘린더 목록 & ID 확인\n"
+        "/wiki 플잭 YYYY-MM-DD 제목           프로젝트 일정 캘린더에 등록\n"
+        "/wiki 개인 YYYY-MM-DD 제목           개인/팀 일정 캘린더에 등록\n"
+        "/wiki help                           이 도움말\n"
+        "```\n\n"
+        "예시: `/wiki 플잭 2026-03-15 에픽세븐 v2.1 업데이트`"
+    ))
+
+
+def _wiki_list(client, respond):
+    """캘린더 목록 조회 후 응답"""
+    calendars, err = client.list_calendars()
+    if err:
+        respond(text=f"❌ 캘린더 조회 실패\n```\n{err}\n```")
+        return
+    if not calendars:
+        respond(text="ℹ️ 조회된 캘린더가 없습니다.")
+        return
+
+    lines = ["*📅 QASGP 공간 캘린더 목록*\n"]
+    for cal in calendars:
+        cid  = cal.get("id", "?")
+        name = cal.get("title") or cal.get("name", "?")
+        lines.append(f"• `{cid}`  {name}")
+    lines.append(
+        "\n💡 Railway 환경변수 설정 예시:\n"
+        "`CONFLUENCE_CALENDAR_PROJECT=<프로젝트 일정 ID>`\n"
+        "`CONFLUENCE_CALENDAR_PERSONAL=<개인/팀 일정 ID>`"
+    )
+    respond(text="\n".join(lines))
+
+
+def _wiki_add_event(client, cal_type: str, date_str: str, title: str, respond):
+    """캘린더에 이벤트 등록 후 응답"""
+    env_key, type_name = wc.CALENDAR_TYPES[cal_type]
+    calendar_id = os.getenv(env_key, "")
+
+    if not calendar_id:
+        respond(
+            text=(
+                f"❌ `{env_key}` 환경변수가 설정되지 않았습니다.\n"
+                f"`/wiki list` 로 캘린더 ID를 확인한 뒤 Railway 환경변수에 추가하세요."
+            )
+        )
+        return
+
+    # 날짜 형식 검증
+    try:
+        from datetime import datetime as _dt
+        _dt.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        respond(
+            text=(
+                f"❌ 날짜 형식 오류: `{date_str}`\n"
+                "올바른 형식: `YYYY-MM-DD`  (예: 2026-03-15)"
+            )
+        )
+        return
+
+    result, err = client.create_event(calendar_id, title, date_str)
+    if err:
+        respond(text=f"❌ 일정 등록 실패\n```\n{err}\n```")
+        return
+
+    respond(
+        response_type="in_channel",
+        text=(
+            f"✅ *Confluence 캘린더에 일정이 등록되었습니다!*\n"
+            f"• 캘린더: {type_name}\n"
+            f"• 날짜: {date_str}\n"
+            f"• 제목: {title}"
+        ),
+    )
 
 
 # ── Bolt App 생성 + 액션 핸들러 등록 ──────────────────────────
@@ -80,6 +163,47 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
         # 메시지 업데이트
         slack_sender.update_interactive_checklist(channel, ts, state)
+
+    @app.command("/wiki")
+    def handle_wiki_command(ack, respond, command):
+        """
+        /wiki help                          → 도움말
+        /wiki list                          → 캘린더 목록 조회
+        /wiki {플잭|개인} YYYY-MM-DD 제목   → 일정 등록
+        """
+        ack()  # Slack 에 즉시 응답 (3초 이내 필수)
+
+        text   = (command.get("text") or "").strip()
+        client = wc.ConfluenceCalendarClient()
+
+        # 도움말
+        if not text or text.lower() == "help":
+            _wiki_help(respond)
+            return
+
+        parts = text.split(None, 1)   # 첫 단어(유형 or 서브커맨드) 분리
+        sub   = parts[0]
+
+        # 캘린더 목록 조회
+        if sub == "list":
+            _wiki_list(client, respond)
+            return
+
+        # 일정 등록: /wiki {플잭|개인} YYYY-MM-DD 제목
+        if sub in wc.CALENDAR_TYPES and len(parts) == 2:
+            rest = parts[1].split(None, 1)   # "YYYY-MM-DD 제목..." 분리
+            if len(rest) == 2:
+                date_str, title = rest
+                _wiki_add_event(client, sub, date_str, title, respond)
+                return
+
+        # 파싱 실패
+        respond(
+            text=(
+                f"❌ 알 수 없는 명령어입니다: `{text}`\n"
+                "`/wiki help` 를 입력하면 도움말을 확인할 수 있어요."
+            )
+        )
 
     return app
 
