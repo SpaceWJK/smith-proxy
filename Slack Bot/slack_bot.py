@@ -580,6 +580,41 @@ def cmd_run(sender: SlackSender, bolt_app: App, app_token: str):
         scheduler.shutdown()
 
 
+def cmd_scheduler_only(sender: SlackSender):
+    """
+    스케줄러만 실행합니다 — Socket Mode 없음 (Railway 전용 모드).
+    Slack 메시지 전송은 HTTP API(chat.postMessage)만 사용하므로
+    공용 클라우드에서도 동작합니다.
+    """
+    import time
+
+    scheduler = NotificationScheduler(sender, config_path="config.json")
+    scheduler.start()   # 논블로킹
+    logger.info("📅 스케줄러 전용 모드 실행 중 — Socket Mode 없음 (Railway)")
+
+    try:
+        while True:
+            time.sleep(60)
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("스케줄러가 정상 종료되었습니다.")
+        scheduler.shutdown()
+
+
+def cmd_commands_only(sender: SlackSender, bolt_app: App, app_token: str):
+    """
+    Socket Mode 핸들러만 실행합니다 — 스케줄러 없음 (로컬 PC 전용 모드).
+    /wiki, /calendar 등 슬래시 커맨드를 사내망 PC에서 처리합니다.
+    Railway 스케줄러와 충돌하지 않습니다.
+    """
+    logger.info("💬 커맨드 전용 모드 실행 중 — 스케줄러 없음 (로컬 PC)")
+    logger.info("🔌 Socket Mode 연결 중... (종료: Ctrl+C)")
+    handler = SocketModeHandler(bolt_app, app_token)
+    try:
+        handler.start()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("봇이 정상 종료되었습니다.")
+
+
 # ── 메인 ──────────────────────────────────────────────────────
 
 def main():
@@ -632,6 +667,16 @@ def main():
         "--find-user", metavar="NAME",
         help="사용자 ID 검색 (config.json mentions 설정용)\n예: --find-user 이동현",
     )
+    parser.add_argument(
+        "--scheduler-only", action="store_true",
+        help="[Railway 전용] 스케줄러만 실행 — Socket Mode 없음\n"
+             "공용 클라우드에서 사내망 없이 Slack 알림 전송만 담당합니다.",
+    )
+    parser.add_argument(
+        "--commands-only", action="store_true",
+        help="[로컬 PC 전용] 슬래시 커맨드만 실행 — 스케줄러 없음\n"
+             "/wiki, /calendar 등 사내망 접근이 필요한 커맨드를 처리합니다.",
+    )
     args = parser.parse_args()
 
     # ── 명령 분기 ──
@@ -647,13 +692,27 @@ def main():
     elif args.find_user:
         cmd_find_user(sender, args.find_user)
 
+    elif args.scheduler_only:
+        # ── Railway 전용: 스케줄러만 (Socket Mode 없음) ──
+        logger.info("▶ 모드: 스케줄러 전용 (Railway)")
+        cmd_scheduler_only(sender)
+
+    elif args.commands_only:
+        # ── 로컬 PC 전용: 슬래시 커맨드만 (스케줄러 없음) ──
+        if not app_token or not app_token.startswith("xapp-"):
+            logger.error("--commands-only 모드에는 SLACK_APP_TOKEN(xapp-...) 이 필요합니다.")
+            sys.exit(1)
+        logger.info("▶ 모드: 커맨드 전용 (로컬 PC)")
+        cmd_commands_only(sender, bolt_app, app_token)
+
     else:
-        # 봇 실행 — Socket Mode 필요
+        # ── 풀 모드: 스케줄러 + Socket Mode (개발/테스트용) ──
         if not app_token or not app_token.startswith("xapp-"):
             logger.error("Socket Mode 실행에는 SLACK_APP_TOKEN(xapp-...) 이 필요합니다.")
             logger.error(".env 파일에서 SLACK_APP_TOKEN 을 설정하세요.")
             logger.error("(채널 목록/테스트만 사용할 경우: --channels / --test 옵션 사용)")
             sys.exit(1)
+        logger.info("▶ 모드: 풀 모드 (스케줄러 + 커맨드)")
         cmd_run(sender, bolt_app, app_token)
 
 

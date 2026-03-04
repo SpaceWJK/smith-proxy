@@ -46,7 +46,7 @@ echo   ^</Triggers^>
 echo   ^<Actions^>
 echo     ^<Exec^>
 echo       ^<Command^>%PYTHONW%^</Command^>
-echo       ^<Arguments^>"%SCRIPT%"^</Arguments^>
+echo       ^<Arguments^>"%SCRIPT%" --commands-only^</Arguments^>
 echo       ^<WorkingDirectory^>%BOT_DIR%^</WorkingDirectory^>
 echo     ^</Exec^>
 echo   ^</Actions^>
