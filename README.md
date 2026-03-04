@@ -292,6 +292,46 @@ Slack 출력 예시:
 
 ---
 
+## 🔄 GitHub 업로드
+
+1. GitHub에서 새 저장소 생성 (Private 권장):
+   - https://github.com/new 접속
+   - Repository name: `slack-qa-bot`
+   - **Private** 선택 → Create repository
+
+2. 업로드 실행 (HTTPS URL 붙여넣기):
+```
+push_github.bat https://github.com/유저명/slack-qa-bot.git
+```
+
+> `.env` 파일(토큰 포함)은 `.gitignore` 에 의해 자동 제외됩니다.
+
+---
+
+## ⏰ 자동 실행 설정 (PC 시작 시 자동 시작)
+
+### 등록
+
+```
+autostart_setup.bat  우클릭 → 관리자 권한으로 실행
+```
+
+Windows 작업 스케줄러에 **로그인 시 1분 후 자동 시작** 으로 등록됩니다.
+
+### 해제
+
+```
+autostart_remove.bat  우클릭 → 관리자 권한으로 실행
+```
+
+### 수동 확인
+
+```
+작업 스케줄러 → SlackQABot 태스크
+```
+
+---
+
 ## 📝 참고
 
 - 봇 실행 중 종료: **Ctrl+C**
