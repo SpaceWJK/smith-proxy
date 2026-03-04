@@ -15,6 +15,7 @@ slack_bot.py - Slack 알림 봇 메인 진입점
 """
 
 import os
+import re
 import sys
 import logging
 import argparse
@@ -41,24 +42,175 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── /wiki 슬래시 커맨드 헬퍼 ─────────────────────────────────────────────────
+# ── /wiki (페이지 조회) 헬퍼 ──────────────────────────────────────────────────
 
 def _wiki_help(respond):
-    """도움말 메시지 전송"""
+    """도움말"""
     respond(text=(
-        "*📅 Confluence 캘린더 슬래시 커맨드 도움말*\n\n"
+        "*📄 /wiki 페이지 조회 도움말*\n\n"
         "```\n"
-        "/wiki list                           캘린더 목록 & ID 확인\n"
-        "/wiki 플잭 YYYY-MM-DD 제목           프로젝트 일정 캘린더에 등록\n"
-        "/wiki 개인 YYYY-MM-DD 제목           개인/팀 일정 캘린더에 등록\n"
-        "/wiki help                           이 도움말\n"
+        "/wiki [페이지 제목]        Confluence 페이지 내용 조회 (기본 공간: QASGP)\n"
+        "/wiki search [검색어]      키워드로 페이지 목록 검색\n"
+        "/wiki help                 이 도움말\n"
         "```\n\n"
-        "예시: `/wiki 플잭 2026-03-15 에픽세븐 v2.1 업데이트`"
+        "예시:\n"
+        "• `/wiki Game Service 1`\n"
+        "• `/wiki 프로젝트 현황`\n"
+        "• `/wiki search QA 일정`"
     ))
 
 
-def _wiki_list(client, respond):
-    """캘린더 목록 조회 후 응답"""
+def _wiki_get_page(client, page_title: str, respond):
+    """페이지 제목으로 내용 조회 후 Slack 에 표시"""
+    page, err = client.get_page_by_title(page_title)
+    if err:
+        respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
+        return
+
+    text      = page["text"]
+    MAX_LEN   = 2800
+    truncated = len(text) > MAX_LEN
+    if truncated:
+        text = text[:MAX_LEN]
+
+    msg = (
+        f"*📄 {page['title']}*\n"
+        f"🔗 <{page['url']}|전체 페이지 열기>\n\n"
+        f"```\n{text}\n```"
+    )
+    if truncated:
+        msg += "\n\n⚠️ 내용이 길어 일부만 표시됩니다. 전체 내용은 페이지 링크를 확인하세요."
+    respond(text=msg)
+
+
+def _wiki_search_pages(client, query: str, respond):
+    """키워드로 페이지 검색 결과 표시"""
+    pages, err = client.search_pages(query)
+    if err:
+        respond(text=f"❌ 검색 실패\n```\n{err}\n```")
+        return
+    if not pages:
+        respond(text=f"ℹ️ `{query}` 에 해당하는 페이지가 없습니다.")
+        return
+
+    lines = [f"*🔍 '{query}' 검색 결과 ({len(pages)}건)*\n"]
+    for p in pages:
+        lines.append(f"• *{p['title']}*  →  `/wiki {p['title']}`")
+    respond(text="\n".join(lines))
+
+
+# ── /calendar (일정 등록) 헬퍼 ────────────────────────────────────────────────
+
+# 캘린더 유형 키워드 → 환경변수 키 매핑 (공백 제거 후 매핑)
+_CALENDAR_ALIASES = {
+    # 프로젝트 일정
+    "플잭":         "CONFLUENCE_CALENDAR_PROJECT",
+    "프로젝트":     "CONFLUENCE_CALENDAR_PROJECT",
+    "프로잭트":     "CONFLUENCE_CALENDAR_PROJECT",   # 흔한 오타
+    "프로젝트일정": "CONFLUENCE_CALENDAR_PROJECT",
+    "프로잭트일정": "CONFLUENCE_CALENDAR_PROJECT",
+    "project":      "CONFLUENCE_CALENDAR_PROJECT",
+    # 개인/팀 일정
+    "개인":         "CONFLUENCE_CALENDAR_PERSONAL",
+    "팀":           "CONFLUENCE_CALENDAR_PERSONAL",
+    "개인일정":     "CONFLUENCE_CALENDAR_PERSONAL",
+    "개인팀일정":   "CONFLUENCE_CALENDAR_PERSONAL",
+    "personal":     "CONFLUENCE_CALENDAR_PERSONAL",
+}
+
+
+def _parse_date(date_raw: str):
+    """
+    다양한 날짜 표현 → 'YYYY-MM-DD' 또는 None.
+    지원: 2026-03-12 / 26-03-12 / 2026/3/12 / 3/12
+          26년 3월 12일 / 2026년 3월 12일 / 3월 12일
+    """
+    from datetime import datetime
+    d = date_raw.strip()
+
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', d):                           # YYYY-MM-DD
+        return d
+    m = re.match(r'^(\d{2})-(\d{2})-(\d{2})$', d)                     # YY-MM-DD
+    if m:
+        return f"20{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = re.match(r'^(\d{2,4})/(\d{1,2})/(\d{1,2})$', d)               # YYYY/M/D or YY/M/D
+    if m:
+        y = f"20{m.group(1)}" if len(m.group(1)) == 2 else m.group(1)
+        return f"{y}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = re.match(r'^(\d{1,2})/(\d{1,2})$', d)                         # M/D (당해 연도)
+    if m:
+        return f"{datetime.now().year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    m = re.match(r'^(\d{2,4})년\s*(\d{1,2})월\s*(\d{1,2})일$', d)     # Y년 M월 D일
+    if m:
+        y = f"20{m.group(1)}" if len(m.group(1)) == 2 else m.group(1)
+        return f"{y}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = re.match(r'^(\d{1,2})월\s*(\d{1,2})일$', d)                   # M월 D일 (당해 연도)
+    if m:
+        return f"{datetime.now().year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+    return None
+
+
+def _parse_calendar_args(text: str):
+    """
+    날짜 패턴을 기준으로 텍스트를 (캘린더 유형, 날짜, 제목) 으로 분리.
+    Returns: (cal_type_raw, date_raw, title) | None
+    """
+    date_pats = [
+        r'\d{4}-\d{2}-\d{2}',                     # 2026-03-12
+        r'\d{2}-\d{2}-\d{2}',                     # 26-03-12
+        r'\d{2,4}년\s*\d{1,2}월\s*\d{1,2}일',     # 26년 3월 12일
+        r'\d{1,2}월\s*\d{1,2}일',                 # 3월 12일
+        r'\d{4}/\d{1,2}/\d{1,2}',                 # 2026/3/12
+        r'\d{1,2}/\d{1,2}',                       # 3/12
+    ]
+    for pat in date_pats:
+        m = re.search(pat, text)
+        if m:
+            cal_type_raw = text[:m.start()].strip().strip("'\"")
+            date_raw     = m.group(0)
+            title        = text[m.end():].strip().strip("'\"")
+            if cal_type_raw and title:
+                return cal_type_raw, date_raw, title
+    return None
+
+
+def _resolve_calendar_type(cal_type_raw: str):
+    """
+    캘린더 유형 문자열 → (env_key, type_name) | None.
+    공백을 제거한 뒤 별칭 dict 와 매핑.
+    """
+    key = cal_type_raw.replace(" ", "")
+    env_key = _CALENDAR_ALIASES.get(key) or _CALENDAR_ALIASES.get(key.lower())
+    if env_key:
+        type_name = "프로젝트 일정" if "PROJECT" in env_key else "개인/팀 일정"
+        return env_key, type_name
+    return None
+
+
+def _calendar_help(respond):
+    """도움말"""
+    respond(text=(
+        "*📅 /calendar 일정 등록 도움말*\n\n"
+        "```\n"
+        "/calendar [유형] [날짜] [제목]   Confluence 캘린더에 일정 등록\n"
+        "/calendar list                   캘린더 목록 & ID 확인\n"
+        "/calendar help                   이 도움말\n"
+        "```\n\n"
+        "*유형 키워드:*\n"
+        "• 프로젝트 일정: `플잭`  `프로젝트`  `프로젝트 일정`\n"
+        "• 개인/팀 일정:  `개인`  `팀`  `개인 일정`\n\n"
+        "*날짜 — 아래 형식 모두 지원:*\n"
+        "• `2026-03-12`  `26-03-12`  `2026/3/12`\n"
+        "• `26년 3월 12일`  `3월 12일`  `3/12`\n\n"
+        "예시:\n"
+        "• `/calendar 플잭 2026-03-12 에픽세븐 v2.1 업데이트`\n"
+        "• `/calendar 프로젝트 일정 26년 3월 12일 QA 교육`\n"
+        "• `/calendar 개인 3월 15일 팀 회식`"
+    ))
+
+
+def _calendar_list(client, respond):
+    """캘린더 목록 조회"""
     calendars, err = client.list_calendars()
     if err:
         respond(text=f"❌ 캘린더 조회 실패\n```\n{err}\n```")
@@ -73,36 +225,55 @@ def _wiki_list(client, respond):
         name = cal.get("title") or cal.get("name", "?")
         lines.append(f"• `{cid}`  {name}")
     lines.append(
-        "\n💡 Railway 환경변수 설정 예시:\n"
+        "\n💡 Railway 환경변수 설정:\n"
         "`CONFLUENCE_CALENDAR_PROJECT=<프로젝트 일정 ID>`\n"
         "`CONFLUENCE_CALENDAR_PERSONAL=<개인/팀 일정 ID>`"
     )
     respond(text="\n".join(lines))
 
 
-def _wiki_add_event(client, cal_type: str, date_str: str, title: str, respond):
-    """캘린더에 이벤트 등록 후 응답"""
-    env_key, type_name = wc.CALENDAR_TYPES[cal_type]
-    calendar_id = os.getenv(env_key, "")
-
-    if not calendar_id:
+def _calendar_add_event(client, text: str, respond):
+    """날짜 기준 파싱 후 캘린더 일정 등록"""
+    parsed = _parse_calendar_args(text)
+    if not parsed:
         respond(
             text=(
-                f"❌ `{env_key}` 환경변수가 설정되지 않았습니다.\n"
-                f"`/wiki list` 로 캘린더 ID를 확인한 뒤 Railway 환경변수에 추가하세요."
+                "❌ 명령어 형식을 인식하지 못했습니다.\n"
+                "`/calendar help` 를 입력하면 도움말을 확인할 수 있어요."
             )
         )
         return
 
-    # 날짜 형식 검증
-    try:
-        from datetime import datetime as _dt
-        _dt.strptime(date_str, "%Y-%m-%d")
-    except ValueError:
+    cal_type_raw, date_raw, title = parsed
+
+    resolved = _resolve_calendar_type(cal_type_raw)
+    if not resolved:
         respond(
             text=(
-                f"❌ 날짜 형식 오류: `{date_str}`\n"
-                "올바른 형식: `YYYY-MM-DD`  (예: 2026-03-15)"
+                f"❌ 알 수 없는 캘린더 유형: `{cal_type_raw}`\n"
+                "프로젝트 일정: `플잭` `프로젝트` `프로젝트 일정`\n"
+                "개인/팀 일정:  `개인` `팀` `개인 일정`"
+            )
+        )
+        return
+
+    env_key, type_name = resolved
+    calendar_id = os.getenv(env_key, "")
+    if not calendar_id:
+        respond(
+            text=(
+                f"❌ `{env_key}` 환경변수가 설정되지 않았습니다.\n"
+                f"`/calendar list` 로 캘린더 ID를 확인한 뒤 Railway 환경변수에 추가하세요."
+            )
+        )
+        return
+
+    date_str = _parse_date(date_raw)
+    if not date_str:
+        respond(
+            text=(
+                f"❌ 날짜 형식 오류: `{date_raw}`\n"
+                "지원 형식: `2026-03-12`, `26년 3월 12일`, `3월 12일`, `3/12`"
             )
         )
         return
@@ -167,43 +338,54 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
     @app.command("/wiki")
     def handle_wiki_command(ack, respond, command):
         """
-        /wiki help                          → 도움말
-        /wiki list                          → 캘린더 목록 조회
-        /wiki {플잭|개인} YYYY-MM-DD 제목   → 일정 등록
+        /wiki help              → 도움말
+        /wiki search [검색어]   → 페이지 목록 검색
+        /wiki [페이지 제목]     → 페이지 내용 조회
         """
-        ack()  # Slack 에 즉시 응답 (3초 이내 필수)
-
+        ack()
         text   = (command.get("text") or "").strip()
         client = wc.ConfluenceCalendarClient()
 
-        # 도움말
         if not text or text.lower() == "help":
             _wiki_help(respond)
             return
 
-        parts = text.split(None, 1)   # 첫 단어(유형 or 서브커맨드) 분리
-        sub   = parts[0]
-
-        # 캘린더 목록 조회
-        if sub == "list":
-            _wiki_list(client, respond)
+        parts = text.split(None, 1)
+        if parts[0].lower() == "search":
+            query = parts[1].strip() if len(parts) == 2 else ""
+            if query:
+                _wiki_search_pages(client, query, respond)
+            else:
+                respond(text="❌ 검색어를 입력하세요. 예: `/wiki search QA 일정`")
             return
 
-        # 일정 등록: /wiki {플잭|개인} YYYY-MM-DD 제목
-        if sub in wc.CALENDAR_TYPES and len(parts) == 2:
-            rest = parts[1].split(None, 1)   # "YYYY-MM-DD 제목..." 분리
-            if len(rest) == 2:
-                date_str, title = rest
-                _wiki_add_event(client, sub, date_str, title, respond)
-                return
+        # 나머지는 모두 페이지 제목으로 처리
+        _wiki_get_page(client, text, respond)
 
-        # 파싱 실패
-        respond(
-            text=(
-                f"❌ 알 수 없는 명령어입니다: `{text}`\n"
-                "`/wiki help` 를 입력하면 도움말을 확인할 수 있어요."
-            )
-        )
+    @app.command("/calendar")
+    def handle_calendar_command(ack, respond, command):
+        """
+        /calendar help                      → 도움말
+        /calendar list                      → 캘린더 목록 & ID 확인
+        /calendar [유형] [날짜] [제목]      → 일정 등록
+          유형 예: 플잭, 프로젝트, 프로젝트 일정, 개인, 팀
+          날짜 예: 2026-03-12, 26년 3월 12일, 3월 12일, 3/12
+        """
+        ack()
+        text   = (command.get("text") or "").strip()
+        client = wc.ConfluenceCalendarClient()
+
+        if not text or text.lower() == "help":
+            _calendar_help(respond)
+            return
+
+        parts = text.split(None, 1)
+        if parts[0].lower() == "list":
+            _calendar_list(client, respond)
+            return
+
+        # 날짜 기준 파싱으로 일정 등록
+        _calendar_add_event(client, text, respond)
 
     return app
 

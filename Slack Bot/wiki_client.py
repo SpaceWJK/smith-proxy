@@ -10,10 +10,22 @@ wiki_client.py - Confluence Team Calendar REST API 클라이언트
 """
 
 import os
+import re
+import html as _html
 import logging
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_html(html_text: str) -> str:
+    """HTML 태그 제거 + 엔티티 디코딩 → 읽기 쉬운 일반 텍스트"""
+    text = re.sub(r'<[^>]+>', '\n', html_text or '')
+    text = _html.unescape(text)           # &amp; &lt; &gt; &nbsp; 등 처리
+    text = re.sub(r'[ \t]+', ' ', text)   # 가로 공백 정리
+    text = re.sub(r'\n[ \t]+', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 _DEFAULT_SPACE_KEY = "QASGP"
 
@@ -137,3 +149,60 @@ class ConfluenceCalendarClient:
         }
         logger.info(f"[wiki] 이벤트 등록 요청: calendarId={calendar_id}, date={start_date}, title={title}")
         return self._post("/rest/teamcalendars/1.0/events", payload)
+
+    def get_page_by_title(self, title: str, space_key: str = None):
+        """
+        페이지 제목으로 Confluence 페이지 내용 조회.
+        여러 결과가 있으면 첫 번째 반환.
+
+        Returns
+        -------
+        (page_dict | None, error_str | None)
+        page_dict = {"id", "title", "url", "text"}
+        """
+        sk = space_key or os.getenv("CONFLUENCE_SPACE_KEY", _DEFAULT_SPACE_KEY)
+        data, err = self._get(
+            "/rest/api/content",
+            params={
+                "title":    title,
+                "spaceKey": sk,
+                "expand":   "body.view",
+                "limit":    5,
+            },
+        )
+        if err:
+            return None, err
+
+        results = data.get("results", []) if isinstance(data, dict) else []
+        if not results:
+            return None, f"'{title}' 페이지를 찾을 수 없습니다. (공간: {sk})"
+
+        page       = results[0]
+        page_id    = page.get("id", "")
+        page_title = page.get("title", title)
+        page_url   = f"{self.base_url}/pages/viewpage.action?pageId={page_id}"
+        html_body  = page.get("body", {}).get("view", {}).get("value", "")
+        text       = _strip_html(html_body)
+
+        return {"id": page_id, "title": page_title, "url": page_url, "text": text}, None
+
+    def search_pages(self, query: str, space_key: str = None):
+        """
+        CQL 텍스트 검색으로 페이지 목록 반환 (제목 목록 용도).
+
+        Returns
+        -------
+        (list[{"id", "title"}] | None, error_str | None)
+        """
+        sk = space_key or os.getenv("CONFLUENCE_SPACE_KEY", _DEFAULT_SPACE_KEY)
+        cql = f'space="{sk}" AND text ~ "{query}" AND type=page ORDER BY lastmodified DESC'
+        data, err = self._get(
+            "/rest/api/content/search",
+            params={"cql": cql, "limit": 10, "expand": ""},
+        )
+        if err:
+            return None, err
+
+        results = data.get("results", []) if isinstance(data, dict) else []
+        pages = [{"id": p.get("id", ""), "title": p.get("title", "")} for p in results]
+        return pages, None
