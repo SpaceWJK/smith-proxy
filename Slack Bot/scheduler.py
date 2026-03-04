@@ -311,7 +311,7 @@ class NotificationScheduler:
             print("  등록된 스케줄이 없습니다.")
         else:
             for job in jobs:
-                nxt     = job.next_run_time
+                nxt     = getattr(job, 'next_run_time', None)
                 nxt_str = nxt.strftime("%Y-%m-%d %H:%M %Z") if nxt else "없음"
                 print(f"  • {job.name}")
                 print(f"    └ 다음 실행: {nxt_str}")
