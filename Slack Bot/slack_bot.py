@@ -49,13 +49,15 @@ def _wiki_help(respond):
     respond(text=(
         "*📄 /wiki 페이지 조회 도움말*\n\n"
         "```\n"
-        "/wiki [페이지 제목]        Confluence 페이지 내용 조회 (기본 공간: QASGP)\n"
-        "/wiki search [검색어]      키워드로 페이지 목록 검색\n"
-        "/wiki help                 이 도움말\n"
+        "/wiki [페이지 제목]                페이지 내용 전체 조회\n"
+        "/wiki [페이지 제목] | [질문]       페이지 내용 기반 AI 답변 (Claude)\n"
+        "/wiki search [검색어]              키워드로 페이지 목록 검색\n"
+        "/wiki help                         이 도움말\n"
         "```\n\n"
         "예시:\n"
         "• `/wiki Game Service 1`\n"
-        "• `/wiki 프로젝트 현황`\n"
+        "• `/wiki Game Service 1 | 이 페이지에서 QA 일정 알려줘`\n"
+        "• `/wiki 프로젝트 현황 | 다음 주 릴리즈 일정 요약해줘`\n"
         "• `/wiki search QA 일정`"
     ))
 
@@ -81,6 +83,58 @@ def _wiki_get_page(client, page_title: str, respond):
     if truncated:
         msg += "\n\n⚠️ 내용이 길어 일부만 표시됩니다. 전체 내용은 페이지 링크를 확인하세요."
     respond(text=msg)
+
+
+def _wiki_ask_claude(page_title: str, page_text: str, page_url: str, question: str, respond):
+    """
+    Claude API 를 사용해 페이지 내용 기반으로 질문에 답변.
+    환경변수 ANTHROPIC_API_KEY 필요.
+    """
+    import anthropic
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        respond(
+            text=(
+                "❌ `ANTHROPIC_API_KEY` 환경변수가 설정되지 않았습니다.\n"
+                "Railway 환경변수에 Anthropic API 키를 추가하세요."
+            )
+        )
+        return
+
+    # 페이지 내용이 너무 길면 앞부분만 사용 (토큰 절약)
+    MAX_PAGE_CHARS = 20000
+    truncated = len(page_text) > MAX_PAGE_CHARS
+    content   = page_text[:MAX_PAGE_CHARS] if truncated else page_text
+    trunc_note = "\n*(내용이 길어 일부만 포함됨)*\n" if truncated else ""
+
+    prompt = (
+        f"다음은 Confluence 페이지 '{page_title}'의 내용입니다:\n\n"
+        f"{content}{trunc_note}\n\n"
+        f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n"
+        f"페이지에 관련 내용이 없으면 '해당 내용을 페이지에서 찾을 수 없습니다'라고 답하세요.\n\n"
+        f"질문: {question}"
+    )
+
+    try:
+        client_ai = anthropic.Anthropic(api_key=api_key)
+        message   = client_ai.messages.create(
+            model      = "claude-3-5-haiku-20241022",  # 빠르고 저렴한 모델
+            max_tokens = 1024,
+            messages   = [{"role": "user", "content": prompt}],
+        )
+        answer = message.content[0].text
+    except Exception as e:
+        logger.error(f"[wiki] Claude API 오류: {e}")
+        respond(text=f"❌ Claude API 오류\n```\n{e}\n```")
+        return
+
+    respond(text=(
+        f"*📄 {page_title}* — AI 답변\n"
+        f"🔗 <{page_url}|원본 페이지>\n\n"
+        f"*Q: {question}*\n\n"
+        f"{answer}"
+    ))
 
 
 def _wiki_search_pages(client, query: str, respond):
@@ -359,7 +413,20 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 respond(text="❌ 검색어를 입력하세요. 예: `/wiki search QA 일정`")
             return
 
-        # 나머지는 모두 페이지 제목으로 처리
+        # "|" 구분자 → [페이지 제목] | [질문] 으로 Claude AI 답변
+        if "|" in text:
+            page_title, _, question = text.partition("|")
+            page_title = page_title.strip()
+            question   = question.strip()
+            if page_title and question:
+                page, err = client.get_page_by_title(page_title)
+                if err:
+                    respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
+                    return
+                _wiki_ask_claude(page["title"], page["text"], page["url"], question, respond)
+                return
+
+        # 나머지는 모두 페이지 제목으로 처리 (내용 전체 표시)
         _wiki_get_page(client, text, respond)
 
     @app.command("/calendar")
