@@ -69,6 +69,25 @@ class SlackSender:
     # Block Kit 빌더 — 인터랙티브 체크리스트
     # ──────────────────────────────────────────────────────────
 
+    def _count_tasks(self, items: list, checked_set: set):
+        """
+        그룹/단독 항목 기준으로 (전체 태스크 수, 완료 태스크 수)를 반환합니다.
+
+        - group 항목: 모든 sub_items 가 checked_set 에 있어야 완료
+        - 단독 항목: value 가 checked_set 에 있으면 완료
+        """
+        total, done = 0, 0
+        for item in items:
+            total += 1
+            if item.get("type") == "group":
+                sub_values = [s["value"] for s in item.get("sub_items", [])]
+                if sub_values and all(v in checked_set for v in sub_values):
+                    done += 1
+            else:
+                if item.get("value", "") in checked_set:
+                    done += 1
+        return total, done
+
     def _build_interactive_blocks(
         self,
         title: str,
@@ -83,15 +102,16 @@ class SlackSender:
         ----------
         title          : 헤더 제목 문자열
         items          : 체크리스트 항목 목록
-                         예: [{"value": "item_0", "text": "작업명",
-                                "mentions": ["U12345"]}, ...]
-        checked_values : 현재 체크된 value 목록 (예: ["item_0", "item_2"])
+                         단독: {"value": "v", "text": "작업명", "mentions": [...]}
+                         그룹: {"type": "group", "group_name": "...",
+                                "sub_items": [{"value": ..., "text": ..., "mentions": ...}, ...]}
+        checked_values : 현재 체크된 value 목록
         sent_at        : 최초 발송 시각 문자열 (context 블록 표시용)
         """
-        total  = len(items)
-        done   = len(checked_values)
-        filled = int((done / total) * 10) if total > 0 else 0
-        bar    = "▓" * filled + "░" * (10 - filled)
+        checked_set         = set(checked_values)
+        total, done         = self._count_tasks(items, checked_set)
+        filled              = int((done / total) * 10) if total > 0 else 0
+        bar                 = "▓" * filled + "░" * (10 - filled)
 
         now          = datetime.now()
         month_label  = f"{now.year}년 {now.month}월"
@@ -99,55 +119,22 @@ class SlackSender:
         if done == total and total > 0:
             status_text += "  🎉 *모두 완료!*"
 
-        # ── 체크박스 옵션 빌드 ──
-        options: list         = []
-        initial_options: list = []
+        context_text = f"⏰ 발송: {sent_at or now.strftime('%Y-%m-%d %H:%M')}  |  자동 알림"
 
-        for item in items:
-            val      = item["value"]
-            text     = item["text"]
-            mentions = item.get("mentions", [])
-
-            mention_str = ""
-            if mentions:
-                # user_map 에 등록된 이름만 사용 (평문, @ 없음)
-                # 이름이 없는 UID 는 건너뜀 — 실제 멘션은 📌 담당자 블록에서 처리
-                names = [self.user_map.get(uid, "") for uid in mentions]
-                names = [n for n in names if n]   # 빈 문자열 제거
-                if names:
-                    mention_str = "  담당: " + ", ".join(names)
-
-            option = {
-                "text":  {"type": "mrkdwn", "text": f"*{text}*{mention_str}"},
-                "value": val,
-            }
-            options.append(option)
-            if val in checked_values:
-                initial_options.append(option)
-
-        checklist_element = {
-            "type":      "checkboxes",
-            "action_id": "checklist_toggle",
-            "options":   options,
-        }
-        if initial_options:
-            checklist_element["initial_options"] = initial_options
-
-        context_text = (
-            f"⏰ 발송: {sent_at or now.strftime('%Y-%m-%d %H:%M')}  |  자동 알림"
-        )
-
-        # ── 담당자 멘션 수집 ──────────────────────────────────────────────────
-        # 체크박스 옵션 텍스트 내 <@U...> 는 시각적 표시만 되고 Slack 알림이 발송되지 않음.
-        # section/context 블록에 포함된 <@U...> 만 실제 멘션 알림을 트리거함.
+        # ── 담당자 멘션 수집 ────────────────────────────────────────────────
+        # 체크박스 옵션 텍스트 내 <@U...> 는 시각적 표시만 되고 Slack 알림 미발송.
+        # section/context 블록의 <@U...> 만 실제 멘션 알림을 트리거합니다.
         unique_mentions: list = []
         seen_uids: set        = set()
         for item in items:
-            for uid in item.get("mentions", []):
-                if uid not in seen_uids:
-                    seen_uids.add(uid)
-                    unique_mentions.append(f"<@{uid}>")
+            src_list = item.get("sub_items", []) if item.get("type") == "group" else [item]
+            for src in src_list:
+                for uid in src.get("mentions", []):
+                    if uid not in seen_uids:
+                        seen_uids.add(uid)
+                        unique_mentions.append(f"<@{uid}>")
 
+        # ── 헤더 + 진행 상태 블록 ────────────────────────────────────────────
         blocks: list = [
             {
                 "type": "header",
@@ -160,8 +147,7 @@ class SlackSender:
             },
         ]
 
-        # 담당자 멘션 블록 — 이 블록의 <@U...> 가 실제 Slack 알림을 발송합니다.
-        # chat.update 시에는 알림이 재발송되지 않으므로 중복 알림 걱정 불필요.
+        # 담당자 멘션 블록 — chat.update 시 재알림 없으므로 중복 걱정 불필요
         if unique_mentions:
             blocks.append({
                 "type": "context",
@@ -171,13 +157,79 @@ class SlackSender:
                 }],
             })
 
+        blocks.append({"type": "divider"})
+
+        # ── 항목별 블록 빌드 ─────────────────────────────────────────────────
+        for i, item in enumerate(items):
+            if item.get("type") == "group":
+                group_name = item.get("group_name", f"그룹 {i + 1}")
+                sub_items  = item.get("sub_items", [])
+
+                # 그룹 제목 섹션
+                blocks.append({
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{group_name}*"},
+                })
+
+                # 서브 아이템 → 체크박스 옵션 목록
+                options: list         = []
+                initial_options: list = []
+                for sub in sub_items:
+                    val      = sub["value"]
+                    text     = sub["text"]
+                    names    = [self.user_map.get(uid, "") for uid in sub.get("mentions", [])]
+                    names    = [n for n in names if n]
+                    mention_str = ("  담당: " + ", ".join(names)) if names else ""
+
+                    opt = {
+                        "text":  {"type": "mrkdwn", "text": f"*{text}*{mention_str}"},
+                        "value": val,
+                    }
+                    options.append(opt)
+                    if val in checked_set:
+                        initial_options.append(opt)
+
+                checkbox_elem = {
+                    "type":      "checkboxes",
+                    "action_id": "checklist_toggle",
+                    "options":   options,
+                }
+                if initial_options:
+                    checkbox_elem["initial_options"] = initial_options
+
+                blocks.append({
+                    "type":     "actions",
+                    "block_id": f"chk_grp_{i}",
+                    "elements": [checkbox_elem],
+                })
+
+            else:
+                # 단독 항목
+                val      = item["value"]
+                text     = item["text"]
+                names    = [self.user_map.get(uid, "") for uid in item.get("mentions", [])]
+                names    = [n for n in names if n]
+                mention_str = ("  담당: " + ", ".join(names)) if names else ""
+
+                opt = {
+                    "text":  {"type": "mrkdwn", "text": f"*{text}*{mention_str}"},
+                    "value": val,
+                }
+                checkbox_elem = {
+                    "type":      "checkboxes",
+                    "action_id": "checklist_toggle",
+                    "options":   [opt],
+                }
+                if val in checked_set:
+                    checkbox_elem["initial_options"] = [opt]
+
+                blocks.append({
+                    "type":     "actions",
+                    "block_id": f"chk_solo_{i}",
+                    "elements": [checkbox_elem],
+                })
+
         blocks.extend([
-            {"type": "divider"},
-            {
-                "type":     "actions",
-                "block_id": "checklist_block",
-                "elements": [checklist_element],
-            },
             {"type": "divider"},
             {
                 "type":     "context",
@@ -299,9 +351,7 @@ class SlackSender:
                 text    = state.get("title", "월간 체크리스트"),
                 blocks  = blocks,
             )
-            done  = len(state.get("checked", []))
-            total = len(state["items"])
-            logger.info(f"✅ 메시지 업데이트 완료 | ts: {ts}  체크={done}/{total}")
+            logger.info(f"✅ 메시지 업데이트 완료 | ts: {ts}  checked={len(state.get('checked', []))}개")
             return True
         except SlackApiError as e:
             logger.error(f"❌ 메시지 업데이트 실패: {e.response['error']}")

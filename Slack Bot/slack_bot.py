@@ -498,10 +498,11 @@ def _reconstruct_checklist_state(body: dict, checked: list):
         logger.warning(f"[체크리스트 재구성] config.json 로드 실패: {e}")
 
     # ── 4. config 매칭 실패 시 → message blocks 의 checkboxes.options 에서 재구성
+    # 신규 구조(chk_grp_*, chk_solo_*) 및 구버전(checklist_block) 모두 처리합니다.
     # (body["actions"][0]["options"] 는 Slack payload 에 포함되지 않음 — blocks 에서 찾아야 함)
     if not items:
         for block in msg_blocks:
-            if block.get("type") == "actions" and block.get("block_id") == "checklist_block":
+            if block.get("type") == "actions":
                 for elem in block.get("elements", []):
                     if elem.get("type") == "checkboxes":
                         for opt in elem.get("options", []):
@@ -510,8 +511,6 @@ def _reconstruct_checklist_state(body: dict, checked: list):
                             mentions = re.findall(r'<@([A-Z0-9]+)>', opt_text)
                             clean    = re.sub(r'\s{2,}담당:.*$', '', opt_text).strip().strip('*')
                             items.append({"value": val, "text": clean, "mentions": mentions})
-                        break
-                break
         if items:
             logger.info(f"[체크리스트 재구성] message blocks에서 재구성: {len(items)}개")
 
@@ -524,7 +523,7 @@ def _reconstruct_checklist_state(body: dict, checked: list):
 
     logger.info(
         f"[체크리스트 재구성] 완료  title={title!r}  "
-        f"items={len(items)}개  checked={len(checked)}/{len(items)}"
+        f"items={len(items)}개  checked={len(checked)}개"
     )
     return {
         "title":   title,
@@ -556,10 +555,17 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         """
         ack()   # Slack 에 즉시 응답
 
-        channel  = body["channel"]["id"]
-        ts       = body["message"]["ts"]
-        selected = body["actions"][0].get("selected_options", [])
-        checked  = [opt["value"] for opt in selected]
+        channel = body["channel"]["id"]
+        ts      = body["message"]["ts"]
+
+        # 여러 actions 블록(chk_grp_*, chk_solo_*)에 걸쳐 체크된 값을
+        # body["state"]["values"] 에서 한번에 수집합니다.
+        checked: list = []
+        for block_state in body.get("state", {}).get("values", {}).values():
+            for action_state in block_state.values():
+                if action_state.get("type") == "checkboxes":
+                    for opt in action_state.get("selected_options", []):
+                        checked.append(opt["value"])
 
         logger.info(
             f"체크리스트 토글 | 채널: {channel} | ts: {ts} | "

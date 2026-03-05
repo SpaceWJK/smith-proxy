@@ -119,9 +119,7 @@ def update_checked(channel: str, ts: str, checked_values: list):
     state[k]["updated"] = datetime.now().isoformat()
     _save(state)
 
-    done  = len(checked_values)
-    total = len(state[k]["items"])
-    logger.info(f"체크리스트 갱신: {k}  체크={done}/{total}")
+    logger.info(f"체크리스트 갱신: {k}  checked_values={len(checked_values)}개")
     return state[k]
 
 
