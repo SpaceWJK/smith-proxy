@@ -240,6 +240,22 @@ class SlackSender:
         return blocks
 
     # ──────────────────────────────────────────────────────────
+    # 템플릿 변수 치환
+    # ──────────────────────────────────────────────────────────
+
+    def _resolve_templates(self, text: str) -> str:
+        """
+        메시지 문자열의 템플릿 변수를 현재 날짜 정보로 치환합니다.
+
+        지원 변수
+        ---------
+        {date}  →  MM.DD(요일)  예: 03.05(목)
+        """
+        now    = datetime.now()
+        day_kr = ["월", "화", "수", "목", "금", "토", "일"][now.weekday()]
+        return text.replace("{date}", now.strftime("%m.%d") + f"({day_kr})")
+
+    # ──────────────────────────────────────────────────────────
     # 메시지 전송 — 일반
     # ──────────────────────────────────────────────────────────
 
@@ -257,7 +273,7 @@ class SlackSender:
             )
             fallback_text = schedule.get("title", "체크리스트 알림")
         else:
-            message       = schedule.get("message", "")
+            message       = self._resolve_templates(schedule.get("message", ""))
             blocks        = self._build_text_blocks(message)
             fallback_text = message[:100] if message else "알림"
 
