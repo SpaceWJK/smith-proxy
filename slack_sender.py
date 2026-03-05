@@ -12,6 +12,7 @@ slack_sender.py - Slack Web API 래퍼
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 from slack_sdk import WebClient
@@ -69,12 +70,131 @@ class SlackSender:
     # Block Kit 빌더 — 인터랙티브 체크리스트
     # ──────────────────────────────────────────────────────────
 
+    def _count_tasks(self, items: list, checked_set: set):
+        """
+        그룹/단독 항목 기준으로 (전체 태스크 수, 완료 태스크 수)를 반환합니다.
+
+        - group 항목: 모든 sub_items 가 checked_set 에 있어야 완료
+        - 단독 항목: value 가 checked_set 에 있으면 완료
+        """
+        total, done = 0, 0
+        for item in items:
+            total += 1
+            if item.get("type") == "group":
+                sub_values = [s["value"] for s in item.get("sub_items", [])]
+                if sub_values and all(v in checked_set for v in sub_values):
+                    done += 1
+            else:
+                if item.get("value", "") in checked_set:
+                    done += 1
+        return total, done
+
+    def _build_missed_section_blocks(self, missed_items: list, action_id: str = "checklist_toggle") -> list:
+        """
+        누락 체크리스트 섹션 블록 생성.
+
+        Parameters
+        ----------
+        missed_items : get_missed_items() 반환값
+            [{"label": "[일일] 03/04(화)", "items": [{"value":"missed_0_x","text":"...","mentions":[...]}]}, ...]
+
+        Returns: Slack Block Kit 블록 목록
+            - block_id="missed_divider"  → 구분자 (sentinel: 로컬 봇이 섹션 위치 식별용)
+            - block_id="missed_header"   → "⚠️ 전일 누락 항목" 헤더
+            - block_id=f"missed_grp_{i}" → 그룹 레이블 (스케줄별)
+            - block_id=f"missed_{i}"     → 해당 그룹의 체크박스
+        """
+        blocks = [
+            {"type": "divider", "block_id": "missed_divider"},
+            {
+                "type":     "section",
+                "block_id": "missed_header",
+                "text": {"type": "mrkdwn", "text": "⚠️ *전일 누락 항목*"},
+            },
+        ]
+
+        for i, group in enumerate(missed_items):
+            label      = group.get("label", "")
+            group_items = group.get("items", [])
+
+            # 그룹 레이블 (예: 📋 [일일] 03/04(화))
+            blocks.append({
+                "type":     "section",
+                "block_id": f"missed_grp_{i}",
+                "text": {"type": "mrkdwn", "text": f"*📋 {label}*"},
+            })
+
+            # 체크박스 옵션 빌드
+            options: list = []
+            for item in group_items:
+                names = [self.user_map.get(uid, "") for uid in item.get("mentions", [])]
+                names = [n for n in names if n]
+                mention_str = ("  담당: " + ", ".join(names)) if names else ""
+                options.append({
+                    "text":  {"type": "mrkdwn", "text": f"*{item['text']}*{mention_str}"},
+                    "value": item["value"],
+                })
+
+            if options:
+                blocks.append({
+                    "type":     "actions",
+                    "block_id": f"missed_{i}",
+                    "elements": [{
+                        "type":      "checkboxes",
+                        "action_id": action_id,
+                        "options":   options,
+                        # initial_options 없음 (초기 전송 시 모두 미완료)
+                    }],
+                })
+
+        return blocks
+
+    def _rebuild_missed_blocks_checked(
+        self, raw_blocks: list, checked_set: set, action_id: str = "checklist_toggle"
+    ) -> list:
+        """
+        메시지에서 추출한 누락 섹션 raw blocks 의 initial_options 를
+        현재 checked_set 기준으로 갱신합니다.
+
+        Parameters
+        ----------
+        raw_blocks  : 현재 메시지에서 추출한 누락 섹션 블록 목록
+        checked_set : 현재 전체 체크 상태 (일반 + missed_ 값 모두 포함)
+
+        Returns: initial_options 갱신된 블록 목록
+        """
+        result: list = []
+        for block in raw_blocks:
+            if block.get("type") != "actions":
+                result.append(block)
+                continue
+
+            new_elements: list = []
+            for elem in block.get("elements", []):
+                if elem.get("type") != "checkboxes":
+                    new_elements.append(elem)
+                    continue
+
+                options = elem.get("options", [])
+                initial = [opt for opt in options if opt["value"] in checked_set]
+                # initial_options, action_id 제거 후 재설정 (action_id 는 동적으로 교체)
+                new_elem = {k: v for k, v in elem.items() if k not in ("initial_options", "action_id")}
+                new_elem["action_id"] = action_id
+                if initial:
+                    new_elem["initial_options"] = initial
+                new_elements.append(new_elem)
+
+            result.append({**block, "elements": new_elements})
+        return result
+
     def _build_interactive_blocks(
         self,
         title: str,
         items: list,
         checked_values: list,
         sent_at: str = "",
+        missed_section: list = None,
+        action_id: str = "checklist_toggle",
     ) -> list:
         """
         Slack Block Kit 인터랙티브 체크리스트 블록 구성
@@ -83,15 +203,16 @@ class SlackSender:
         ----------
         title          : 헤더 제목 문자열
         items          : 체크리스트 항목 목록
-                         예: [{"value": "item_0", "text": "작업명",
-                                "mentions": ["U12345"]}, ...]
-        checked_values : 현재 체크된 value 목록 (예: ["item_0", "item_2"])
+                         단독: {"value": "v", "text": "작업명", "mentions": [...]}
+                         그룹: {"type": "group", "group_name": "...",
+                                "sub_items": [{"value": ..., "text": ..., "mentions": ...}, ...]}
+        checked_values : 현재 체크된 value 목록
         sent_at        : 최초 발송 시각 문자열 (context 블록 표시용)
         """
-        total  = len(items)
-        done   = len(checked_values)
-        filled = int((done / total) * 10) if total > 0 else 0
-        bar    = "▓" * filled + "░" * (10 - filled)
+        checked_set         = set(checked_values)
+        total, done         = self._count_tasks(items, checked_set)
+        filled              = int((done / total) * 10) if total > 0 else 0
+        bar                 = "▓" * filled + "░" * (10 - filled)
 
         now          = datetime.now()
         month_label  = f"{now.year}년 {now.month}월"
@@ -99,55 +220,22 @@ class SlackSender:
         if done == total and total > 0:
             status_text += "  🎉 *모두 완료!*"
 
-        # ── 체크박스 옵션 빌드 ──
-        options: list         = []
-        initial_options: list = []
+        context_text = f"⏰ 발송: {sent_at or now.strftime('%Y-%m-%d %H:%M')}  |  자동 알림"
 
-        for item in items:
-            val      = item["value"]
-            text     = item["text"]
-            mentions = item.get("mentions", [])
-
-            mention_str = ""
-            if mentions:
-                # user_map 에 등록된 이름만 사용 (평문, @ 없음)
-                # 이름이 없는 UID 는 건너뜀 — 실제 멘션은 📌 담당자 블록에서 처리
-                names = [self.user_map.get(uid, "") for uid in mentions]
-                names = [n for n in names if n]   # 빈 문자열 제거
-                if names:
-                    mention_str = "  담당: " + ", ".join(names)
-
-            option = {
-                "text":  {"type": "mrkdwn", "text": f"*{text}*{mention_str}"},
-                "value": val,
-            }
-            options.append(option)
-            if val in checked_values:
-                initial_options.append(option)
-
-        checklist_element = {
-            "type":      "checkboxes",
-            "action_id": "checklist_toggle",
-            "options":   options,
-        }
-        if initial_options:
-            checklist_element["initial_options"] = initial_options
-
-        context_text = (
-            f"⏰ 발송: {sent_at or now.strftime('%Y-%m-%d %H:%M')}  |  자동 알림"
-        )
-
-        # ── 담당자 멘션 수집 ──────────────────────────────────────────────────
-        # 체크박스 옵션 텍스트 내 <@U...> 는 시각적 표시만 되고 Slack 알림이 발송되지 않음.
-        # section/context 블록에 포함된 <@U...> 만 실제 멘션 알림을 트리거함.
+        # ── 담당자 멘션 수집 ────────────────────────────────────────────────
+        # 체크박스 옵션 텍스트 내 <@U...> 는 시각적 표시만 되고 Slack 알림 미발송.
+        # section/context 블록의 <@U...> 만 실제 멘션 알림을 트리거합니다.
         unique_mentions: list = []
         seen_uids: set        = set()
         for item in items:
-            for uid in item.get("mentions", []):
-                if uid not in seen_uids:
-                    seen_uids.add(uid)
-                    unique_mentions.append(f"<@{uid}>")
+            src_list = item.get("sub_items", []) if item.get("type") == "group" else [item]
+            for src in src_list:
+                for uid in src.get("mentions", []):
+                    if uid not in seen_uids:
+                        seen_uids.add(uid)
+                        unique_mentions.append(f"<@{uid}>")
 
+        # ── 헤더 + 진행 상태 블록 ────────────────────────────────────────────
         blocks: list = [
             {
                 "type": "header",
@@ -160,8 +248,7 @@ class SlackSender:
             },
         ]
 
-        # 담당자 멘션 블록 — 이 블록의 <@U...> 가 실제 Slack 알림을 발송합니다.
-        # chat.update 시에는 알림이 재발송되지 않으므로 중복 알림 걱정 불필요.
+        # 담당자 멘션 블록 — chat.update 시 재알림 없으므로 중복 걱정 불필요
         if unique_mentions:
             blocks.append({
                 "type": "context",
@@ -171,13 +258,83 @@ class SlackSender:
                 }],
             })
 
+        blocks.append({"type": "divider"})
+
+        # ── 항목별 블록 빌드 ─────────────────────────────────────────────────
+        for i, item in enumerate(items):
+            if item.get("type") == "group":
+                group_name = item.get("group_name", f"그룹 {i + 1}")
+                sub_items  = item.get("sub_items", [])
+
+                # 그룹 제목 섹션
+                blocks.append({
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*{group_name}*"},
+                })
+
+                # 서브 아이템 → 체크박스 옵션 목록
+                options: list         = []
+                initial_options: list = []
+                for sub in sub_items:
+                    val      = sub["value"]
+                    text     = sub["text"]
+                    names    = [self.user_map.get(uid, "") for uid in sub.get("mentions", [])]
+                    names    = [n for n in names if n]
+                    mention_str = ("  담당: " + ", ".join(names)) if names else ""
+
+                    opt = {
+                        "text":  {"type": "mrkdwn", "text": f"*{text}*{mention_str}"},
+                        "value": val,
+                    }
+                    options.append(opt)
+                    if val in checked_set:
+                        initial_options.append(opt)
+
+                checkbox_elem = {
+                    "type":      "checkboxes",
+                    "action_id": action_id,
+                    "options":   options,
+                }
+                if initial_options:
+                    checkbox_elem["initial_options"] = initial_options
+
+                blocks.append({
+                    "type":     "actions",
+                    "block_id": f"chk_grp_{i}",
+                    "elements": [checkbox_elem],
+                })
+
+            else:
+                # 단독 항목
+                val      = item["value"]
+                text     = item["text"]
+                names    = [self.user_map.get(uid, "") for uid in item.get("mentions", [])]
+                names    = [n for n in names if n]
+                mention_str = ("  담당: " + ", ".join(names)) if names else ""
+
+                opt = {
+                    "text":  {"type": "mrkdwn", "text": f"*{text}*{mention_str}"},
+                    "value": val,
+                }
+                checkbox_elem = {
+                    "type":      "checkboxes",
+                    "action_id": action_id,
+                    "options":   [opt],
+                }
+                if val in checked_set:
+                    checkbox_elem["initial_options"] = [opt]
+
+                blocks.append({
+                    "type":     "actions",
+                    "block_id": f"chk_solo_{i}",
+                    "elements": [checkbox_elem],
+                })
+
+        # ── 전일 누락 섹션 삽입 (있을 때만) ────────────────────────────────
+        if missed_section:
+            blocks.extend(missed_section)
+
         blocks.extend([
-            {"type": "divider"},
-            {
-                "type":     "actions",
-                "block_id": "checklist_block",
-                "elements": [checklist_element],
-            },
             {"type": "divider"},
             {
                 "type":     "context",
@@ -186,6 +343,22 @@ class SlackSender:
         ])
 
         return blocks
+
+    # ──────────────────────────────────────────────────────────
+    # 템플릿 변수 치환
+    # ──────────────────────────────────────────────────────────
+
+    def _resolve_templates(self, text: str) -> str:
+        """
+        메시지 문자열의 템플릿 변수를 현재 날짜 정보로 치환합니다.
+
+        지원 변수
+        ---------
+        {date}  →  MM.DD(요일)  예: 03.05(목)
+        """
+        now    = datetime.now()
+        day_kr = ["월", "화", "수", "목", "금", "토", "일"][now.weekday()]
+        return text.replace("{date}", now.strftime("%m.%d") + f"({day_kr})")
 
     # ──────────────────────────────────────────────────────────
     # 메시지 전송 — 일반
@@ -205,7 +378,7 @@ class SlackSender:
             )
             fallback_text = schedule.get("title", "체크리스트 알림")
         else:
-            message       = schedule.get("message", "")
+            message       = self._resolve_templates(schedule.get("message", ""))
             blocks        = self._build_text_blocks(message)
             fallback_text = message[:100] if message else "알림"
 
@@ -235,20 +408,35 @@ class SlackSender:
     # 메시지 전송 — 인터랙티브 체크리스트
     # ──────────────────────────────────────────────────────────
 
-    def send_interactive_checklist(self, channel: str, schedule: dict):
+    def send_interactive_checklist(
+        self, channel: str, schedule: dict, missed_items: list = None
+    ):
         """
         인터랙티브 체크리스트 메시지를 전송합니다.
+
+        Parameters
+        ----------
+        missed_items : 전일 누락 항목 목록 (missed_tracker.get_missed_items() 반환값)
+                       없거나 빈 리스트면 누락 섹션 미표시.
 
         Returns
         -------
         str  : 전송된 메시지의 ts (타임스탬프). 실패 시 None.
         """
         sent_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # 누락 섹션 블록 빌드 (있을 때만)
+        missed_section = (
+            self._build_missed_section_blocks(missed_items)
+            if missed_items else None
+        )
+
         blocks  = self._build_interactive_blocks(
             title          = schedule.get("title", "📋 체크리스트"),
             items          = schedule.get("items", []),
             checked_values = [],
             sent_at        = sent_at,
+            missed_section = missed_section,
         )
 
         kwargs = {
@@ -275,22 +463,39 @@ class SlackSender:
             return None
 
     def update_interactive_checklist(
-        self, channel: str, ts: str, state: dict
+        self, channel: str, ts: str, state: dict, missed_section: list = None
     ) -> bool:
         """
         체크 상태 변경 후 기존 메시지를 chat.update 로 갱신합니다.
 
         Parameters
         ----------
-        channel : Slack 채널 ID
-        ts      : 원본 메시지 타임스탬프
-        state   : interaction_handler.update_checked() 의 반환값
+        channel        : Slack 채널 ID
+        ts             : 원본 메시지 타임스탬프
+        state          : interaction_handler.update_checked() 의 반환값
+        missed_section : 현재 메시지에서 추출한 전일 누락 섹션 raw blocks
+                         (None 이면 누락 섹션 미포함)
         """
+        # ── 동적 action_id 생성 ─────────────────────────────────────────────────
+        # chat.update 마다 action_id 를 바꾸면 Slack 클라이언트가 해당 체크박스를
+        # "새 컴포넌트"로 인식해 initial_options 기준으로 강제 재렌더링합니다.
+        # → A 가 체크한 뒤 B 의 화면도 즉시 갱신되는 핵심 메커니즘.
+        dyn_action_id = f"checklist_toggle_{int(time.time() * 1000)}"
+
+        rebuilt_missed = (
+            self._rebuild_missed_blocks_checked(
+                missed_section, set(state.get("checked", [])), dyn_action_id
+            )
+            if missed_section else None
+        )
+
         blocks = self._build_interactive_blocks(
             title          = state.get("title", "📋 체크리스트"),
             items          = state["items"],
             checked_values = state.get("checked", []),
             sent_at        = state.get("sent_at", ""),
+            missed_section = rebuilt_missed,
+            action_id      = dyn_action_id,
         )
         try:
             self.client.chat_update(
@@ -299,9 +504,7 @@ class SlackSender:
                 text    = state.get("title", "월간 체크리스트"),
                 blocks  = blocks,
             )
-            done  = len(state.get("checked", []))
-            total = len(state["items"])
-            logger.info(f"✅ 메시지 업데이트 완료 | ts: {ts}  체크={done}/{total}")
+            logger.info(f"✅ 메시지 업데이트 완료 | ts: {ts}  checked={len(state.get('checked', []))}개")
             return True
         except SlackApiError as e:
             logger.error(f"❌ 메시지 업데이트 실패: {e.response['error']}")

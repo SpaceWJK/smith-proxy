@@ -68,12 +68,18 @@ def _wiki_help(respond):
     ))
 
 
-def _wiki_fetch_page(client, page_part: str):
+def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True):
     """
     '>' 구분자 유무에 따라 적합한 방식으로 Confluence 페이지를 조회합니다.
 
     - '>' 포함 → 조상 기반 CQL 검색 (get_page_by_path)
     - '>' 없음  → 제목 직접 검색   (get_page_by_title)
+
+    Parameters
+    ----------
+    fetch_full : bool
+        True  → get_page_by_id 추가 MCP 호출로 전체 본문 조회 (AI 질의용)
+        False → cql_search body.view 만 사용 (단순 표시용, MCP 호출 1회 절약)
 
     Returns: (page_dict | None, error_str | None)
     """
@@ -81,13 +87,14 @@ def _wiki_fetch_page(client, page_part: str):
         segments   = [s.strip() for s in page_part.split(">")]
         leaf_title = segments[-1]
         ancestors  = segments[:-1]
-        return client.get_page_by_path(ancestors, leaf_title)
-    return client.get_page_by_title(page_part)
+        return client.get_page_by_path(ancestors, leaf_title,
+                                       fetch_full=fetch_full)
+    return client.get_page_by_title(page_part, fetch_full=fetch_full)
 
 
 def _wiki_get_page(client, page_part: str, respond):
-    """경로/페이지 제목으로 내용 조회 후 Slack 에 표시"""
-    page, err = _wiki_fetch_page(client, page_part)
+    """경로/페이지 제목으로 내용 조회 후 Slack 에 표시 (fetch_full=False: 표시 전용)"""
+    page, err = _wiki_fetch_page(client, page_part, fetch_full=False)
     if err:
         respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
         return
@@ -498,10 +505,11 @@ def _reconstruct_checklist_state(body: dict, checked: list):
         logger.warning(f"[체크리스트 재구성] config.json 로드 실패: {e}")
 
     # ── 4. config 매칭 실패 시 → message blocks 의 checkboxes.options 에서 재구성
+    # 신규 구조(chk_grp_*, chk_solo_*) 및 구버전(checklist_block) 모두 처리합니다.
     # (body["actions"][0]["options"] 는 Slack payload 에 포함되지 않음 — blocks 에서 찾아야 함)
     if not items:
         for block in msg_blocks:
-            if block.get("type") == "actions" and block.get("block_id") == "checklist_block":
+            if block.get("type") == "actions":
                 for elem in block.get("elements", []):
                     if elem.get("type") == "checkboxes":
                         for opt in elem.get("options", []):
@@ -510,8 +518,6 @@ def _reconstruct_checklist_state(body: dict, checked: list):
                             mentions = re.findall(r'<@([A-Z0-9]+)>', opt_text)
                             clean    = re.sub(r'\s{2,}담당:.*$', '', opt_text).strip().strip('*')
                             items.append({"value": val, "text": clean, "mentions": mentions})
-                        break
-                break
         if items:
             logger.info(f"[체크리스트 재구성] message blocks에서 재구성: {len(items)}개")
 
@@ -524,7 +530,7 @@ def _reconstruct_checklist_state(body: dict, checked: list):
 
     logger.info(
         f"[체크리스트 재구성] 완료  title={title!r}  "
-        f"items={len(items)}개  checked={len(checked)}/{len(items)}"
+        f"items={len(items)}개  checked={len(checked)}개"
     )
     return {
         "title":   title,
@@ -547,19 +553,69 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
     """
     app = App(token=bot_token)
 
-    @app.action("checklist_toggle")
+    @app.action(re.compile(r"^checklist_toggle"))
     def handle_checklist_toggle(ack, body):
         """
         사용자가 체크리스트를 체크/언체크할 때 호출됩니다.
         - ack() 로 Slack 에 즉시 응답 (3초 이내 필수)
         - 상태 파일 갱신 후 chat.update 로 메시지 동기화
+
+        [다중 사용자 동기화 전략]
+        체크박스 action_id 는 chat.update 마다 동적으로 변경됩니다 (checklist_toggle_{ts_ms}).
+        따라서 핸들러는 re.compile(r"^checklist_toggle") 로 모든 버전을 수신합니다.
+
+        merge 전략:
+          1. ih.get_by_ts() — 파일 기반 권위있는 서버 상태 (conversations.history 불필요)
+          2. body["message"]["blocks"] 의 options(전체 옵션 목록) 에서
+             인터랙션된 block_id 의 가능한 모든 값 제거
+             (initial_options 는 stale 할 수 있으나 options 목록은 항상 고정)
+          3. body["state"]["values"] 의 새 선택값 추가
         """
         ack()   # Slack 에 즉시 응답
 
-        channel  = body["channel"]["id"]
-        ts       = body["message"]["ts"]
-        selected = body["actions"][0].get("selected_options", [])
-        checked  = [opt["value"] for opt in selected]
+        channel = body["channel"]["id"]
+        ts      = body["message"]["ts"]
+
+        # ── Step 1: ih.get_by_ts() 에서 권위있는 서버 최신 체크 상태 로드 ──────
+        # conversations.history (groups:history 권한 필요) 를 사용하지 않고
+        # interaction_handler 의 파일 기반 상태를 source of truth 로 사용합니다.
+        # → ih 는 toggle 마다 갱신되므로 항상 최신 서버 상태를 반영합니다.
+        existing_state = ih.get_by_ts(channel, ts)
+        if existing_state:
+            current_checked: set = set(existing_state.get("checked", []))
+            logger.debug(f"[toggle] ih 상태 로드: checked={len(current_checked)}개")
+        else:
+            # ih 에 없을 때: body["message"]["blocks"] 의 initial_options 에서 초기값 복원
+            current_checked = set()
+            for block in body.get("message", {}).get("blocks", []):
+                if block.get("type") == "actions":
+                    for elem in block.get("elements", []):
+                        if elem.get("type") == "checkboxes":
+                            for opt in elem.get("initial_options", []):
+                                current_checked.add(opt["value"])
+            logger.debug(f"[toggle] ih 상태 없음 → body fallback: checked={len(current_checked)}개")
+
+        # ── Step 2: 이번 인터랙션이 영향을 준 block_id 목록 ──────────────────
+        interacted_block_ids = set(body.get("state", {}).get("values", {}).keys())
+
+        # ── Step 3: 인터랙션된 블록의 모든 가능한 옵션값을 제거 ──────────────
+        # initial_options 가 아닌 options(전체 옵션 목록) 사용
+        # → stale body 여도 옵션 목록 자체는 변하지 않으므로 안전합니다.
+        for block in body.get("message", {}).get("blocks", []):
+            if block.get("block_id", "") in interacted_block_ids:
+                for elem in block.get("elements", []):
+                    if elem.get("type") == "checkboxes":
+                        for opt in elem.get("options", []):
+                            current_checked.discard(opt["value"])
+
+        # ── Step 4: state.values 의 현재 선택 상태를 추가 ────────────────────
+        for block_state in body.get("state", {}).get("values", {}).values():
+            for action_state in block_state.values():
+                if action_state.get("type") == "checkboxes":
+                    for opt in action_state.get("selected_options", []):
+                        current_checked.add(opt["value"])
+
+        checked: list = list(current_checked)
 
         logger.info(
             f"체크리스트 토글 | 채널: {channel} | ts: {ts} | "
@@ -567,8 +623,6 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         )
 
         # 상태 갱신 (상태 파일 우선 → 없으면 body + config.json 으로 재구성)
-        # Railway(스케줄러)와 로컬 PC(커맨드 핸들러)가 분리된 환경에서는
-        # 로컬에 state.json 이 없으므로 fallback 재구성이 필요합니다.
         state = ih.update_checked(channel, ts, checked)
         if state is None:
             logger.info("상태 파일 미등록 → Slack body 에서 상태 재구성 시도")
@@ -577,8 +631,29 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 logger.warning("체크리스트 상태를 재구성할 수 없습니다.")
                 return
 
+        # ── 전일 누락 섹션 추출 (block_id="missed_divider" sentinel 기준) ──────
+        # body["message"]["blocks"] 에서 추출합니다.
+        # 누락 섹션의 options 목록은 변하지 않으므로 stale body 여도 안전합니다.
+        # (initial_options 는 _rebuild_missed_blocks_checked 에서 재계산됩니다)
+        body_blocks     = body.get("message", {}).get("blocks", [])
+        missed_section: list = []
+        in_missed       = False
+        for _blk in body_blocks:
+            bid = _blk.get("block_id", "")
+            if bid == "missed_divider":
+                in_missed = True
+            if in_missed:
+                if not bid.startswith("missed_"):
+                    break          # footer 구분자 — 수집 종료
+                missed_section.append(_blk)
+
         # 메시지 업데이트
-        slack_sender.update_interactive_checklist(channel, ts, state)
+        slack_sender.update_interactive_checklist(
+            channel,
+            ts,
+            state,
+            missed_section = missed_section if missed_section else None,
+        )
 
     @app.command("/wiki")
     def handle_wiki_command(ack, respond, command):
