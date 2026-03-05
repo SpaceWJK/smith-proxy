@@ -565,20 +565,36 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         channel = body["channel"]["id"]
         ts      = body["message"]["ts"]
 
-        # ── 다중 사용자 동기화: 현재 메시지 상태와 이번 인터랙션을 merge ──────────
+        # ── 다중 사용자 동기화: conversations.history 로 서버 최신 상태 조회 ──────
         #
-        # [문제] body["state"]["values"] 는 현재 사용자가 이번 세션에서
-        #        직접 조작한 block 의 상태만 포함합니다.
-        #        → 다른 사람이 체크한 항목은 state.values 에 없으므로
-        #          그대로 덮어쓰면 다른 사람의 체크가 사라집니다.
+        # [기존 문제] body["message"]["blocks"] 는 사용자가 클릭할 당시
+        #   자신의 클라이언트에 렌더된 메시지 상태입니다.
+        #   다른 사람이 먼저 체크했더라도 본인 화면이 아직 갱신되지 않았다면
+        #   구버전 blocks 가 전달되어 → merge 시 이미 체크된 항목이 사라집니다.
         #
-        # [해결] body["message"]["blocks"] 의 initial_options 를 "서버 진실"로 삼아
-        #        전체 체크 상태를 읽고, 이번 인터랙션이 영향을 준 block 만 교체합니다.
-        #        → 다른 사람의 체크 상태가 보존됩니다.
+        # [해결] conversations.history 로 서버의 진짜 최신 블록을 직접 조회합니다.
+        #   이를 "서버 진실(source of truth)"로 삼아 merge 하면
+        #   사용자 클라이언트의 렌더 시점에 무관하게 일관된 상태가 유지됩니다.
 
-        # Step 1: 현재 메시지의 initial_options → 서버에 저장된 전체 체크 상태
+        live_blocks: list = []
+        try:
+            hist = slack_sender.client.conversations_history(
+                channel   = channel,
+                latest    = ts,
+                oldest    = ts,
+                inclusive = True,
+                limit     = 1,
+            )
+            live_blocks = hist.get("messages", [{}])[0].get("blocks", [])
+            logger.debug(f"[toggle] conversations.history 조회 성공: {len(live_blocks)}개 블록")
+        except Exception as e:
+            # conversations.history 실패 시 body 의 blocks 로 fallback
+            logger.warning(f"[toggle] conversations.history 조회 실패, body 사용: {e}")
+            live_blocks = body.get("message", {}).get("blocks", [])
+
+        # Step 1: 서버 최신 initial_options → 현재 전체 체크 상태
         current_checked: set = set()
-        for block in body.get("message", {}).get("blocks", []):
+        for block in live_blocks:
             if block.get("type") == "actions":
                 for elem in block.get("elements", []):
                     if elem.get("type") == "checkboxes":
@@ -589,7 +605,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         interacted_block_ids = set(body.get("state", {}).get("values", {}).keys())
 
         # Step 3: 인터랙션된 블록의 이전 initial_options 를 제거 (새 값으로 교체 예정)
-        for block in body.get("message", {}).get("blocks", []):
+        for block in live_blocks:
             if block.get("block_id", "") in interacted_block_ids:
                 for elem in block.get("elements", []):
                     if elem.get("type") == "checkboxes":
@@ -622,12 +638,12 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 return
 
         # ── 전일 누락 섹션 추출 (block_id="missed_divider" sentinel 기준) ──────
+        # live_blocks (서버 최신) 기준으로 추출합니다.
         # 누락 섹션 블록은 모두 "missed_" 로 시작하는 block_id 를 가집니다.
         # footer(구분자 + context 타임스탬프)에는 block_id 가 없으므로 자연히 경계가 구분됩니다.
-        msg_blocks      = body.get("message", {}).get("blocks", [])
         missed_section: list = []
         in_missed       = False
-        for _blk in msg_blocks:
+        for _blk in live_blocks:
             bid = _blk.get("block_id", "")
             if bid == "missed_divider":
                 in_missed = True
