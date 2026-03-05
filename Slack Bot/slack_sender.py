@@ -9,7 +9,9 @@ slack_sender.py - Slack Web API 래퍼
   users:read           - 사용자 검색 (--find-user 용)
 """
 
+import json
 import logging
+import os
 from datetime import datetime
 
 from slack_sdk import WebClient
@@ -22,6 +24,16 @@ class SlackSender:
 
     def __init__(self, token: str):
         self.client = WebClient(token=token)
+
+        # config.json 의 user_map 로드 (UID → 표시 이름)
+        self.user_map: dict = {}
+        try:
+            _base     = os.path.dirname(os.path.abspath(__file__))
+            _cfg_path = os.path.join(_base, "config.json")
+            with open(_cfg_path, "r", encoding="utf-8") as _f:
+                self.user_map = json.load(_f).get("user_map", {})
+        except Exception as e:
+            logger.warning(f"user_map 로드 실패 (무시): {e}")
 
     # ──────────────────────────────────────────────────────────
     # Block Kit 빌더 — 일반 (text / checklist)
@@ -98,7 +110,12 @@ class SlackSender:
 
             mention_str = ""
             if mentions:
-                mention_str = "  담당: " + " ".join(f"<@{uid}>" for uid in mentions)
+                # user_map 에 등록된 이름만 사용 (평문, @ 없음)
+                # 이름이 없는 UID 는 건너뜀 — 실제 멘션은 📌 담당자 블록에서 처리
+                names = [self.user_map.get(uid, "") for uid in mentions]
+                names = [n for n in names if n]   # 빈 문자열 제거
+                if names:
+                    mention_str = "  담당: " + ", ".join(names)
 
             option = {
                 "text":  {"type": "mrkdwn", "text": f"*{text}*{mention_str}"},
@@ -120,7 +137,18 @@ class SlackSender:
             f"⏰ 발송: {sent_at or now.strftime('%Y-%m-%d %H:%M')}  |  자동 알림"
         )
 
-        return [
+        # ── 담당자 멘션 수집 ──────────────────────────────────────────────────
+        # 체크박스 옵션 텍스트 내 <@U...> 는 시각적 표시만 되고 Slack 알림이 발송되지 않음.
+        # section/context 블록에 포함된 <@U...> 만 실제 멘션 알림을 트리거함.
+        unique_mentions: list = []
+        seen_uids: set        = set()
+        for item in items:
+            for uid in item.get("mentions", []):
+                if uid not in seen_uids:
+                    seen_uids.add(uid)
+                    unique_mentions.append(f"<@{uid}>")
+
+        blocks: list = [
             {
                 "type": "header",
                 "text": {"type": "plain_text", "text": title, "emoji": True},
@@ -130,6 +158,20 @@ class SlackSender:
                 "type": "section",
                 "text": {"type": "mrkdwn", "text": status_text},
             },
+        ]
+
+        # 담당자 멘션 블록 — 이 블록의 <@U...> 가 실제 Slack 알림을 발송합니다.
+        # chat.update 시에는 알림이 재발송되지 않으므로 중복 알림 걱정 불필요.
+        if unique_mentions:
+            blocks.append({
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": "📌 담당자  " + "  ".join(unique_mentions),
+                }],
+            })
+
+        blocks.extend([
             {"type": "divider"},
             {
                 "type":     "actions",
@@ -141,7 +183,9 @@ class SlackSender:
                 "type":     "context",
                 "elements": [{"type": "mrkdwn", "text": context_text}],
             },
-        ]
+        ])
+
+        return blocks
 
     # ──────────────────────────────────────────────────────────
     # 메시지 전송 — 일반

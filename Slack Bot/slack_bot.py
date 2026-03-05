@@ -17,6 +17,7 @@ slack_bot.py - Slack 알림 봇 메인 진입점
 import os
 import re
 import sys
+import atexit
 import logging
 import argparse
 
@@ -133,15 +134,18 @@ def _wiki_ask_claude(page_title: str, page_text: str, page_url: str, question: s
     prompt = (
         f"다음은 Confluence 페이지 '{page_title}'의 내용입니다:\n\n"
         f"{content}{trunc_note}\n\n"
-        f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n"
-        f"페이지에 관련 내용이 없으면 '해당 내용을 페이지에서 찾을 수 없습니다'라고 답하세요.\n\n"
+        f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n\n"
+        f"[답변 지침]\n"
+        f"1. 질문에 특정 연도·기간이 명시된 경우, 해당 범위의 데이터만 사용하세요. 다른 연도 데이터와 혼용하지 마세요.\n"
+        f"2. 페이지에 합계가 명시되어 있으면 그 값을 인용하고, 없으면 해당 범위의 항목을 직접 세어 답하세요. '[검색 관련 섹션]'이 있으면 우선 참고하세요.\n"
+        f"3. 페이지에 관련 내용이 없으면 '해당 내용을 페이지에서 찾을 수 없습니다'라고 답하세요.\n\n"
         f"질문: {question}"
     )
 
     try:
         client_ai = anthropic.Anthropic(api_key=api_key)
         message   = client_ai.messages.create(
-            model      = "claude-3-5-haiku-20241022",  # 빠르고 저렴한 모델
+            model      = "claude-haiku-4-5-20251001",  # 빠르고 저렴한 모델
             max_tokens = 1024,
             messages   = [{"role": "user", "content": prompt}],
         )
@@ -370,6 +374,166 @@ def _calendar_add_event(client, text: str, respond):
     )
 
 
+# ── 단일 인스턴스 보장 ────────────────────────────────────────
+
+def _ensure_single_instance(pid_file: str = "slack_bot.pid"):
+    """
+    PID 파일을 이용해 봇이 하나만 실행되도록 보장합니다.
+    - 시작 시: 기존 PID 파일의 프로세스가 살아있으면 종료
+    - 종료 시: atexit 으로 PID 파일 자동 삭제
+    """
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as f:
+                old_pid = int(f.read().strip())
+            os.kill(old_pid, 0)   # signal 0 → 프로세스 존재 여부 확인
+            logger.error(
+                f"이미 실행 중인 봇 프로세스가 있습니다 (PID: {old_pid}).\n"
+                f"중복 실행을 원한다면 '{pid_file}' 파일을 삭제 후 재시작하세요."
+            )
+            sys.exit(1)
+        except (ProcessLookupError, OSError):
+            pass   # 프로세스 없음 → 파일만 남은 것, 덮어씀
+        except ValueError:
+            pass   # 파일 내용 오류 → 무시
+
+    with open(pid_file, "w") as f:
+        f.write(str(os.getpid()))
+
+    def _cleanup():
+        try:
+            os.remove(pid_file)
+        except Exception:
+            pass
+
+    atexit.register(_cleanup)
+    logger.info(f"[PID] 단일 인스턴스 등록: PID {os.getpid()} → {pid_file}")
+
+
+# ── 체크리스트 상태 재구성 헬퍼 ───────────────────────────────
+
+def _normalize_title(t: str) -> str:
+    """
+    Slack :emoji: 코드와 실제 이모지 문자를 모두 제거한 비교용 제목 반환.
+
+    Slack 은 chat.postMessage 에 보낸 실제 이모지 문자(📋)를
+    action payload 의 message.text 에서 :clipboard: 콜론 코드로 변환해 돌려준다.
+    config.json 의 title 은 실제 이모지 문자를 사용하므로 직접 비교하면 항상 불일치.
+    양쪽을 정규화한 뒤 비교해야 한다.
+
+    예)
+      "📋 일일 QA 체크리스트"          → "일일 QA 체크리스트"
+      ":clipboard: 일일 QA 체크리스트" → "일일 QA 체크리스트"
+    """
+    t = re.sub(r':[a-z_]+:', '', t)                # :colon: 이모지 코드 제거
+    t = re.sub(r'[^\w\s가-힣\[\]\(\)]', '', t)      # 실제 이모지·특수문자 제거
+    return t.strip()
+
+
+def _reconstruct_checklist_state(body: dict, checked: list):
+    """
+    상태 파일이 없을 때 Slack 메시지 body + config.json 으로 상태를 재구성합니다.
+
+    Railway(스케줄러) ↔ 로컬 PC(커맨드 핸들러)가 분리된 환경에서
+    data/checklist_state.json 이 두 환경에 공유되지 않아 발생하는
+    '체크 시 진행률 미반영' 문제를 해결합니다.
+
+    Returns
+    -------
+    dict  : {"title": ..., "items": [...], "checked": [...], "sent_at": ...}
+    None  : 재구성 실패
+    """
+    import json as _json
+
+    msg        = body.get("message", {})
+    msg_blocks = msg.get("blocks", [])
+
+    # ── 1. 타이틀 ──────────────────────────────────────────────────────────
+    # 우선순위 A: body["message"]["text"]
+    #   → send_interactive_checklist() 에서 text=schedule["title"] 로 전송했으므로
+    #     Slack action payload 에서 항상 신뢰할 수 있는 값
+    # 우선순위 B: header 블록 (blocks 가 payload 에 포함됐을 때만 동작)
+    title = (msg.get("text") or "").strip()
+    if not title:
+        for block in msg_blocks:
+            if block.get("type") == "header":
+                title = block["text"]["text"]
+                break
+    if not title:
+        title = "📋 체크리스트"
+
+    logger.info(
+        f"[체크리스트 재구성] msg.text={msg.get('text')!r}  "
+        f"→ title={title!r}  blocks={len(msg_blocks)}개"
+    )
+
+    # ── 2. sent_at ─────────────────────────────────────────────────────────
+    # 마지막 context 블록에서 추출 ("발송: YYYY-MM-DD HH:MM  |  자동 알림")
+    # 멘션 context 블록도 있으므로 reversed() 로 마지막(타임스탬프) 블록을 찾음
+    sent_at = ""
+    for block in reversed(msg_blocks):
+        if block.get("type") == "context":
+            ctx = block.get("elements", [{}])[0].get("text", "")
+            m = re.search(r'발송:\s*(.+?)\s*\|', ctx)
+            if m:
+                sent_at = m.group(1).strip()
+            break
+
+    # ── 3. items: config.json 에서 title 로 스케줄 매칭 ────────────────────
+    items: list = []
+    try:
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = _json.load(f)
+        config_titles = [s.get("title") for s in cfg.get("schedules", [])]
+        logger.info(f"[체크리스트 재구성] config 타이틀 목록: {config_titles}")
+        title_norm = _normalize_title(title)
+        logger.info(f"[체크리스트 재구성] 정규화 타이틀: {title_norm!r}")
+        for sched in cfg.get("schedules", []):
+            if _normalize_title(sched.get("title", "")) == title_norm:
+                items = sched.get("items", [])
+                logger.info(f"[체크리스트 재구성] config 매칭 성공: {len(items)}개")
+                break
+    except Exception as e:
+        logger.warning(f"[체크리스트 재구성] config.json 로드 실패: {e}")
+
+    # ── 4. config 매칭 실패 시 → message blocks 의 checkboxes.options 에서 재구성
+    # (body["actions"][0]["options"] 는 Slack payload 에 포함되지 않음 — blocks 에서 찾아야 함)
+    if not items:
+        for block in msg_blocks:
+            if block.get("type") == "actions" and block.get("block_id") == "checklist_block":
+                for elem in block.get("elements", []):
+                    if elem.get("type") == "checkboxes":
+                        for opt in elem.get("options", []):
+                            val      = opt.get("value", "")
+                            opt_text = opt.get("text", {}).get("text", "")
+                            mentions = re.findall(r'<@([A-Z0-9]+)>', opt_text)
+                            clean    = re.sub(r'\s{2,}담당:.*$', '', opt_text).strip().strip('*')
+                            items.append({"value": val, "text": clean, "mentions": mentions})
+                        break
+                break
+        if items:
+            logger.info(f"[체크리스트 재구성] message blocks에서 재구성: {len(items)}개")
+
+    if not items:
+        logger.warning(
+            f"[체크리스트 재구성] items 구성 실패 — "
+            f"title={title!r}, msg.text={msg.get('text')!r}, blocks={len(msg_blocks)}개"
+        )
+        return None
+
+    logger.info(
+        f"[체크리스트 재구성] 완료  title={title!r}  "
+        f"items={len(items)}개  checked={len(checked)}/{len(items)}"
+    )
+    return {
+        "title":   title,
+        "items":   items,
+        "checked": checked,
+        "sent_at": sent_at,
+    }
+
+
 # ── Bolt App 생성 + 액션 핸들러 등록 ──────────────────────────
 
 def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
@@ -402,11 +566,16 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             f"체크된 항목: {checked}"
         )
 
-        # 상태 갱신
+        # 상태 갱신 (상태 파일 우선 → 없으면 body + config.json 으로 재구성)
+        # Railway(스케줄러)와 로컬 PC(커맨드 핸들러)가 분리된 환경에서는
+        # 로컬에 state.json 이 없으므로 fallback 재구성이 필요합니다.
         state = ih.update_checked(channel, ts, checked)
         if state is None:
-            logger.warning("체크리스트 상태를 찾을 수 없습니다. (state.json 미등록)")
-            return
+            logger.info("상태 파일 미등록 → Slack body 에서 상태 재구성 시도")
+            state = _reconstruct_checklist_state(body, checked)
+            if state is None:
+                logger.warning("체크리스트 상태를 재구성할 수 없습니다.")
+                return
 
         # 메시지 업데이트
         slack_sender.update_interactive_checklist(channel, ts, state)
@@ -430,6 +599,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         if parts[0].lower() == "search":
             query = parts[1].strip() if len(parts) == 2 else ""
             if query:
+                respond(text=f"🔍 `{query}` 검색 중...")
                 _wiki_search_pages(client, query, respond)
             else:
                 respond(text="❌ 검색어를 입력하세요. 예: `/wiki search QA 일정`")
@@ -441,14 +611,17 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             page_part = page_part.strip()
             question  = question.strip()
             if page_part and question:
+                respond(text=f"🔍 *{page_part}* 페이지 조회 중...")
                 page, err = _wiki_fetch_page(client, page_part)
                 if err:
                     respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
                     return
+                respond(text=f"🤖 *{page['title']}* — Claude 답변 생성 중...")
                 _wiki_ask_claude(page["title"], page["text"], page["url"], question, respond)
                 return
 
         # 나머지는 모두 경로/페이지 제목으로 처리 (내용 전체 표시)
+        respond(text=f"🔍 *{text}* 페이지 조회 중...")
         _wiki_get_page(client, text, respond)
 
     @app.command("/calendar")
@@ -566,6 +739,7 @@ def cmd_run(sender: SlackSender, bolt_app: App, app_token: str):
     - 스케줄러는 백그라운드 스레드에서 실행 (논블로킹)
     - Socket Mode 핸들러는 메인 스레드를 점유 (블로킹)
     """
+    _ensure_single_instance()
     # 스케줄러 백그라운드 시작
     scheduler = NotificationScheduler(sender, config_path="config.json")
     scheduler.start()   # 논블로킹
@@ -587,6 +761,7 @@ def cmd_scheduler_only(sender: SlackSender):
     공용 클라우드에서도 동작합니다.
     """
     import time
+    _ensure_single_instance("slack_bot_scheduler.pid")
 
     scheduler = NotificationScheduler(sender, config_path="config.json")
     scheduler.start()   # 논블로킹
@@ -606,6 +781,7 @@ def cmd_commands_only(sender: SlackSender, bolt_app: App, app_token: str):
     /wiki, /calendar 등 슬래시 커맨드를 사내망 PC에서 처리합니다.
     Railway 스케줄러와 충돌하지 않습니다.
     """
+    _ensure_single_instance()
     logger.info("💬 커맨드 전용 모드 실행 중 — 스케줄러 없음 (로컬 PC)")
     logger.info("🔌 Socket Mode 연결 중... (종료: Ctrl+C)")
     handler = SocketModeHandler(bolt_app, app_token)

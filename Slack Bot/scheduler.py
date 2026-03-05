@@ -249,6 +249,33 @@ class NotificationScheduler:
             f"{week_interval}주 간격 {s['day_of_week']} {s['time']} (시작: {start_dt.strftime('%Y-%m-%d')})",
         )
 
+    def _add_quarterly_first_monday(self, s: dict):
+        """
+        분기 첫째 월요일: 1월·4월·7월·10월 의 1~7일 사이 월요일
+        - CronTrigger: 매주 월요일 지정 시각에 실행
+        - job 내부: 현재 월이 분기 시작월(1/4/7/10) AND 날짜가 1~7일인지 확인 → 아니면 스킵
+        """
+        h, m = self._parse_hm(s["time"])
+
+        def job():
+            today = datetime.now(self.tz).date()
+            if today.month not in (1, 4, 7, 10) or not (1 <= today.day <= 7):
+                logger.info(
+                    f"  ⏭  스킵 (분기 첫째 월요일 아님): [{s.get('name')}] {today}"
+                )
+                return
+            quarter = {1: 1, 4: 2, 7: 3, 10: 4}[today.month]
+            logger.info(f"  🚀  실행 ({quarter}분기 첫째 월요일): [{s.get('name')}] {today}")
+            self._select_job_fn(s)()
+
+        job.__name__ = s.get("name", s["id"])
+        self._register_job(
+            s,
+            CronTrigger(day_of_week="mon", hour=h, minute=m, timezone=self.tz),
+            f"분기 첫째 월요일 {s['time']} (1·4·7·10월 1~7일)",
+            job_fn=job,
+        )
+
     def _add_specific(self, s: dict):
         """특정 날짜+시간 1회성"""
         run_dt = datetime.strptime(s["datetime"], "%Y-%m-%d %H:%M")
@@ -278,10 +305,11 @@ class NotificationScheduler:
             "daily":                self._add_daily,
             "weekly":               self._add_weekly,
             "monthly":              self._add_monthly,
-            "monthly_last_weekday": self._add_monthly_last_weekday,
-            "biweekly":             self._add_biweekly,
-            "nweekly":              self._add_nweekly,
-            "specific":             self._add_specific,
+            "monthly_last_weekday":    self._add_monthly_last_weekday,
+            "quarterly_first_monday":  self._add_quarterly_first_monday,
+            "biweekly":                self._add_biweekly,
+            "nweekly":                 self._add_nweekly,
+            "specific":                self._add_specific,
         }
 
         for s in self.config.get("schedules", []):

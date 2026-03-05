@@ -1,6 +1,13 @@
 {
   "timezone": "Asia/Seoul",
 
+  "user_map": {
+    "U07H17HB4MD": "이동현",
+    "U07HFLMSYKV": "류석호",
+    "U07H18AD1L7": "정예찬",
+    "U07HJ9JD31A": ""
+  },
+
   "schedules": [
 
     {
@@ -58,6 +65,26 @@
           "value": "item_7",
           "text": "[카제나] Dashboard DB 월간 최신화",
           "mentions": ["U07HFLMSYKV"]
+        }
+      ],
+      "bot_name": "퍼블리싱QA 알림봇",
+      "bot_emoji": ":white_check_mark:"
+    },
+
+    {
+      "id": "quarterly-qa-checklist",
+      "name": "분기 QA 체크리스트",
+      "enabled": true,
+      "type": "quarterly_first_monday",
+      "time": "10:00",
+      "channel": "C07PHCE4RCM",
+      "message_type": "interactive_checklist",
+      "title": "📋 분기 QA 체크리스트",
+      "items": [
+        {
+          "value": "item_0",
+          "text": "[호환성] 글로벌 호환성 트렌드 리포트",
+          "mentions": ["U07H18AD1L7"]
         }
       ],
       "bot_name": "퍼블리싱QA 알림봇",
