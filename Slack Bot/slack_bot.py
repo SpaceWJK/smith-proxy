@@ -68,12 +68,18 @@ def _wiki_help(respond):
     ))
 
 
-def _wiki_fetch_page(client, page_part: str):
+def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True):
     """
     '>' 구분자 유무에 따라 적합한 방식으로 Confluence 페이지를 조회합니다.
 
     - '>' 포함 → 조상 기반 CQL 검색 (get_page_by_path)
     - '>' 없음  → 제목 직접 검색   (get_page_by_title)
+
+    Parameters
+    ----------
+    fetch_full : bool
+        True  → get_page_by_id 추가 MCP 호출로 전체 본문 조회 (AI 질의용)
+        False → cql_search body.view 만 사용 (단순 표시용, MCP 호출 1회 절약)
 
     Returns: (page_dict | None, error_str | None)
     """
@@ -81,13 +87,14 @@ def _wiki_fetch_page(client, page_part: str):
         segments   = [s.strip() for s in page_part.split(">")]
         leaf_title = segments[-1]
         ancestors  = segments[:-1]
-        return client.get_page_by_path(ancestors, leaf_title)
-    return client.get_page_by_title(page_part)
+        return client.get_page_by_path(ancestors, leaf_title,
+                                       fetch_full=fetch_full)
+    return client.get_page_by_title(page_part, fetch_full=fetch_full)
 
 
 def _wiki_get_page(client, page_part: str, respond):
-    """경로/페이지 제목으로 내용 조회 후 Slack 에 표시"""
-    page, err = _wiki_fetch_page(client, page_part)
+    """경로/페이지 제목으로 내용 조회 후 Slack 에 표시 (fetch_full=False: 표시 전용)"""
+    page, err = _wiki_fetch_page(client, page_part, fetch_full=False)
     if err:
         respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
         return

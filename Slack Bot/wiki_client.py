@@ -308,10 +308,17 @@ class ConfluenceCalendarClient:
 
     # ── 페이지 조회 ───────────────────────────────────────────────────────
 
-    def get_page_by_title(self, title: str, space_key: str = None):
+    def get_page_by_title(self, title: str, space_key: str = None,
+                          fetch_full: bool = True):
         """
         페이지 제목으로 Confluence 페이지 조회.
         (get_page_by_title MCP 도구는 서버 버그로 cql_search로 대체)
+
+        Parameters
+        ----------
+        fetch_full : bool
+            True  → get_page_by_id 로 전체 본문 조회 (AI 질의용)
+            False → cql_search 의 body.view excerpt 만 사용 (표시 전용, 빠름)
 
         Returns
         -------
@@ -322,7 +329,7 @@ class ConfluenceCalendarClient:
         # title ~ "..." : 부분 일치 (제목에 키워드 포함)
         cql = (f'title ~ "{title}" AND space = "{sk}"'
                f' AND type=page ORDER BY lastmodified DESC')
-        logger.info(f"[wiki] 제목 검색 CQL: {cql}")
+        logger.info(f"[wiki] 제목 검색 CQL: {cql} (fetch_full={fetch_full})")
 
         raw, err = self._mcp.call_tool(
             "cql_search",
@@ -334,19 +341,29 @@ class ConfluenceCalendarClient:
         results = self._parse_cql_results(raw)
         if not results:
             return None, f"'{title}' 페이지를 찾을 수 없습니다. (공간: {sk})"
-        return self._cql_result_to_page_dict(results[0], title), None
+        return self._cql_result_to_page_dict(results[0], title,
+                                             fetch_full=fetch_full), None
 
     def get_page_by_path(self, ancestors: list, leaf_title: str,
-                         space_key: str = None):
+                         space_key: str = None, fetch_full: bool = True):
         """
         조상 페이지 경로 포함 검색.
         ancestor 조건 CQL이 파싱 실패하면 제목만으로 재시도합니다.
+
+        Parameters
+        ----------
+        fetch_full : bool
+            True  → get_page_by_id 로 전체 본문 조회 (AI 질의용)
+            False → cql_search 의 body.view excerpt 만 사용 (표시 전용, 빠름)
 
         Returns
         -------
         (page_dict | None, error_str | None)
         """
         sk = space_key or self._space_key
+
+        # fetch_full=False 면 body.view 를 cql_search 에서 함께 가져옴
+        expand_param = {} if fetch_full else {"expand": "body.view"}
 
         # 1차: ancestor 조건 포함 CQL
         ancestor_conditions = " AND ".join(
@@ -357,15 +374,19 @@ class ConfluenceCalendarClient:
             cql += f" AND {ancestor_conditions}"
         cql += " ORDER BY lastmodified DESC"
 
-        logger.info(f"[wiki] 경로 검색 CQL(1차): {cql}")
-        raw, err = self._mcp.call_tool("cql_search", {"cql": cql, "limit": 5})
+        logger.info(f"[wiki] 경로 검색 CQL(1차): {cql} (fetch_full={fetch_full})")
+        raw, err = self._mcp.call_tool(
+            "cql_search", {"cql": cql, "limit": 5, **expand_param}
+        )
 
         # CQL 파싱 오류 시 2차: 제목만으로 재시도
         if err and "cannot be parsed" in err.lower():
             fallback_cql = (f'title ~ "{leaf_title}" AND space = "{sk}"'
                             f' AND type=page ORDER BY lastmodified DESC')
             logger.info(f"[wiki] 경로 검색 CQL(2차 폴백): {fallback_cql}")
-            raw, err = self._mcp.call_tool("cql_search", {"cql": fallback_cql, "limit": 5})
+            raw, err = self._mcp.call_tool(
+                "cql_search", {"cql": fallback_cql, "limit": 5, **expand_param}
+            )
 
         if err:
             return None, err
@@ -375,7 +396,8 @@ class ConfluenceCalendarClient:
             path_str = " > ".join(list(ancestors) + [leaf_title])
             return None, f"'{path_str}' 경로의 페이지를 찾을 수 없습니다. (공간: {sk})"
 
-        return self._cql_result_to_page_dict(results[0], leaf_title), None
+        return self._cql_result_to_page_dict(results[0], leaf_title,
+                                             fetch_full=fetch_full), None
 
     def search_pages(self, query: str, space_key: str = None):
         """
@@ -465,9 +487,16 @@ class ConfluenceCalendarClient:
             return data
         return []
 
-    def _cql_result_to_page_dict(self, result: dict, fallback_title: str) -> dict:
+    def _cql_result_to_page_dict(self, result: dict, fallback_title: str,
+                                 fetch_full: bool = True) -> dict:
         """
         cql_search 결과의 단일 항목 → 표준 page_dict 변환.
+
+        Parameters
+        ----------
+        fetch_full : bool
+            True  → get_page_by_id 로 전체 본문 추가 조회 (AI 질의에 필요)
+            False → cql_search 응답의 body.view / excerpt 만 사용 (빠른 표시 전용)
 
         cql_search 응답 구조:
           {
@@ -499,9 +528,10 @@ class ConfluenceCalendarClient:
             re.sub(r'@@@\w+@@@', '', excerpt_raw)
         ).strip()
 
-        # 전체 본문 조회: page_id 있으면 get_page_by_id 호출 (cql_search excerpt는 미리보기뿐)
+        # 전체 본문 조회: fetch_full=True 이고 page_id 있을 때만 get_page_by_id 호출
+        # fetch_full=False (표시 전용) → MCP 추가 호출 없이 cql 응답 body.view 사용
         text = ""
-        if page_id:
+        if fetch_full and page_id:
             full_text, ferr = self.get_page_content(page_id)
             if full_text:
                 # excerpt가 있으면 관련 섹션 힌트로 전체 내용 앞에 포함
@@ -517,7 +547,7 @@ class ConfluenceCalendarClient:
             else:
                 logger.warning(f"[wiki] 전체 본문 조회 실패, excerpt 사용: {ferr}")
 
-        # 전체 본문 조회 실패 시 excerpt 또는 body.view 사용
+        # fetch_full=False 이거나 전체 본문 조회 실패 시 → body.view 또는 excerpt 사용
         if not text:
             body_val  = content.get("body", {})
             html_body = (body_val.get("view", {}).get("value", "")
@@ -527,5 +557,5 @@ class ConfluenceCalendarClient:
                     else (excerpt_text or _html.unescape(excerpt_raw)))
 
         logger.debug(f"[wiki] 페이지 파싱: id={page_id}, title={page_title}, "
-                     f"text_len={len(str(text))}")
+                     f"fetch_full={fetch_full}, text_len={len(str(text))}")
         return {"id": page_id, "title": page_title, "url": page_url, "text": text}
