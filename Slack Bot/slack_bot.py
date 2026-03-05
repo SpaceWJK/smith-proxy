@@ -558,14 +558,45 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         channel = body["channel"]["id"]
         ts      = body["message"]["ts"]
 
-        # 여러 actions 블록(chk_grp_*, chk_solo_*)에 걸쳐 체크된 값을
-        # body["state"]["values"] 에서 한번에 수집합니다.
-        checked: list = []
+        # ── 다중 사용자 동기화: 현재 메시지 상태와 이번 인터랙션을 merge ──────────
+        #
+        # [문제] body["state"]["values"] 는 현재 사용자가 이번 세션에서
+        #        직접 조작한 block 의 상태만 포함합니다.
+        #        → 다른 사람이 체크한 항목은 state.values 에 없으므로
+        #          그대로 덮어쓰면 다른 사람의 체크가 사라집니다.
+        #
+        # [해결] body["message"]["blocks"] 의 initial_options 를 "서버 진실"로 삼아
+        #        전체 체크 상태를 읽고, 이번 인터랙션이 영향을 준 block 만 교체합니다.
+        #        → 다른 사람의 체크 상태가 보존됩니다.
+
+        # Step 1: 현재 메시지의 initial_options → 서버에 저장된 전체 체크 상태
+        current_checked: set = set()
+        for block in body.get("message", {}).get("blocks", []):
+            if block.get("type") == "actions":
+                for elem in block.get("elements", []):
+                    if elem.get("type") == "checkboxes":
+                        for opt in elem.get("initial_options", []):
+                            current_checked.add(opt["value"])
+
+        # Step 2: 이번 인터랙션이 영향을 준 block_id 목록
+        interacted_block_ids = set(body.get("state", {}).get("values", {}).keys())
+
+        # Step 3: 인터랙션된 블록의 이전 initial_options 를 제거 (새 값으로 교체 예정)
+        for block in body.get("message", {}).get("blocks", []):
+            if block.get("block_id", "") in interacted_block_ids:
+                for elem in block.get("elements", []):
+                    if elem.get("type") == "checkboxes":
+                        for opt in elem.get("initial_options", []):
+                            current_checked.discard(opt["value"])
+
+        # Step 4: state.values 의 현재 선택 상태를 추가 (이번 인터랙션 블록 최신값)
         for block_state in body.get("state", {}).get("values", {}).values():
             for action_state in block_state.values():
                 if action_state.get("type") == "checkboxes":
                     for opt in action_state.get("selected_options", []):
-                        checked.append(opt["value"])
+                        current_checked.add(opt["value"])
+
+        checked: list = list(current_checked)
 
         logger.info(
             f"체크리스트 토글 | 채널: {channel} | ts: {ts} | "
