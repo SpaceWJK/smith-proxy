@@ -595,25 +595,36 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                                 current_checked.add(opt["value"])
             logger.debug(f"[toggle] ih 상태 없음 → body fallback: checked={len(current_checked)}개")
 
-        # ── Step 2: 이번 인터랙션이 영향을 준 block_id 목록 ──────────────────
-        interacted_block_ids = set(body.get("state", {}).get("values", {}).keys())
+        # ── Step 2: body["actions"] 의 실제 인터랙션 delta 만 적용 ──────────────
+        #
+        # [왜 body["state"]["values"] 를 쓰지 않는가]
+        # state.values 는 메시지 내 모든 체크박스 블록의 상태를 담고 있습니다.
+        # 하지만 이 값은 B의 "클라이언트 렌더 상태"에 기반하므로 stale 할 수 있습니다.
+        #   → A가 5개 체크 후 B가 즉시 클릭하면, B 화면이 아직 갱신 안 된 경우
+        #     state.values 의 다른 블록들은 모두 빈 selected_options 로 전달됨
+        #   → Step 3+4 에서 ih 의 A의 5개가 모두 제거되고 B의 1개만 남는 버그 발생
+        #
+        # [body["actions"] 를 사용하는 이유]
+        # actions 는 이번 인터랙션에서 실제로 변경된 블록만 포함하며 신뢰할 수 있습니다.
+        # 각 action 의 selected_options 는 해당 블록의 최신 완전한 선택 상태입니다.
+        #   → ih state (A의 5개) + actions delta (B가 클릭한 블록만 교체) = 정확한 merge
+        for action in body.get("actions", []):
+            if action.get("type") != "checkboxes":
+                continue
 
-        # ── Step 3: 인터랙션된 블록의 모든 가능한 옵션값을 제거 ──────────────
-        # initial_options 가 아닌 options(전체 옵션 목록) 사용
-        # → stale body 여도 옵션 목록 자체는 변하지 않으므로 안전합니다.
-        for block in body.get("message", {}).get("blocks", []):
-            if block.get("block_id", "") in interacted_block_ids:
-                for elem in block.get("elements", []):
-                    if elem.get("type") == "checkboxes":
-                        for opt in elem.get("options", []):
-                            current_checked.discard(opt["value"])
+            action_block_id = action.get("block_id", "")
 
-        # ── Step 4: state.values 의 현재 선택 상태를 추가 ────────────────────
-        for block_state in body.get("state", {}).get("values", {}).values():
-            for action_state in block_state.values():
-                if action_state.get("type") == "checkboxes":
-                    for opt in action_state.get("selected_options", []):
-                        current_checked.add(opt["value"])
+            # 해당 블록의 모든 가능한 옵션값 제거 (이 블록 전체를 새 값으로 교체)
+            for block in body.get("message", {}).get("blocks", []):
+                if block.get("block_id", "") == action_block_id:
+                    for elem in block.get("elements", []):
+                        if elem.get("type") == "checkboxes":
+                            for opt in elem.get("options", []):
+                                current_checked.discard(opt["value"])
+
+            # 해당 블록의 최신 선택 상태 추가
+            for opt in action.get("selected_options", []):
+                current_checked.add(opt["value"])
 
         checked: list = list(current_checked)
 
