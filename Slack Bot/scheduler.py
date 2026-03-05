@@ -99,12 +99,32 @@ class NotificationScheduler:
     def _make_interactive_job(self, s: dict):
         """인터랙티브 체크리스트 job 생성 (전송 후 상태 등록)"""
         def job():
+            import interaction_handler as ih
+            import missed_tracker as mt
+
+            # ── 전일 누락 항목 조회 (check_missed: true 인 스케줄만) ──────────
+            missed_items = None
+            if s.get("check_missed"):
+                try:
+                    missed_items = mt.get_missed_items(self.sender.client)
+                    if missed_items:
+                        total_missed = sum(len(g["items"]) for g in missed_items)
+                        logger.info(
+                            f"[missed] 전일 누락 {total_missed}개 포함 예정: "
+                            f"{[g['label'] for g in missed_items]}"
+                        )
+                except Exception as e:
+                    logger.warning(f"[missed] 전일 누락 조회 실패 (무시): {e}")
+
+            # ── 체크리스트 전송 ────────────────────────────────────────────────
             ts = self.sender.send_interactive_checklist(
-                channel  = s["channel"],
-                schedule = s,
+                channel      = s["channel"],
+                schedule     = s,
+                missed_items = missed_items,
             )
+
             if ts:
-                import interaction_handler as ih
+                # 로컬 봇의 interaction_handler 에 상태 등록
                 ih.register(
                     channel     = s["channel"],
                     ts          = ts,
@@ -112,6 +132,21 @@ class NotificationScheduler:
                     title       = s.get("title", "📋 체크리스트"),
                     items       = s.get("items", []),
                 )
+                # 다음날 누락 체크를 위해 전송 로그 기록
+                if s.get("check_missed"):
+                    try:
+                        flat_items = mt.extract_flat_items(s.get("items", []))
+                        label      = mt.make_label(s)
+                        mt.log_sent(
+                            channel     = s["channel"],
+                            ts          = ts,
+                            schedule_id = s["id"],
+                            label       = label,
+                            items       = flat_items,
+                        )
+                    except Exception as e:
+                        logger.warning(f"[missed] 전송 로그 기록 실패 (무시): {e}")
+
         job.__name__ = s.get("name", s["id"])
         return job
 

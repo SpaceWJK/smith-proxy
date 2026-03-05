@@ -88,12 +88,110 @@ class SlackSender:
                     done += 1
         return total, done
 
+    def _build_missed_section_blocks(self, missed_items: list) -> list:
+        """
+        누락 체크리스트 섹션 블록 생성.
+
+        Parameters
+        ----------
+        missed_items : get_missed_items() 반환값
+            [{"label": "[일일] 03/04(화)", "items": [{"value":"missed_0_x","text":"...","mentions":[...]}]}, ...]
+
+        Returns: Slack Block Kit 블록 목록
+            - block_id="missed_divider"  → 구분자 (sentinel: 로컬 봇이 섹션 위치 식별용)
+            - block_id="missed_header"   → "⚠️ 전일 누락 항목" 헤더
+            - block_id=f"missed_grp_{i}" → 그룹 레이블 (스케줄별)
+            - block_id=f"missed_{i}"     → 해당 그룹의 체크박스
+        """
+        blocks = [
+            {"type": "divider", "block_id": "missed_divider"},
+            {
+                "type":     "section",
+                "block_id": "missed_header",
+                "text": {"type": "mrkdwn", "text": "⚠️ *전일 누락 항목*"},
+            },
+        ]
+
+        for i, group in enumerate(missed_items):
+            label      = group.get("label", "")
+            group_items = group.get("items", [])
+
+            # 그룹 레이블 (예: 📋 [일일] 03/04(화))
+            blocks.append({
+                "type":     "section",
+                "block_id": f"missed_grp_{i}",
+                "text": {"type": "mrkdwn", "text": f"*📋 {label}*"},
+            })
+
+            # 체크박스 옵션 빌드
+            options: list = []
+            for item in group_items:
+                names = [self.user_map.get(uid, "") for uid in item.get("mentions", [])]
+                names = [n for n in names if n]
+                mention_str = ("  담당: " + ", ".join(names)) if names else ""
+                options.append({
+                    "text":  {"type": "mrkdwn", "text": f"*{item['text']}*{mention_str}"},
+                    "value": item["value"],
+                })
+
+            if options:
+                blocks.append({
+                    "type":     "actions",
+                    "block_id": f"missed_{i}",
+                    "elements": [{
+                        "type":      "checkboxes",
+                        "action_id": "checklist_toggle",
+                        "options":   options,
+                        # initial_options 없음 (초기 전송 시 모두 미완료)
+                    }],
+                })
+
+        return blocks
+
+    def _rebuild_missed_blocks_checked(
+        self, raw_blocks: list, checked_set: set
+    ) -> list:
+        """
+        메시지에서 추출한 누락 섹션 raw blocks 의 initial_options 를
+        현재 checked_set 기준으로 갱신합니다.
+
+        Parameters
+        ----------
+        raw_blocks  : 현재 메시지에서 추출한 누락 섹션 블록 목록
+        checked_set : 현재 전체 체크 상태 (일반 + missed_ 값 모두 포함)
+
+        Returns: initial_options 갱신된 블록 목록
+        """
+        result: list = []
+        for block in raw_blocks:
+            if block.get("type") != "actions":
+                result.append(block)
+                continue
+
+            new_elements: list = []
+            for elem in block.get("elements", []):
+                if elem.get("type") != "checkboxes":
+                    new_elements.append(elem)
+                    continue
+
+                options = elem.get("options", [])
+                initial = [opt for opt in options if opt["value"] in checked_set]
+                # initial_options 키 제거 후 재설정
+                new_elem = {k: v for k, v in elem.items() if k != "initial_options"}
+                if initial:
+                    new_elem["initial_options"] = initial
+                new_elements.append(new_elem)
+
+            result.append({**block, "elements": new_elements})
+        return result
+
     def _build_interactive_blocks(
         self,
         title: str,
         items: list,
         checked_values: list,
         sent_at: str = "",
+        missed_section: list = None,
     ) -> list:
         """
         Slack Block Kit 인터랙티브 체크리스트 블록 구성
@@ -229,6 +327,10 @@ class SlackSender:
                     "elements": [checkbox_elem],
                 })
 
+        # ── 전일 누락 섹션 삽입 (있을 때만) ────────────────────────────────
+        if missed_section:
+            blocks.extend(missed_section)
+
         blocks.extend([
             {"type": "divider"},
             {
@@ -303,20 +405,35 @@ class SlackSender:
     # 메시지 전송 — 인터랙티브 체크리스트
     # ──────────────────────────────────────────────────────────
 
-    def send_interactive_checklist(self, channel: str, schedule: dict):
+    def send_interactive_checklist(
+        self, channel: str, schedule: dict, missed_items: list = None
+    ):
         """
         인터랙티브 체크리스트 메시지를 전송합니다.
+
+        Parameters
+        ----------
+        missed_items : 전일 누락 항목 목록 (missed_tracker.get_missed_items() 반환값)
+                       없거나 빈 리스트면 누락 섹션 미표시.
 
         Returns
         -------
         str  : 전송된 메시지의 ts (타임스탬프). 실패 시 None.
         """
         sent_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # 누락 섹션 블록 빌드 (있을 때만)
+        missed_section = (
+            self._build_missed_section_blocks(missed_items)
+            if missed_items else None
+        )
+
         blocks  = self._build_interactive_blocks(
             title          = schedule.get("title", "📋 체크리스트"),
             items          = schedule.get("items", []),
             checked_values = [],
             sent_at        = sent_at,
+            missed_section = missed_section,
         )
 
         kwargs = {
@@ -343,22 +460,32 @@ class SlackSender:
             return None
 
     def update_interactive_checklist(
-        self, channel: str, ts: str, state: dict
+        self, channel: str, ts: str, state: dict, missed_section: list = None
     ) -> bool:
         """
         체크 상태 변경 후 기존 메시지를 chat.update 로 갱신합니다.
 
         Parameters
         ----------
-        channel : Slack 채널 ID
-        ts      : 원본 메시지 타임스탬프
-        state   : interaction_handler.update_checked() 의 반환값
+        channel        : Slack 채널 ID
+        ts             : 원본 메시지 타임스탬프
+        state          : interaction_handler.update_checked() 의 반환값
+        missed_section : 현재 메시지에서 추출한 전일 누락 섹션 raw blocks
+                         (None 이면 누락 섹션 미포함)
         """
+        rebuilt_missed = (
+            self._rebuild_missed_blocks_checked(
+                missed_section, set(state.get("checked", []))
+            )
+            if missed_section else None
+        )
+
         blocks = self._build_interactive_blocks(
             title          = state.get("title", "📋 체크리스트"),
             items          = state["items"],
             checked_values = state.get("checked", []),
             sent_at        = state.get("sent_at", ""),
+            missed_section = rebuilt_missed,
         )
         try:
             self.client.chat_update(

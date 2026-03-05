@@ -621,8 +621,28 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 logger.warning("체크리스트 상태를 재구성할 수 없습니다.")
                 return
 
+        # ── 전일 누락 섹션 추출 (block_id="missed_divider" sentinel 기준) ──────
+        # 누락 섹션 블록은 모두 "missed_" 로 시작하는 block_id 를 가집니다.
+        # footer(구분자 + context 타임스탬프)에는 block_id 가 없으므로 자연히 경계가 구분됩니다.
+        msg_blocks      = body.get("message", {}).get("blocks", [])
+        missed_section: list = []
+        in_missed       = False
+        for _blk in msg_blocks:
+            bid = _blk.get("block_id", "")
+            if bid == "missed_divider":
+                in_missed = True
+            if in_missed:
+                if not bid.startswith("missed_"):
+                    break          # footer 구분자 — 수집 종료
+                missed_section.append(_blk)
+
         # 메시지 업데이트
-        slack_sender.update_interactive_checklist(channel, ts, state)
+        slack_sender.update_interactive_checklist(
+            channel,
+            ts,
+            state,
+            missed_section = missed_section if missed_section else None,
+        )
 
     @app.command("/wiki")
     def handle_wiki_command(ack, respond, command):
