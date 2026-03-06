@@ -437,13 +437,14 @@
       "type": "mission",
       "channel": "C0AKGRX2BKJ",
       "mission": {
-        "name": "미정",
-        "target_date": "",
+        "name": "토론 진행 기획",
+        "target_date": "2026-03-27",
         "channel_name": "Roundtable",
         "sub_tasks": [
-          "미정",
-          "미정",
-          "미정"
+          "주제 선정 기준",
+          "구성 및 진행 방식",
+          "이번 주제 선정",
+          "고도화 및 개선 방안(다음 미션) 논의"
         ]
       }
     },
