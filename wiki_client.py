@@ -433,6 +433,58 @@ class ConfluenceCalendarClient:
         return self._cql_result_to_page_dict(results[0], leaf_title,
                                              fetch_full=fetch_full), None
 
+    def get_latest_descendant(self, page_title: str, space_key: str = None,
+                              fetch_full: bool = True):
+        """
+        지정 페이지의 하위 페이지 중 가장 최근 생성된 페이지를 조회합니다.
+
+        '최근/최신' 키워드 쿼리 최적화 전략:
+          - 상위 페이지 전체 본문(예: 2026_MGQA) 대신 하위 페이지 1개만 가져와
+            토큰 소모를 최소화합니다.
+          - 상위 페이지 본문에는 월별 하위 링크가 가장 오래된 것부터 노출되어
+            '가장 최근' 질문에 1월 데이터를 답변하는 오류를 방지합니다.
+
+        Parameters
+        ----------
+        page_title : str
+            부모/조상 페이지 제목 (예: "2026_MGQA", "에픽세븐")
+        space_key  : str, optional
+            Confluence 공간 키 (미지정 시 _space_key 사용)
+        fetch_full : bool
+            True  → get_page_by_id 로 전체 본문 조회 (AI 질의용)
+            False → cql_search body.view 만 사용 (표시 전용, 빠름)
+
+        Returns
+        -------
+        (page_dict | None, error_str | None)
+          page_dict = {"id", "title", "url", "text"}
+        """
+        sk  = space_key or self._space_key
+        cql = (f'ancestor = "{page_title}" AND space = "{sk}"'
+               f' AND type=page ORDER BY created DESC')
+        logger.info(f"[wiki][최신하위] CQL: {cql}")
+
+        raw, err = self._mcp.call_tool(
+            "cql_search",
+            {"cql": cql, "limit": 1, "expand": "body.view"},
+        )
+        if err:
+            logger.error(f"[wiki][최신하위] MCP 오류: {err}")
+            return None, err
+
+        results = self._parse_cql_results(raw)
+        logger.info(f"[wiki][최신하위] 결과: {len(results)}건")
+
+        if not results:
+            return None, (
+                f"'{page_title}' 의 하위 페이지를 찾을 수 없습니다. (공간: {sk})\n"
+                f"💡 힌트: 페이지 제목을 정확히 입력했는지 확인하세요."
+            )
+
+        return self._cql_result_to_page_dict(
+            results[0], page_title, fetch_full=fetch_full
+        ), None
+
     def search_pages(self, query: str, space_key: str = None):
         """
         텍스트 검색으로 페이지 목록 반환.

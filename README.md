@@ -55,6 +55,7 @@ Slack Bot/
 ├── slack_sender.py         # Slack Web API 래퍼 (블록 빌더, 템플릿 치환)
 ├── interaction_handler.py  # 인터랙티브 체크리스트 상태 관리 (JSON 파일)
 ├── wiki_client.py          # Confluence Wiki MCP 클라이언트 (/wiki 커맨드)
+├── wiki_search_rules.json  # ★ wiki 페이지별 검색 전략 예외처리 규칙 (hot reload)
 ├── config.json             # ★ 스케줄 설정 파일 (여기를 수정)
 ├── data/
 │   └── checklist_state.json    # 체크 상태 저장 (Railway 자동 생성)
@@ -352,6 +353,38 @@ Confluence Wiki 페이지를 Slack에서 직접 조회합니다.
 - 공간 키: `QASGP`
 - Claude AI (`claude-haiku-4-5-20251001`) 로 내용 요약
 
+#### 페이지별 검색 전략 예외처리 (`wiki_search_rules.json`)
+
+`/wiki [페이지] | [질문]` 사용 시 페이지와 질문 조건에 따라 **다른 조회 전략**을 적용할 수 있습니다.
+봇 재시작 없이 파일 수정만으로 즉시 반영됩니다 (**hot reload**).
+
+| 항목 | 내용 |
+|------|------|
+| 파일 | `wiki_search_rules.json` |
+| 매칭 방식 | 페이지 제목(leaf) + 질문 키워드 조합으로 판단 |
+| 폴백 | 규칙 없는 경우 기본 동작(페이지 직접 조회) 유지 |
+
+**현재 등록된 예외 규칙:**
+
+| 규칙 ID | 페이지 | 트리거 키워드 | 적용 전략 | 이유 |
+|---------|--------|--------------|-----------|------|
+| `rule-001` | `2026_MGQA` | 최근, 최신, 가장 최근, 마지막 등 | `get_latest_descendant` | 상위 페이지 본문은 1월부터 순서대로 노출 → 최신 질문 시 잘못된 답변. 하위 페이지 최신 1개만 조회해 토큰 절약 + 정확도 향상 |
+
+**새 규칙 추가 방법 (`wiki_search_rules.json`):**
+```json
+{
+  "id": "rule-002",
+  "page_pattern": "페이지제목",
+  "match_type": "exact",
+  "trigger": { "keywords": ["키워드1", "키워드2"] },
+  "strategy": "get_latest_descendant",
+  "enabled": true,
+  "added_at": "YYYY-MM-DD"
+}
+```
+- `match_type`: `exact` / `contains` / `startswith` / `regex`
+- `strategy`: `get_latest_descendant` (현재 지원)
+
 ---
 
 ### 5. 미션 진행 현황 리마인더
@@ -571,5 +604,6 @@ ANTHROPIC_API_KEY=sk-ant-... # Claude API (wiki 요약)
 | 중복 실행 방지 | `slack_bot.pid` 파일로 단일 인스턴스 보장 |
 | 사용 모델 | `claude-haiku-4-5-20251001` |
 | config 수정 후 | 로컬 봇 재시작 + GitHub push 필요 |
+| **wiki 규칙 수정 후** | **봇 재시작 불필요 — 다음 /wiki 호출 시 자동 반영 (hot reload)** |
 | 비활성 스케줄 | `"enabled": false` → 완전 무시됨 |
 | 타임존 | `Asia/Seoul` (config.json 최상단) |

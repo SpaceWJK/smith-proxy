@@ -43,6 +43,113 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ── /wiki 검색 전략 예외처리 규칙 시스템 ──────────────────────────────────────
+# wiki_search_rules.json 에 페이지별 예외 규칙을 정의합니다.
+# 규칙이 없는 페이지 / 조건은 모두 기본 동작(페이지 직접 조회)을 사용합니다.
+
+_WIKI_RULES_PATH  = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "wiki_search_rules.json"
+)
+_wiki_rules_cache     = None   # None = 미로드, [] = 로드 완료(규칙 없음), [..] = 규칙 있음
+_wiki_rules_mtime     = 0.0    # 마지막으로 로드한 파일 mtime (변경 감지 hot reload용)
+
+
+def _load_wiki_search_rules() -> list:
+    """
+    wiki_search_rules.json 에서 활성화된 규칙 목록을 로드합니다.
+    파일이 변경된 경우 자동으로 다시 로드합니다 (hot reload).
+
+    Returns: 활성 규칙 list (파일 없거나 오류 시 [])
+    """
+    import json as _json
+    global _wiki_rules_cache, _wiki_rules_mtime
+
+    # ── hot reload: 파일 mtime 비교 ────────────────────────────────────────
+    try:
+        cur_mtime = os.path.getmtime(_WIKI_RULES_PATH)
+    except FileNotFoundError:
+        if _wiki_rules_cache is None:
+            logger.info("[wiki][규칙] wiki_search_rules.json 없음 — 기본 전략 사용")
+            _wiki_rules_cache = []
+        return _wiki_rules_cache
+
+    if _wiki_rules_cache is not None and cur_mtime == _wiki_rules_mtime:
+        return _wiki_rules_cache   # 변경 없음 → 캐시 반환
+
+    # ── 파일 로드 ─────────────────────────────────────────────────────────
+    try:
+        with open(_WIKI_RULES_PATH, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        _wiki_rules_cache = [r for r in data.get("rules", []) if r.get("enabled", True)]
+        _wiki_rules_mtime = cur_mtime
+        logger.info(
+            f"[wiki][규칙] {len(_wiki_rules_cache)}개 규칙 로드"
+            f"{' (변경 감지 — hot reload)' if _wiki_rules_mtime else ''}"
+        )
+    except Exception as e:
+        logger.warning(f"[wiki][규칙] 로드 실패: {e}")
+        _wiki_rules_cache = []
+
+    return _wiki_rules_cache
+
+
+def _find_matching_rule(page_part: str, question: str) -> "dict | None":
+    """
+    page_part + question 에 일치하는 예외처리 규칙을 반환합니다.
+    경로(A > B > C 또는 A / B / C) 형식이면 leaf 제목만 추출해 매칭합니다.
+    일치하는 규칙이 없으면 None 반환 → 기본 동작 사용.
+
+    Parameters
+    ----------
+    page_part : str   /wiki 명령의 페이지 부분 (예: "2026_MGQA", "A > B > 2026_MGQA")
+    question  : str   /wiki 명령의 질문 부분   (예: "에픽세븐 가장 최근 업무 내역 요약")
+    """
+    rules = _load_wiki_search_rules()
+    if not rules:
+        return None
+
+    # 경로 구분자가 있으면 leaf 제목만 추출 (규칙은 페이지 제목 단위로 정의됨)
+    if " / " in page_part:
+        leaf = page_part.split(" / ")[-1].strip()
+    elif ">" in page_part:
+        leaf = page_part.split(">")[-1].strip()
+    else:
+        leaf = page_part.strip()
+
+    q_lower = question.lower()
+
+    for rule in rules:
+        pattern    = rule.get("page_pattern", "")
+        match_type = rule.get("match_type", "exact")
+        keywords   = rule.get("trigger", {}).get("keywords", [])
+
+        # ── 페이지 패턴 매칭 ────────────────────────────────────────────
+        if match_type == "exact":
+            page_matched = (leaf == pattern)
+        elif match_type == "contains":
+            page_matched = (pattern in leaf)
+        elif match_type == "startswith":
+            page_matched = leaf.startswith(pattern)
+        elif match_type == "regex":
+            page_matched = bool(re.search(pattern, leaf))
+        else:
+            page_matched = False
+
+        if not page_matched:
+            continue
+
+        # ── 질문 키워드 매칭 ────────────────────────────────────────────
+        if any(kw in q_lower for kw in keywords):
+            logger.info(
+                f"[wiki][규칙매칭] id={rule.get('id')} "
+                f"page='{leaf}' strategy='{rule.get('strategy')}' "
+                f"(질문: '{question[:30]}...')"
+            )
+            return rule
+
+    return None
+
+
 # ── /wiki (페이지 조회) 헬퍼 ──────────────────────────────────────────────────
 
 def _wiki_help(respond):
@@ -711,8 +818,35 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             page_part = page_part.strip()
             question  = question.strip()
             if page_part and question:
-                respond(text=f"🔍 *{page_part}* 페이지 조회 중...")
-                page, err = _wiki_fetch_page(client, page_part)
+                # ── 페이지별 예외처리 규칙 확인 ──────────────────────────────
+                matched_rule = _find_matching_rule(page_part, question)
+                strategy = matched_rule.get("strategy") if matched_rule else None
+
+                if strategy == "get_latest_descendant":
+                    # leaf 제목 추출 (경로 형식 대응)
+                    if " / " in page_part:
+                        leaf = page_part.split(" / ")[-1].strip()
+                    elif ">" in page_part:
+                        leaf = page_part.split(">")[-1].strip()
+                    else:
+                        leaf = page_part.strip()
+
+                    respond(text=f"🔍 *{leaf}* — 최신 하위 페이지 조회 중...")
+                    page, err = client.get_latest_descendant(leaf)
+
+                    # 하위 페이지가 없으면 원래 페이지 직접 조회로 폴백
+                    if err:
+                        logger.warning(
+                            f"[wiki][규칙폴백] get_latest_descendant 실패 → "
+                            f"페이지 직접 조회 폴백: {err}"
+                        )
+                        respond(text=f"⚠️ 하위 페이지 조회 실패, 원래 페이지 조회로 전환 중...")
+                        page, err = _wiki_fetch_page(client, page_part)
+                else:
+                    # 기본 동작: 페이지 직접 조회
+                    respond(text=f"🔍 *{page_part}* 페이지 조회 중...")
+                    page, err = _wiki_fetch_page(client, page_part)
+
                 if err:
                     respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
                     return

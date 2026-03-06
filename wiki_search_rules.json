@@ -1,0 +1,44 @@
+{
+  "version": "1.0",
+  "description": "wiki 슬래시 커맨드 페이지별 검색 전략 예외처리 지식베이스.\n각 규칙은 특정 페이지 + 특정 질문 조건에서만 적용됩니다.\n기본 동작: _wiki_fetch_page (페이지 직접 조회)",
+  "rules": [
+    {
+      "id": "rule-001",
+      "page_pattern": "2026_MGQA",
+      "match_type": "exact",
+      "description": "연간 업무 내역 페이지 - '최근/최신' 키워드 질문 시 최신 하위 페이지 조회",
+      "trigger": {
+        "keywords": ["최근", "최신", "가장 최근", "가장 최신", "최근에", "마지막", "recent", "latest"]
+      },
+      "strategy": "get_latest_descendant",
+      "strategy_note": "상위 페이지(2026_MGQA) 본문에는 월별 하위 링크가 1월부터 순서대로 나열됨. '가장 최근 업무 내역' 질문 시 전체 본문 로드 대신 created DESC 정렬로 최신 하위 페이지 1개만 조회 → 토큰 절약 + 정확도 향상.",
+      "page_notes": {
+        "structure": "2026_MGQA (상위) → 2026_01_MGQA, 2026_02_MGQA, ... (월별 하위)",
+        "problem": "상위 페이지 본문에는 1월 데이터가 상단에 노출되어 '가장 최근' 질문에 잘못된 답변 반환",
+        "solution": "ancestor = '2026_MGQA' ORDER BY created DESC LIMIT 1 → 최신 하위 1개 조회"
+      },
+      "enabled": true,
+      "added_at": "2026-03-06"
+    }
+  ],
+  "match_types": {
+    "exact":      "page_part (또는 leaf 제목)과 page_pattern 이 완전히 일치할 때",
+    "contains":   "page_part 에 page_pattern 이 포함될 때",
+    "startswith": "page_part 가 page_pattern 으로 시작할 때",
+    "regex":      "page_part 에 page_pattern 정규식이 매칭될 때"
+  },
+  "strategies": {
+    "get_latest_descendant": "client.get_latest_descendant(leaf) 호출 — 하위 페이지 중 created DESC 최신 1개 조회",
+    "default":               "기본 동작: _wiki_fetch_page (페이지 직접 조회, 규칙 없을 때)"
+  },
+  "how_to_add_rule": [
+    "1. rules 배열에 새 항목 추가",
+    "2. id: 고유 ID (예: rule-002)",
+    "3. page_pattern: 매칭할 페이지 제목 (경로 마지막 segment 기준)",
+    "4. match_type: exact / contains / startswith / regex 중 선택",
+    "5. trigger.keywords: 이 페이지에서 해당 전략을 적용할 질문 키워드 목록",
+    "6. strategy: 적용할 전략 이름",
+    "7. enabled: true/false (false 시 규칙 비활성화)",
+    "8. 봇 재시작 없이도 다음 /wiki 호출 시 자동 반영 (hot reload 지원)"
+  ]
+}
