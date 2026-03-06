@@ -487,7 +487,8 @@ def _reconstruct_checklist_state(body: dict, checked: list):
             break
 
     # ── 3. items: config.json 에서 title 로 스케줄 매칭 ────────────────────
-    items: list = []
+    items: list      = []
+    schedule_type: str = ""
     try:
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
         with open(config_path, "r", encoding="utf-8") as f:
@@ -498,8 +499,9 @@ def _reconstruct_checklist_state(body: dict, checked: list):
         logger.info(f"[체크리스트 재구성] 정규화 타이틀: {title_norm!r}")
         for sched in cfg.get("schedules", []):
             if _normalize_title(sched.get("title", "")) == title_norm:
-                items = sched.get("items", [])
-                logger.info(f"[체크리스트 재구성] config 매칭 성공: {len(items)}개")
+                items         = sched.get("items", [])
+                schedule_type = sched.get("type", "")
+                logger.info(f"[체크리스트 재구성] config 매칭 성공: {len(items)}개 / type={schedule_type!r}")
                 break
     except Exception as e:
         logger.warning(f"[체크리스트 재구성] config.json 로드 실패: {e}")
@@ -533,10 +535,11 @@ def _reconstruct_checklist_state(body: dict, checked: list):
         f"items={len(items)}개  checked={len(checked)}개"
     )
     return {
-        "title":   title,
-        "items":   items,
-        "checked": checked,
-        "sent_at": sent_at,
+        "title":         title,
+        "items":         items,
+        "checked":       checked,
+        "sent_at":       sent_at,
+        "schedule_type": schedule_type,
     }
 
 
