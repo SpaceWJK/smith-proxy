@@ -356,6 +356,19 @@
       "message": "🎯 *중요 이벤트 알림*\n오늘 오전 10시에 중요한 일정이 있습니다!\n관련 자료를 미리 준비해주세요.",
       "bot_name": "이벤트 알림봇",
       "bot_emoji": ":bell:"
+    },
+
+    {
+      "id": "mission-ai-driven-qa",
+      "name": "미션 진행 현황 - AI-Driven QA Efficiency",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AJK510DN1",
+      "mission": {
+        "name": "Slack QA - Supporter 활용 가이드",
+        "target_date": "2026-03-27",
+        "channel_name": "AI-Driven QA Efficiency"
+      }
     }
 
   ]

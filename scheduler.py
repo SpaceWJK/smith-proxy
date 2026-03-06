@@ -9,6 +9,7 @@ scheduler.py - APScheduler 기반 알림 스케줄 관리
   biweekly             - 격주 특정 요일 HH:MM (start_date 기준)
   nweekly              - N주 간격 특정 요일 HH:MM (week_interval + start_date 기준)
   specific             - 특정 날짜+시간 1회
+  mission              - 미션 진행 현황 리마인더, 평일 09:00~09:30 랜덤 발송
 """
 
 import calendar
@@ -93,6 +94,13 @@ class NotificationScheduler:
         """일반 텍스트/정적 체크리스트 job 생성"""
         def job():
             self.sender.send(channel=s["channel"], schedule=s)
+        job.__name__ = s.get("name", s["id"])
+        return job
+
+    def _make_mission_job(self, s: dict):
+        """미션 진행 현황 리마인더 job 생성"""
+        def job():
+            self.sender.send_mission_reminder(s)
         job.__name__ = s.get("name", s["id"])
         return job
 
@@ -312,6 +320,26 @@ class NotificationScheduler:
             job_fn=job,
         )
 
+    def _add_mission(self, s: dict):
+        """
+        미션 진행 현황 리마인더: 평일 09:00~09:30 사이 랜덤 발송
+
+        APScheduler CronTrigger 의 jitter 파라미터를 사용합니다.
+        jitter=1800 → 09:00 기준 0~1800초(30분) 내 무작위 지연.
+        채널마다 별도 job 이므로 동시 발송 충돌 없이 자연스럽게 분산됩니다.
+        """
+        self._register_job(
+            s,
+            CronTrigger(
+                day_of_week="mon-fri",
+                hour=9, minute=0,
+                timezone=self.tz,
+                jitter=1800,           # 0~30분 랜덤 지연
+            ),
+            "평일 09:00~09:30 (랜덤)",
+            job_fn=self._make_mission_job(s),
+        )
+
     def _add_specific(self, s: dict):
         """특정 날짜+시간 1회성"""
         run_dt = datetime.strptime(s["datetime"], "%Y-%m-%d %H:%M")
@@ -338,14 +366,15 @@ class NotificationScheduler:
         logger.info("━" * 52)
 
         dispatch = {
-            "daily":                self._add_daily,
-            "weekly":               self._add_weekly,
-            "monthly":              self._add_monthly,
+            "daily":                   self._add_daily,
+            "weekly":                  self._add_weekly,
+            "monthly":                 self._add_monthly,
             "monthly_last_weekday":    self._add_monthly_last_weekday,
             "quarterly_first_monday":  self._add_quarterly_first_monday,
             "biweekly":                self._add_biweekly,
             "nweekly":                 self._add_nweekly,
             "specific":                self._add_specific,
+            "mission":                 self._add_mission,
         }
 
         for s in self.config.get("schedules", []):

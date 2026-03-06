@@ -12,8 +12,9 @@ slack_sender.py - Slack Web API 래퍼
 import json
 import logging
 import os
+import re
 import time
-from datetime import datetime
+from datetime import datetime, date as _date
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -542,6 +543,199 @@ class SlackSender:
         except SlackApiError as e:
             logger.error(f"❌ 메시지 업데이트 실패: {e.response['error']}")
             return False
+
+    # ──────────────────────────────────────────────────────────
+    # 미션 진행 현황 리마인더
+    # ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _make_progress_bar(progress: int, width: int = 10) -> str:
+        """진행율을 이모지 막대 그래프로 변환 (예: ██████░░░░ 60%)"""
+        filled = max(0, min(width, round(progress / 100 * width)))
+        return "█" * filled + "░" * (width - filled)
+
+    @staticmethod
+    def _build_mission_blocks(mission: dict, progress: int) -> list:
+        """
+        미션 진행 현황 블록 생성.
+
+        Parameters
+        ----------
+        mission  : config.json 의 mission 딕셔너리
+        progress : 현재 전체 진행율 (0~100)
+        """
+        name         = mission.get("name", "미션명")
+        target_str   = mission.get("target_date", "")
+        channel_name = mission.get("channel_name", "")
+
+        # D-day 계산
+        try:
+            target    = _date.fromisoformat(target_str)
+            today     = _date.today()
+            days_left = (target - today).days
+            target_display = f"{target.month:02d}.{target.day:02d}"
+            if days_left > 0:
+                dday = f"D-{days_left}"
+            elif days_left == 0:
+                dday = "D-DAY 🔥"
+            else:
+                dday = f"D+{abs(days_left)} (기한초과)"
+        except Exception:
+            target_display = target_str
+            dday = ""
+
+        # 진행 막대
+        bar         = SlackSender._make_progress_bar(progress)
+        is_complete = progress >= 100
+
+        # 날짜 문자열 (Windows 호환)
+        now       = datetime.now()
+        day_names = ["월", "화", "수", "목", "금", "토", "일"]
+        date_str  = f"{now.year}년 {now.month}월 {now.day}일 ({day_names[now.weekday()]})"
+
+        # 진행율 텍스트
+        progress_text = f"`{bar}`  *{progress}%*"
+        if is_complete:
+            progress_text = f"✅ *미션 완료!*\n`{bar}`  *{progress}%*"
+
+        return [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "📊 미션 진행 현황", "emoji": True},
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*🎯  {name}*\n📅  목표일: `{target_display}`   ⏰  `{dday}`",
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*전체 진행율*\n{progress_text}",
+                },
+            },
+            {
+                "type": "context",
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": f"📢  #{channel_name}   |   {date_str}   |   자동 알림",
+                }],
+            },
+        ]
+
+    def _read_thread_progress(self, channel: str, ts: str, default: int) -> int:
+        """
+        지난 미션 메시지의 스레드에서 최신 진행율(%) 파싱.
+
+        담당자가 스레드에 '65%', '진행율 70%' 등 형태로 업데이트하면
+        가장 최근 답글에서 숫자% 를 추출합니다.
+        파싱 실패 또는 스레드가 없으면 default 값을 그대로 반환합니다.
+        """
+        try:
+            resp     = self.client.conversations_replies(channel=channel, ts=ts)
+            messages = resp.get("messages", [])
+            # messages[0] = 봇의 원본 메시지, [1:] = 담당자 스레드 답글
+            for msg in reversed(messages[1:]):
+                text  = msg.get("text", "")
+                match = re.search(r'(\d{1,3})\s*%', text)
+                if match:
+                    pct = int(match.group(1))
+                    if 0 <= pct <= 100:
+                        logger.info(
+                            f"[미션 스레드] 진행율 파싱: {pct}%  "
+                            f"(작성자: {msg.get('user', '?')})"
+                        )
+                        return pct
+        except Exception as e:
+            logger.warning(f"[미션 스레드] 읽기 실패 → default({default}%) 유지: {e}")
+        return default
+
+    def _load_mission_state(self) -> dict:
+        """mission_state.json 로드 (없으면 빈 dict)"""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mission_state.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+        except Exception as e:
+            logger.warning(f"[미션 상태] 로드 실패: {e}")
+            return {}
+
+    def _save_mission_state(self, state: dict) -> None:
+        """mission_state.json 저장"""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mission_state.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[미션 상태] 저장 실패: {e}")
+
+    def send_mission_reminder(self, schedule: dict):
+        """
+        미션 진행 현황 리마인더 전송.
+
+        흐름
+        ----
+        1. mission_state.json 에서 이전 ts 및 진행율 로드
+        2. 이전 ts 가 있으면 해당 스레드에서 최신 진행율 파싱
+        3. 미션 블록 빌드 후 채널에 전송
+        4. 새 ts + 진행율을 mission_state.json 에 저장
+
+        Returns
+        -------
+        str  : 전송된 메시지 ts. 실패 시 None.
+        """
+        mission    = schedule.get("mission", {})
+        channel    = schedule["channel"]
+        mission_id = schedule["id"]
+
+        # 이전 상태 로드
+        all_state = self._load_mission_state()
+        ms        = all_state.get(mission_id, {})
+        progress  = ms.get("progress", 0)
+        last_ts   = ms.get("last_ts")
+
+        # 스레드에서 최신 진행율 업데이트
+        if last_ts:
+            progress = self._read_thread_progress(channel, last_ts, progress)
+
+        # 블록 빌드 & 전송
+        blocks = self._build_mission_blocks(mission, progress)
+        kwargs = {
+            "channel": channel,
+            "text":    mission.get("name", "📊 미션 진행 현황"),
+            "blocks":  blocks,
+        }
+        if "bot_name"  in schedule: kwargs["username"]   = schedule["bot_name"]
+        if "bot_emoji" in schedule: kwargs["icon_emoji"] = schedule["bot_emoji"]
+
+        try:
+            res = self.client.chat_postMessage(**kwargs)
+            ts  = res["ts"]
+            logger.info(
+                f"✅ 미션 리마인더 전송 | [{schedule.get('name')}] "
+                f"→ {channel} | {progress}% | ts: {ts}"
+            )
+            # 상태 저장
+            all_state[mission_id] = {
+                "channel":  channel,
+                "last_ts":  ts,
+                "progress": progress,
+            }
+            self._save_mission_state(all_state)
+            return ts
+        except SlackApiError as e:
+            logger.error(
+                f"❌ 미션 리마인더 전송 실패 | "
+                f"[{schedule.get('name')}] {e.response['error']}"
+            )
+            return None
 
     # ──────────────────────────────────────────────────────────
     # 유틸리티
