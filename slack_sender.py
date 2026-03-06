@@ -187,6 +187,20 @@ class SlackSender:
             result.append({**block, "elements": new_elements})
         return result
 
+    @staticmethod
+    def _compute_period_label(schedule_type: str, dt: "datetime | None" = None) -> str:
+        """
+        스케줄 타입에 따른 기간 레이블 반환.
+
+        - weekly : "2026년 3월 2주차" (월 내 몇 번째 주인지 표시)
+        - 그 외  : "2026년 3월"
+        """
+        now = dt or datetime.now()
+        if schedule_type == "weekly":
+            week_of_month = (now.day - 1) // 7 + 1
+            return f"{now.year}년 {now.month}월 {week_of_month}주차"
+        return f"{now.year}년 {now.month}월"
+
     def _build_interactive_blocks(
         self,
         title: str,
@@ -195,6 +209,7 @@ class SlackSender:
         sent_at: str = "",
         missed_section: list = None,
         action_id: str = "checklist_toggle",
+        period_label: str = None,
     ) -> list:
         """
         Slack Block Kit 인터랙티브 체크리스트 블록 구성
@@ -208,15 +223,18 @@ class SlackSender:
                                 "sub_items": [{"value": ..., "text": ..., "mentions": ...}, ...]}
         checked_values : 현재 체크된 value 목록
         sent_at        : 최초 발송 시각 문자열 (context 블록 표시용)
+        period_label   : 진행 상태 헤더에 표시할 기간 레이블
+                         (None 이면 "YYYY년 M월" 자동 생성)
         """
         checked_set         = set(checked_values)
         total, done         = self._count_tasks(items, checked_set)
         filled              = int((done / total) * 10) if total > 0 else 0
         bar                 = "▓" * filled + "░" * (10 - filled)
 
-        now          = datetime.now()
-        month_label  = f"{now.year}년 {now.month}월"
-        status_text  = f"*{month_label}*  {bar}  {done}/{total} 완료"
+        now = datetime.now()
+        if period_label is None:
+            period_label = f"{now.year}년 {now.month}월"
+        status_text  = f"*{period_label}*  {bar}  {done}/{total} 완료"
         if done == total and total > 0:
             status_text += "  🎉 *모두 완료!*"
 
@@ -423,7 +441,9 @@ class SlackSender:
         -------
         str  : 전송된 메시지의 ts (타임스탬프). 실패 시 None.
         """
-        sent_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+        now      = datetime.now()
+        sent_at  = now.strftime("%Y-%m-%d %H:%M")
+        period_label = self._compute_period_label(schedule.get("type", ""), now)
 
         # 누락 섹션 블록 빌드 (있을 때만)
         missed_section = (
@@ -437,6 +457,7 @@ class SlackSender:
             checked_values = [],
             sent_at        = sent_at,
             missed_section = missed_section,
+            period_label   = period_label,
         )
 
         kwargs = {
@@ -482,6 +503,17 @@ class SlackSender:
         # → A 가 체크한 뒤 B 의 화면도 즉시 갱신되는 핵심 메커니즘.
         dyn_action_id = f"checklist_toggle_{int(time.time() * 1000)}"
 
+        # ── period_label 복원 ────────────────────────────────────────────────
+        # 최초 발송 시각(sent_at)과 스케줄 타입으로 주차 레이블을 재계산합니다.
+        # 예: weekly → "2026년 3월 2주차" (체크 업데이트 후에도 주차 유지)
+        schedule_type = state.get("schedule_type", "")
+        sent_at_str   = state.get("sent_at", "")
+        try:
+            sent_dt = datetime.strptime(sent_at_str, "%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            sent_dt = None
+        period_label = self._compute_period_label(schedule_type, sent_dt)
+
         rebuilt_missed = (
             self._rebuild_missed_blocks_checked(
                 missed_section, set(state.get("checked", [])), dyn_action_id
@@ -496,6 +528,7 @@ class SlackSender:
             sent_at        = state.get("sent_at", ""),
             missed_section = rebuilt_missed,
             action_id      = dyn_action_id,
+            period_label   = period_label,
         )
         try:
             self.client.chat_update(

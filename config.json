@@ -16,7 +16,7 @@
       "enabled": true,
       "type": "monthly_last_weekday",
       "day_of_week": "friday",
-      "time": "10:00",
+      "time": "10:10",
       "channel": "C07PHCE4RCM",
       "message_type": "interactive_checklist",
       "title": "📋 퍼블리싱QA1팀 월간 체크리스트",
@@ -86,7 +86,7 @@
       "enabled": true,
       "type": "weekly",
       "day_of_week": "friday",
-      "time": "10:00",
+      "time": "10:05",
       "channel": "C07PHCE4RCM",
       "message_type": "interactive_checklist",
       "title": "📋 주간 QA 보고",
@@ -95,9 +95,9 @@
           "type": "group",
           "group_name": "주간 보고 작성",
           "sub_items": [
-            {"value": "w0_seokho",   "text": "류석호", "mentions": ["U07HFLMSYKV"]},
-            {"value": "w0_donghyun", "text": "이동현", "mentions": ["U07H17HB4MD"]},
-            {"value": "w0_yechan",   "text": "정예찬", "mentions": ["U07H18AD1L7"]}
+            {"value": "w0_cazena",  "text": "[카제나]",  "mentions": ["U07HFLMSYKV"]},
+            {"value": "w0_epic7",   "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
+            {"value": "w0_compat",  "text": "[호환성]",  "mentions": ["U07H18AD1L7"]}
           ]
         }
       ],
