@@ -367,7 +367,12 @@
       "mission": {
         "name": "Slack QA - Supporter 활용 가이드",
         "target_date": "2026-03-27",
-        "channel_name": "AI-Driven QA Efficiency"
+        "channel_name": "AI-Driven QA Efficiency",
+        "sub_tasks": [
+          "활용 예제 탐색 및 프롬프트 설계 → 활용 프롬프트 작성",
+          "가이드 설계 기획 → 가이드 작성",
+          "고도화 및 개선 방안 브레인스토밍 → 결과 보고"
+        ]
       }
     }
 

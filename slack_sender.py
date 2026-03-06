@@ -598,7 +598,11 @@ class SlackSender:
         if is_complete:
             progress_text = f"✅ *미션 완료!*\n`{bar}`  *{progress}%*"
 
-        return [
+        # 서브 태스크 텍스트 (있을 때만)
+        sub_tasks     = mission.get("sub_tasks", [])
+        sub_task_text = "\n".join(f"▸  {t}" for t in sub_tasks) if sub_tasks else ""
+
+        blocks = [
             {
                 "type": "header",
                 "text": {"type": "plain_text", "text": "📊 미션 진행 현황", "emoji": True},
@@ -619,14 +623,30 @@ class SlackSender:
                     "text": f"*전체 진행율*\n{progress_text}",
                 },
             },
-            {
-                "type": "context",
-                "elements": [{
-                    "type": "mrkdwn",
-                    "text": f"📢  #{channel_name}   |   {date_str}   |   자동 알림",
-                }],
-            },
         ]
+
+        # 서브 태스크 섹션 (config 에 sub_tasks 가 있을 때만 추가)
+        if sub_task_text:
+            blocks += [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Sub Task*\n{sub_task_text}",
+                    },
+                },
+            ]
+
+        blocks.append({
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": f"📢  #{channel_name}   |   {date_str}   |   자동 알림",
+            }],
+        })
+
+        return blocks
 
     def _read_thread_progress(self, channel: str, ts: str, default: int) -> int:
         """
