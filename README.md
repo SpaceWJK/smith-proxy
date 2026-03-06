@@ -1,5 +1,7 @@
 # 🤖 퍼블리싱QA1팀 Slack 알림 봇 (QA Supporter)
 
+**현재 버전: `v1.1.4`** | [변경 이력 →](./CHANGELOG.md)
+
 > **SGP 퍼블리싱QA1팀** 전용 Slack 자동화 봇
 > 일일 업무 헤더, QA 체크리스트, 주간 보고, 업데이트 차수 점검, 월간·분기 체크리스트를 자동 발송하고 담당자가 직접 체크할 수 있는 인터랙티브 메시지를 제공합니다.
 
@@ -592,6 +594,22 @@ ANTHROPIC_API_KEY=sk-ant-... # Claude API (wiki 요약)
 | App-Level Token | Basic Information → App-Level Tokens | `connections:write` |
 
 > **Socket Mode** 및 **Interactivity** 는 Slack 앱 설정에서 ON 필요
+
+---
+
+## 🔖 버전 관리
+
+| 항목 | 내용 |
+|------|------|
+| 버전 형식 | Semantic Versioning (`Major.Minor.Patch`) |
+| 변경 이력 | [`CHANGELOG.md`](./CHANGELOG.md) |
+| 롤백 방법 | `git checkout v1.1.3` → `git checkout main` 으로 복귀 |
+| 태그 목록 | `git tag -l` |
+
+**버전 규칙 요약:**
+- **Major**: 기존 아키텍처와 호환 불가한 파격적 변경
+- **Minor**: **새 기능 카테고리** 추가 시에만 (현재 기능: ① 알리미 ② /wiki)
+- **Patch**: 기존 기능 수정/개선 (버그 수정, 미션 채널 추가, wiki 예외처리 등 모두 Patch)
 
 ---
 
