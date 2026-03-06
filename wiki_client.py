@@ -360,53 +360,75 @@ class ConfluenceCalendarClient:
         -------
         (page_dict | None, error_str | None)
         """
+        import re as _re
         sk = space_key or self._space_key
 
         # fetch_full=False 면 body.view 를 cql_search 에서 함께 가져옴
         expand_param = {} if fetch_full else {"expand": "body.view"}
 
-        # 1차: ancestor 조건 포함 CQL
+        # CQL 파싱 오류를 일으키는 특수문자([]{}) 포함 ancestor는 제외
+        _CQL_SPECIAL = _re.compile(r'[\[\]{}()\^\\]')
+        safe_ancestors = [a.strip() for a in ancestors
+                          if a.strip() and not _CQL_SPECIAL.search(a.strip())]
+        skipped = [a.strip() for a in ancestors
+                   if a.strip() and _CQL_SPECIAL.search(a.strip())]
+        if skipped:
+            logger.info(f"[wiki][경로검색] CQL 특수문자 포함 ancestor 제외: {skipped}")
+
         ancestor_conditions = " AND ".join(
-            f'ancestor = "{a.strip()}"' for a in ancestors if a.strip()
+            f'ancestor = "{a}"' for a in safe_ancestors
         )
+
+        # ── 1차: (안전한) ancestor 조건 포함 CQL ─────────────────────────────
         cql = f'title ~ "{leaf_title}" AND space = "{sk}" AND type=page'
         if ancestor_conditions:
             cql += f" AND {ancestor_conditions}"
         cql += " ORDER BY lastmodified DESC"
 
-        logger.info(f"[wiki] 경로 검색 CQL(1차): {cql} (fetch_full={fetch_full})")
+        logger.info(f"[wiki][1차] CQL: {cql}")
         raw, err = self._mcp.call_tool(
             "cql_search", {"cql": cql, "limit": 5, **expand_param}
         )
 
-        # 2차 폴백: CQL 파싱 오류 시 제목만으로 재시도
+        # ── 2차: CQL 파싱 오류 시 ancestor 없이 재시도 ───────────────────────
         if err and "cannot be parsed" in err.lower():
-            fallback_cql = (f'title ~ "{leaf_title}" AND space = "{sk}"'
-                            f' AND type=page ORDER BY lastmodified DESC')
-            logger.info(f"[wiki] 경로 검색 CQL(2차 폴백): {fallback_cql}")
+            logger.warning(f"[wiki][1차] CQL 파싱 오류 → 2차 폴백 (ancestor 제거)")
+            cql2 = (f'title ~ "{leaf_title}" AND space = "{sk}"'
+                    f' AND type=page ORDER BY lastmodified DESC')
+            logger.info(f"[wiki][2차] CQL: {cql2}")
             raw, err = self._mcp.call_tool(
-                "cql_search", {"cql": fallback_cql, "limit": 5, **expand_param}
+                "cql_search", {"cql": cql2, "limit": 5, **expand_param}
             )
 
         if err:
+            logger.error(f"[wiki][검색실패] MCP 오류: {err}")
             return None, err
 
         results = self._parse_cql_results(raw)
+        logger.info(f"[wiki][결과] 1~2차 검색 결과: {len(results)}건")
 
-        # 3차 폴백: ancestor 조건 검색이 결과 없을 때 → leaf 제목만으로 재시도
+        # ── 3차: 결과 없을 때 → ancestor 없이 재시도 (1차가 ancestor로 실패한 경우) ──
         if not results and ancestor_conditions:
-            fallback_cql = (f'title ~ "{leaf_title}" AND space = "{sk}"'
-                            f' AND type=page ORDER BY lastmodified DESC')
-            logger.info(f"[wiki] 경로 검색 CQL(3차 폴백 - ancestor 제거): {fallback_cql}")
+            logger.warning(f"[wiki][2차] 결과 없음 → 3차 폴백 (ancestor 완전 제거)")
+            cql3 = (f'title ~ "{leaf_title}" AND space = "{sk}"'
+                    f' AND type=page ORDER BY lastmodified DESC')
+            logger.info(f"[wiki][3차] CQL: {cql3}")
             raw2, err2 = self._mcp.call_tool(
-                "cql_search", {"cql": fallback_cql, "limit": 5, **expand_param}
+                "cql_search", {"cql": cql3, "limit": 5, **expand_param}
             )
             if not err2:
                 results = self._parse_cql_results(raw2)
+                logger.info(f"[wiki][결과] 3차 검색 결과: {len(results)}건")
+            else:
+                logger.error(f"[wiki][3차] MCP 오류: {err2}")
 
         if not results:
             path_str = " > ".join(list(ancestors) + [leaf_title])
-            return None, f"'{path_str}' 경로의 페이지를 찾을 수 없습니다. (공간: {sk})"
+            logger.warning(f"[wiki][최종실패] 경로 '{path_str}' — 페이지 없음")
+            return None, (
+                f"'{path_str}' 경로의 페이지를 찾을 수 없습니다. (공간: {sk})\n"
+                f"💡 힌트: `/wiki {leaf_title}` 로 제목만 검색하거나 `/wiki search {leaf_title}` 로 유사 페이지를 확인해보세요."
+            )
 
         return self._cql_result_to_page_dict(results[0], leaf_title,
                                              fetch_full=fetch_full), None
