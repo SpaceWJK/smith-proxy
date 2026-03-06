@@ -410,6 +410,24 @@
           "미정"
         ]
       }
+    },
+
+    {
+      "id": "mission-knowledge-management",
+      "name": "미션 진행 현황 - Knowledge Management",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AJG69LC3V",
+      "mission": {
+        "name": "미정",
+        "target_date": "",
+        "channel_name": "Knowledge Management",
+        "sub_tasks": [
+          "미정",
+          "미정",
+          "미정"
+        ]
+      }
     }
 
   ]
