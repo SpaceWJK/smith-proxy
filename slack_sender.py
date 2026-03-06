@@ -563,10 +563,57 @@ class SlackSender:
         ----------
         mission  : config.json 의 mission 딕셔너리
         progress : 현재 전체 진행율 (0~100)
+
+        분기
+        ----
+        - name 이 "미정" 또는 빈 값  → 미션 선정 독려 포맷
+        - name 이 확정된 값          → 진행 현황 포맷
         """
-        name         = mission.get("name", "미션명")
-        target_str   = mission.get("target_date", "")
+        name         = mission.get("name", "")
         channel_name = mission.get("channel_name", "")
+
+        # 날짜 문자열 (Windows 호환)
+        now       = datetime.now()
+        day_names = ["월", "화", "수", "목", "금", "토", "일"]
+        date_str  = f"{now.year}년 {now.month}월 {now.day}일 ({day_names[now.weekday()]})"
+
+        footer = {
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": f"📢  #{channel_name}   |   {date_str}   |   자동 알림",
+            }],
+        }
+
+        # ── 미션 미정 → 선정 독려 포맷 ───────────────────────────────────────
+        if not name or name.strip() in ("미정",):
+            return [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "📊 미션 진행 현황", "emoji": True},
+                },
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "⏳  *미션 선정 대기 중*"},
+                },
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            "💬  *아직 이 채널의 미션이 정해지지 않았어요!*\n"
+                            "     빨리 미션을 확정하고 도전을 시작해 봐요 🔥"
+                        ),
+                    },
+                },
+                {"type": "divider"},
+                footer,
+            ]
+
+        # ── 미션 확정 → 진행 현황 포맷 ───────────────────────────────────────
+        target_str = mission.get("target_date", "")
 
         # D-day 계산 (target_date 가 비어있거나 파싱 불가하면 "미정" 표시)
         try:
@@ -589,11 +636,6 @@ class SlackSender:
         # 진행 막대
         bar         = SlackSender._make_progress_bar(progress)
         is_complete = progress >= 100
-
-        # 날짜 문자열 (Windows 호환)
-        now       = datetime.now()
-        day_names = ["월", "화", "수", "목", "금", "토", "일"]
-        date_str  = f"{now.year}년 {now.month}월 {now.day}일 ({day_names[now.weekday()]})"
 
         # 진행율 텍스트
         progress_text = f"`{bar}`  *{progress}%*"
@@ -660,14 +702,7 @@ class SlackSender:
                 },
             ]
 
-        blocks.append({
-            "type": "context",
-            "elements": [{
-                "type": "mrkdwn",
-                "text": f"📢  #{channel_name}   |   {date_str}   |   자동 알림",
-            }],
-        })
-
+        blocks.append(footer)
         return blocks
 
     def _read_thread_progress(self, channel: str, ts: str, default: int) -> int:
@@ -749,9 +784,15 @@ class SlackSender:
 
         # 블록 빌드 & 전송
         blocks = self._build_mission_blocks(mission, progress)
+        _name  = mission.get("name", "")
+        _fallback_text = (
+            "📊 미션 진행 현황 (미선정)"
+            if not _name or _name.strip() in ("미정",)
+            else _name
+        )
         kwargs = {
             "channel": channel,
-            "text":    mission.get("name", "📊 미션 진행 현황"),
+            "text":    _fallback_text,
             "blocks":  blocks,
         }
         if "bot_name"  in schedule: kwargs["username"]   = schedule["bot_name"]
