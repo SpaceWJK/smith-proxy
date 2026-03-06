@@ -625,3 +625,157 @@ ANTHROPIC_API_KEY=sk-ant-... # Claude API (wiki 요약)
 | **wiki 규칙 수정 후** | **봇 재시작 불필요 — 다음 /wiki 호출 시 자동 반영 (hot reload)** |
 | 비활성 스케줄 | `"enabled": false` → 완전 무시됨 |
 | 타임존 | `Asia/Seoul` (config.json 최상단) |
+
+---
+
+## 🤖 AI 어시스턴트(Claude)를 위한 개발 가이드
+
+> 이 섹션은 새로운 컨텍스트에서 Claude가 시스템을 빠르게 파악하고 즉시 개발을 이어갈 수 있도록 작성된 가이드입니다.
+
+### 📂 핵심 파일 역할 요약
+
+| 파일 | 역할 | 주요 수정 케이스 |
+|------|------|----------------|
+| `slack_bot.py` | 봇 진입점, 슬래시 커맨드 핸들러 | 새 커맨드 추가, wiki 응답 로직 변경, 미션/체크리스트 수정 |
+| `wiki_client.py` | Confluence MCP 클라이언트 | MCP 도구 추가, 검색 전략 메서드 추가, CQL 쿼리 변경 |
+| `wiki_search_rules.json` | 페이지별 검색 전략 예외처리 규칙 | 새 예외 규칙 추가/수정 (봇 재시작 불필요) |
+| `scheduler.py` | APScheduler 기반 스케줄 실행 | 새 스케줄 타입 추가 |
+| `interaction_handler.py` | 체크박스 인터랙션(Block Kit 동기화) | 체크리스트 UI 변경 |
+| `config.json` | 스케줄 정의, 채널 ID, 메시지 템플릿 | 스케줄 추가/수정, 메시지 내용 변경 |
+| `mission_state.json` | 미션별 진행율 상태 저장 (런타임 생성) | 직접 수정 불필요 |
+| `CHANGELOG.md` | 버전 이력 (Semantic Versioning) | 버전 업 시 반드시 업데이트 |
+
+### 🔑 현재 구현된 두 가지 핵심 기능
+
+#### ① 슬랙 알리미 (Slack Notification)
+- **핵심 파일**: `slack_bot.py` (스케줄 발송), `scheduler.py`, `config.json`
+- **포함 기능**: 인터랙티브 체크리스트, 미션 진행 현황 리마인더, 헤더 메시지 등
+- **스케줄 설계**: `config.json`의 `"schedules"` 배열에 정의. `schedule_type`별 시간 계산 로직은 `scheduler.py`에 있음
+- **다중 사용자 체크**: `body[actions]` delta 방식으로 동기화 (`interaction_handler.py`)
+- **미션 진행율**: 전날 스레드 댓글에서 `N%` 패턴 자동 파싱 → `mission_state.json` 업데이트
+
+#### ② /wiki 슬래시 커맨드 (Wiki Response)
+- **핵심 파일**: `slack_bot.py` (`_wiki_*` 함수들), `wiki_client.py`, `wiki_search_rules.json`
+- **MCP 서버**: `http://mcp.sginfra.net/confluence-wiki-mcp` (Streamable HTTP)
+- **기본 흐름**:
+  ```
+  /wiki [페이지] | [질문]
+    → _find_matching_rule()       ← wiki_search_rules.json 규칙 매칭 (hot reload)
+    → 규칙 있으면 해당 전략 실행  ← 예: get_latest_descendant()
+    → 규칙 없으면 _wiki_fetch_page() 기본 조회
+    → _wiki_ask_claude()          ← Claude Haiku로 답변 생성
+  ```
+- **페이지 조회**: `wiki_client.py`의 `get_page_by_path()` → CQL 3단계 폴백
+- **콘텐츠 캐시**: `get_page_content()` TTL 캐시 300초 (`wiki_client.py`)
+
+### 🗂️ wiki_search_rules.json 상세 가이드
+
+```
+파일 위치: D:\Vibe Dev\Slack Bot\wiki_search_rules.json
+hot reload: mtime 비교 방식, 봇 재시작 없이 자동 반영
+```
+
+**규칙 매칭 순서 (slack_bot.py: `_find_matching_rule`)**
+1. `page_part`에서 leaf 제목 추출 (경로의 마지막 segment)
+   - `"2026_MGQA > 2026_01_MGQA"` → leaf = `"2026_01_MGQA"`
+   - `"QASGP / 2026_MGQA"` → leaf = `"2026_MGQA"`
+2. `match_type`으로 leaf와 `page_pattern` 비교
+3. 매칭 시 질문(소문자)에서 `trigger.keywords` 포함 여부 확인
+4. 첫 번째 매칭 규칙의 `strategy` 실행
+
+**지원 strategies**
+| strategy | 동작 | 사용 케이스 |
+|----------|------|------------|
+| `get_latest_descendant` | `ancestor=페이지 ORDER BY created DESC LIMIT 1` CQL로 최신 하위 페이지 1개만 조회 | 상위 페이지가 목차/인덱스 역할이고, "최근" 질문 시 최신 하위 페이지가 정답인 경우 |
+| (기본) | `_wiki_fetch_page()` 직접 조회 | 일반적인 경우 |
+
+**새 규칙 추가 시 체크리스트**
+- [ ] `id` 중복 없는지 확인 (rule-001, rule-002, ...)
+- [ ] `page_pattern`이 Confluence 페이지 제목과 정확히 일치하는지 확인
+- [ ] `match_type` 선택: 정확한 제목 → `exact`, 부분 포함 → `contains`
+- [ ] `trigger.keywords`에 질문에 자주 쓰이는 단어 포함
+- [ ] `enabled: true` 확인
+- [ ] CHANGELOG.md 업데이트 (Patch 버전)
+
+### 🔖 버전 관리 및 롤백 상세 가이드
+
+**현재 버전: v1.1.4** | 기능 수 2개 (알리미, Wiki)
+
+**버전 규칙 재확인**
+```
+Major (x.0.0): 아키텍처 전면 개편
+Minor (0.x.0): 세 번째 기능 카테고리 추가 시에만 (예: /gdi, /jira 등 신규 슬래시 커맨드)
+Patch (0.0.x): 그 외 모든 변경사항
+  - 기존 알리미 개선 (새 체크리스트, 새 채널, 새 스케줄 타입)
+  - wiki 안정화/예외처리 개선
+  - 버그 수정, 설정 변경
+```
+
+**새 버전 릴리즈 절차**
+```powershell
+# 1. CHANGELOG.md에 새 버전 섹션 추가
+# 2. README.md 상단 버전 배지 업데이트
+# 3. 커밋
+git add CHANGELOG.md README.md
+git commit -F <message_file>   # BOM 없는 UTF-8 파일로 메시지 전달
+
+# 4. 태그 등록
+git tag v1.1.5 HEAD
+
+# 5. Push (Railway 자동 배포)
+git push origin main
+git push origin --tags
+```
+
+**롤백 절차**
+```powershell
+# 특정 버전 코드 확인 (read-only)
+git checkout v1.1.3
+
+# 최신으로 복귀
+git checkout main
+
+# 특정 버전으로 완전 롤백 (branch에서 작업 후 PR)
+git checkout -b rollback/v1.1.3 v1.1.3
+```
+
+**태그 → 커밋 매핑**
+| 태그 | 커밋 | 내용 |
+|------|------|------|
+| `v1.0.0` | `f82f7a9` | 초기 알림봇 (체크리스트 기반) |
+| `v1.1.0` | `9b8f2b3` | /wiki 슬래시 커맨드 추가 |
+| `v1.1.1` | `92ea3ec` | wiki + 시스템 버그 수정 |
+| `v1.1.2` | `672acde` | 미션 리마인더 추가 |
+| `v1.1.3` | `7535f2a` | wiki 안정화 + 미션 채널 추가 |
+| `v1.1.4` | `774445c` | wiki 페이지별 예외처리 + CHANGELOG |
+
+### 🚀 봇 재시작 방법 (로컬 PC)
+
+```powershell
+# ① 기존 봇 종료 (PID 파일 확인)
+$pid = Get-Content "D:\Vibe Dev\Slack Bot\slack_bot.pid"
+Stop-Process -Id $pid -Force
+
+# ② PID 파일 삭제
+Remove-Item "D:\Vibe Dev\Slack Bot\slack_bot.pid"
+
+# ③ 봇 시작 (WMI 방식 - Start-Process 대신 사용)
+$wmi = [wmiclass]"Win32_Process"
+$r = $wmi.Create("cmd.exe /c `"D:\Vibe Dev\Slack Bot\start_bot.bat`"", "D:\Vibe Dev\Slack Bot")
+
+# ④ PID 확인
+Start-Sleep 3
+Get-Content "D:\Vibe Dev\Slack Bot\slack_bot.pid"
+```
+
+> **주의**: `Start-Process`는 MCP Shell에서 타임아웃 발생 → 반드시 WMI 방식 사용
+
+### ⚠️ 알려진 주의사항
+
+| 항목 | 내용 |
+|------|------|
+| Claude 모델 | `claude-haiku-4-5-20251001` (구버전 모델 2026-02-19 EOL → 404 오류) |
+| MCP `get_page_by_title` | 서버 버그로 사용 불가 → `cql_search`로 대체됨 |
+| SSE 인코딩 | `r.text` 사용 금지 (ISO-8859-1) → `r.content.decode('utf-8')` 사용 |
+| CQL ancestor | `[ ] { } ( )` 포함 제목은 CQL 파싱 오류 → 자동 제외 처리 |
+| git 실행 | Windows-MCP Shell에서 파이프 불가 → WMI + 파일 리디렉션 방식 사용 |
