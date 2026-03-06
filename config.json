@@ -392,6 +392,24 @@
           "미정"
         ]
       }
+    },
+
+    {
+      "id": "mission-data-analysis",
+      "name": "미션 진행 현황 - Data analysis",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AJNHSUTCJ",
+      "mission": {
+        "name": "미정",
+        "target_date": "",
+        "channel_name": "Data analysis",
+        "sub_tasks": [
+          "미정",
+          "미정",
+          "미정"
+        ]
+      }
     }
 
   ]
