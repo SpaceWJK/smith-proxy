@@ -446,6 +446,24 @@
           "미정"
         ]
       }
+    },
+
+    {
+      "id": "mission-tech-support",
+      "name": "미션 진행 현황 - Tech Support",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AKGRTU36U",
+      "mission": {
+        "name": "Testrail TC 업로드 자동화",
+        "target_date": "2026-03-27",
+        "channel_name": "Tech Support",
+        "sub_tasks": [
+          "Testrail 이슈 문의 건 처리 현황 정리",
+          "개선/고도화 방안 모색",
+          "사용 가이드 (WiKi)페이지 최신화"
+        ]
+      }
     }
 
   ]
