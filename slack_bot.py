@@ -51,7 +51,8 @@ def _wiki_help(respond):
         "*📄 /wiki 페이지 조회 도움말*\n\n"
         "```\n"
         "/wiki [페이지 제목]                       페이지 내용 전체 조회\n"
-        "/wiki [상위] > [하위] > [페이지]          계층 경로로 페이지 조회\n"
+        "/wiki [상위] > [하위] > [페이지]          계층 경로로 페이지 조회 (봇 포맷)\n"
+        "/wiki [상위] / [하위] / [페이지]          Confluence 경로 복사 그대로 사용 가능\n"
         "/wiki [페이지 제목] | [질문]              페이지 내용 기반 AI 답변 (Claude)\n"
         "/wiki [상위] > [페이지] | [질문]          경로 지정 + AI 답변\n"
         "/wiki search [검색어]                     키워드로 페이지 목록 검색\n"
@@ -60,20 +61,23 @@ def _wiki_help(respond):
         "예시:\n"
         "• `/wiki Game Service 1`\n"
         "• `/wiki 프로젝트 현황 > Game Service 1`\n"
+        "• `/wiki 프로젝트 현황 / Game Service 1`  ← Confluence 경로 복사 사용\n"
         "• `/wiki Game Service 1 | QA 일정 알려줘`\n"
         "• `/wiki 프로젝트 현황 > Game Service 1 | QA 일정이 어떻게 되나요?`\n"
         "• `/wiki search QA 일정`\n\n"
-        "💡 `>` 는 Confluence 페이지 계층 구조를 나타냅니다.\n"
-        "동일 제목의 페이지가 여러 곳에 있을 때 조상 경로로 구분하세요."
+        "💡 Confluence 브레드크럼 경로를 그대로 복사해서 사용할 수 있습니다.\n"
+        "동일 제목의 페이지가 여러 곳에 있을 때 경로로 구분하세요."
     ))
 
 
 def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True):
     """
-    '>' 구분자 유무에 따라 적합한 방식으로 Confluence 페이지를 조회합니다.
+    경로 구분자 유무에 따라 적합한 방식으로 Confluence 페이지를 조회합니다.
 
-    - '>' 포함 → 조상 기반 CQL 검색 (get_page_by_path)
-    - '>' 없음  → 제목 직접 검색   (get_page_by_title)
+    지원하는 경로 구분자:
+    - '>'       → /wiki A > B > C  (봇 전용 포맷)
+    - ' / '     → /wiki A / B / C  (Confluence 브레드크럼 복사 포맷)
+    - 구분자 없음 → 제목 직접 검색
 
     Parameters
     ----------
@@ -83,8 +87,15 @@ def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True):
 
     Returns: (page_dict | None, error_str | None)
     """
-    if ">" in page_part:
-        segments   = [s.strip() for s in page_part.split(">")]
+    # Confluence 브레드크럼( A / B / C ) 또는 봇 포맷( A > B > C ) 모두 지원
+    if " / " in page_part:
+        segments = [s.strip() for s in page_part.split(" / ")]
+    elif ">" in page_part:
+        segments = [s.strip() for s in page_part.split(">")]
+    else:
+        segments = []
+
+    if segments:
         leaf_title = segments[-1]
         ancestors  = segments[:-1]
         return client.get_page_by_path(ancestors, leaf_title,
