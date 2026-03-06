@@ -428,6 +428,24 @@
           "미정"
         ]
       }
+    },
+
+    {
+      "id": "mission-roundtable",
+      "name": "미션 진행 현황 - Roundtable",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AKGRX2BKJ",
+      "mission": {
+        "name": "미정",
+        "target_date": "",
+        "channel_name": "Roundtable",
+        "sub_tasks": [
+          "미정",
+          "미정",
+          "미정"
+        ]
+      }
     }
 
   ]
