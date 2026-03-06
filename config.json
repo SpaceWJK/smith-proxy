@@ -374,6 +374,24 @@
           "고도화 및 개선 방안 브레인스토밍 → 결과 보고"
         ]
       }
+    },
+
+    {
+      "id": "mission-balance-engineering",
+      "name": "미션 진행 현황 - Balance Engineering",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AJNHQ74TU",
+      "mission": {
+        "name": "미정",
+        "target_date": "",
+        "channel_name": "Balance Engineering",
+        "sub_tasks": [
+          "미정",
+          "미정",
+          "미정"
+        ]
+      }
     }
 
   ]

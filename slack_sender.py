@@ -568,8 +568,10 @@ class SlackSender:
         target_str   = mission.get("target_date", "")
         channel_name = mission.get("channel_name", "")
 
-        # D-day 계산
+        # D-day 계산 (target_date 가 비어있거나 파싱 불가하면 "미정" 표시)
         try:
+            if not target_str:
+                raise ValueError("target_date 미지정")
             target    = _date.fromisoformat(target_str)
             today     = _date.today()
             days_left = (target - today).days
@@ -581,7 +583,7 @@ class SlackSender:
             else:
                 dday = f"D+{abs(days_left)} (기한초과)"
         except Exception:
-            target_display = target_str
+            target_display = target_str if target_str else "미정"
             dday = ""
 
         # 진행 막대
@@ -612,7 +614,11 @@ class SlackSender:
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*🎯  {name}*\n📅  목표일: `{target_display}`   ⏰  `{dday}`",
+                    "text": (
+                        f"*🎯  {name}*\n"
+                        f"📅  목표일: `{target_display}`"
+                        + (f"   ⏰  `{dday}`" if dday else "")
+                    ),
                 },
             },
             {"type": "divider"},
