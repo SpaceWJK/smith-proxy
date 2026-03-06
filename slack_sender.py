@@ -644,6 +644,23 @@ class SlackSender:
                 },
             ]
 
+        # 진행율 댓글 요청 (미완료 시에만 표시)
+        if not is_complete:
+            blocks += [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            "💬  *업무 마감 전, 이 메시지의 스레드에 현재 진행율(%)을 댓글로 남겨주세요!*\n"
+                            "> 예시: `현재 진행율 35%`\n"
+                            "> 내일 알림 메시지에 진행율이 자동으로 반영됩니다 :rocket:"
+                        ),
+                    },
+                },
+            ]
+
         blocks.append({
             "type": "context",
             "elements": [{
