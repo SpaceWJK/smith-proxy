@@ -114,7 +114,15 @@ class NotificationScheduler:
             missed_items = None
             if s.get("check_missed"):
                 try:
+                    # 1차: 로컬 로그 파일 (Railway 재시작 없으면 빠름)
                     missed_items = mt.get_missed_items(self.sender.client)
+                    # 2차 폴백: 로그 파일 없을 때 Slack 채널 히스토리 직접 스캔
+                    if not missed_items:
+                        missed_items = mt.get_missed_items_from_channel(
+                            slack_client = self.sender.client,
+                            channel      = s["channel"],
+                            config_items = s.get("items", []),
+                        )
                     if missed_items:
                         total_missed = sum(len(g["items"]) for g in missed_items)
                         logger.info(
