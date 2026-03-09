@@ -1,0 +1,38 @@
+{
+  "mission-ai-driven-qa": {
+    "channel": "C0AJK510DN1",
+    "mission_number": "M-01",
+    "last_ts": "1773022750.204399",
+    "progress": 5
+  },
+  "mission-tech-support": {
+    "channel": "C0AKGRTU36U",
+    "mission_number": "M-02",
+    "last_ts": "1773022754.438739",
+    "progress": 80
+  },
+  "mission-roundtable": {
+    "channel": "C0AKGRX2BKJ",
+    "mission_number": "M-03",
+    "last_ts": "1773022753.655949",
+    "progress": 5
+  },
+  "mission-balance-engineering": {
+    "channel": "C0AJNHQ74TU",
+    "mission_number": "M-04",
+    "last_ts": null,
+    "progress": 0
+  },
+  "mission-data-analysis": {
+    "channel": "C0AJNHSUTCJ",
+    "mission_number": "M-05",
+    "last_ts": null,
+    "progress": 0
+  },
+  "mission-knowledge-management": {
+    "channel": "C0AJG69LC3V",
+    "mission_number": "M-06",
+    "last_ts": null,
+    "progress": 0
+  }
+}

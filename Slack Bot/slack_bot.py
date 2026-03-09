@@ -17,6 +17,7 @@ slack_bot.py - Slack 알림 봇 메인 진입점
 import os
 import re
 import sys
+import time
 import atexit
 import logging
 import argparse
@@ -795,8 +796,10 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         /wiki [페이지 제목]     → 페이지 내용 조회
         """
         ack()
-        text   = (command.get("text") or "").strip()
-        client = wc.ConfluenceCalendarClient()
+        text      = (command.get("text") or "").strip()
+        user_id   = command.get("user_id", "")
+        user_name = command.get("user_name", "")
+        client    = wc.ConfluenceCalendarClient()
 
         if not text or text.lower() == "help":
             _wiki_help(respond)
@@ -806,8 +809,15 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         if parts[0].lower() == "search":
             query = parts[1].strip() if len(parts) == 2 else ""
             if query:
+                t0 = time.time()
                 respond(text=f"🔍 `{query}` 검색 중...")
                 _wiki_search_pages(client, query, respond)
+                wc.log_wiki_query(
+                    user_id=user_id, user_name=user_name,
+                    action="search", query=query,
+                    result="검색 완료",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
             else:
                 respond(text="❌ 검색어를 입력하세요. 예: `/wiki search QA 일정`")
             return
@@ -818,6 +828,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             page_part = page_part.strip()
             question  = question.strip()
             if page_part and question:
+                t0 = time.time()
                 # ── 페이지별 예외처리 규칙 확인 ──────────────────────────────
                 matched_rule = _find_matching_rule(page_part, question)
                 strategy = matched_rule.get("strategy") if matched_rule else None
@@ -848,15 +859,34 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     page, err = _wiki_fetch_page(client, page_part)
 
                 if err:
+                    wc.log_wiki_query(
+                        user_id=user_id, user_name=user_name,
+                        action="ask_claude", query=f"{page_part} | {question}",
+                        error=str(err),
+                        elapsed_ms=int((time.time() - t0) * 1000),
+                    )
                     respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
                     return
                 respond(text=f"🤖 *{page['title']}* — Claude 답변 생성 중...")
                 _wiki_ask_claude(page["title"], page["text"], page["url"], question, respond)
+                wc.log_wiki_query(
+                    user_id=user_id, user_name=user_name,
+                    action="ask_claude", query=f"{page_part} | {question}",
+                    result=f"페이지: {page['title']}",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
                 return
 
         # 나머지는 모두 경로/페이지 제목으로 처리 (내용 전체 표시)
+        t0 = time.time()
         respond(text=f"🔍 *{text}* 페이지 조회 중...")
         _wiki_get_page(client, text, respond)
+        wc.log_wiki_query(
+            user_id=user_id, user_name=user_name,
+            action="get_page", query=text,
+            result="조회 완료",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
 
     @app.command("/calendar")
     def handle_calendar_command(ack, respond, command):

@@ -6,7 +6,7 @@
 > - **Major** `x.0.0` : 기존 버전과 호환되지 않는 파격적 변경 (아키텍처 전면 개편 등)
 > - **Minor** `0.x.0` : **새로운 기능 카테고리 추가 시에만** 올림
 >   - 현재 기능: ① 슬랙 알리미(스케줄 알림)  ② /wiki 슬래시 커맨드
->   - 세 번째 기능 카테고리 추가 시 → v1.2.0
+>   - 세 번째 기능 카테고리 추가 시 → v1.3.0
 > - **Patch** `0.0.x` : 기능 추가 없는 버그 수정 / 기존 기능 개선 / 설정 변경
 >   - 알리미 기능 개선(미션 리마인더 등), wiki 안정화 등은 모두 Patch
 >
@@ -18,13 +18,65 @@
 
 ---
 
-## [1.1.5] - 2026-03-06 ← 현재
+## [1.2.0] - 2026-03-09 <- 현재
+
+### 추가
+- **미션 넘버링 시스템** (`config.json`, `slack_sender.py`)
+  - 6개 미션에 M-01 ~ M-06 번호 부여 (`mission_number` 필드)
+  - 일일 미션 리마인더 메시지에 `[M-XX]` 접두사 표시
+  - `mission_state.json` 상태 저장에 mission_number 포함
+  - 로그 메시지에 미션 번호 포함
+  - 향후 수동 진행율 업데이트 및 웹 관리 페이지의 기반
+- **스케줄 모니터링** (`schedule_monitor.py` 신규)
+  - APScheduler 등록 스케줄 목록, 다음 실행 시각 조회 기능
+- **레포지토리 구조 정리** — 봇 소스 파일을 `Slack Bot/` 서브 폴더로 이동
+  - 프로젝트 루트 정리, 소스와 설정/문서 분리
+- **개발 관리 시스템 도입** (`.claude/`, `logs/`, `changelog/` 폴더)
+  - `.claude/DEV_RULES.md` — 개발 규칙 문서
+  - `.claude/WORK_LOG.md` — 일일 작업 히스토리
+  - `changelog/CHANGELOG.md` — 이 파일 (루트에서 이동)
+  - `logs/wiki_query.log` — /wiki 조회 로그
+- **wiki 조회 전용 로그** (`wiki_client.py`)
+  - 사용자, 검색어, 결과, 에러 내역을 `logs/wiki_query.log`에 별도 기록
+- **체크리스트 복구 스크립트** (`repair_checklist.py` 신규)
+  - `groups:history` 없이 로그 파일에서 체크 상태 파싱 → `chat.update` 직접 호출
+- **레거시 파일 정리 프로세스** (`.claude/DEV_RULES.md` §7)
+  - `_legacy/` 폴더로 이동 → 2주 유예 → 삭제/복원 절차 공식화
+  - 분류 기준 테이블, 주의사항 포함
+
+### 수정
+- **미션 진행율 0% 버그** — 채널 히스토리 폴백 추가 (`missed_tracker.py`)
+- **미션 스케줄러 misfire_grace_time** 2시간 설정 (jitter 구간 중 재시작 대응)
+- **`missed_tracker.py` Railway 재시작 대응** — 채널 히스토리 폴백 로직 추가
+- **구 봇 프로세스 경로 불일치** — 레포 구조 정리 후 구 프로세스 종료 + 신 경로 재시작
+
+### 삭제
+- **Market Rank 폴더 제거** — `D:\Vibe Dev\Maker Store Rank\`에서 별도 관리 중이라 Slack Bot 내 복사본 불필요 (`git rm -r`)
+- **레거시 파일 33개** → `_legacy/` 이동 (로그 20, 테스트 7, 텍스트/데이터 5, CHANGELOG 1)
+
+### 등록된 미션 넘버링
+| 번호 | 미션 ID | 미션명 |
+|------|---------|--------|
+| M-01 | mission-ai-driven-qa | Slack QA - Supporter 활용 가이드 |
+| M-02 | mission-tech-support | Testrail TC 업로드 자동화 |
+| M-03 | mission-roundtable | 토론 진행 기획 |
+| M-04 | mission-balance-engineering | (미정) |
+| M-05 | mission-data-analysis | (미정) |
+| M-06 | mission-knowledge-management | (미정) |
+
+### 교훈
+- 파일 이동(refactor) 후 반드시 실행 중인 프로세스를 재시작해야 함
+- `groups:history` 미부여 시 `conversations.history` 사용 불가 → 로그 기반 상태 복구로 우회
+
+---
+
+## [1.1.5] - 2026-03-06
 
 ### 추가
 - **알리미: 미션 미정 채널 전용 "선정 독려" 포맷** (`slack_sender.py`)
   - `mission.name == "미정"` 또는 빈 값이면 진행 현황 대신 독려 메시지 자동 전환
   - 진행율 막대 · 서브태스크 · 댓글 요청 블록 없이 심플한 구조
-  - 포맷 내용: `⏳ 미션 선정 대기 중` + `💬 빨리 미션을 확정하고 도전을 시작해 봐요 🔥`
+  - 포맷 내용: `(hourglass) 미션 선정 대기 중` + `(speech_balloon) 빨리 미션을 확정하고 도전을 시작해 봐요 (fire)`
   - 미션 확정 시 `config.json`의 `name` 값만 변경하면 즉시 진행 현황 포맷으로 전환
 - **`test_mission.py` 멀티 채널 지원**
   - 인수 없이 실행 시 확정 미션 3개 전체 전송
@@ -73,7 +125,7 @@
 ### 수정
 - WIKI: CQL 특수문자(`[ ] { } ( )`) 포함 ancestor 자동 제외
   - `[Team Weekly Report]` 등 대괄호 포함 경로명으로 인한 CQL 파싱 오류 방지
-- 알리미: Roundtable 채널 내용 TBD → 실제 내용으로 업데이트
+- 알리미: Roundtable 채널 내용 TBD -> 실제 내용으로 업데이트
 
 ---
 
@@ -82,8 +134,8 @@
 ### 추가
 - **알리미: 미션 진행 현황 리마인더** (신규 스케줄 타입 `mission`)
   - 6개 채널 평일 09:00~09:30 랜덤 지연 자동 발송
-  - D-Day 카운터, 진행율 막대(████░░), 서브태스크 목록 포함
-  - 전날 스레드 댓글에서 `N%` 패턴 자동 파싱 → 다음 날 진행율 반영
+  - D-Day 카운터, 진행율 막대, 서브태스크 목록 포함
+  - 전날 스레드 댓글에서 `N%` 패턴 자동 파싱 -> 다음 날 진행율 반영
   - `mission_state.json` 채널별 상태 파일 관리
   - APScheduler `jitter=1800` 랜덤 지연
 
@@ -94,8 +146,8 @@
 | Balance Engineering | (TBD) |
 | Data analysis | (TBD) |
 | Knowledge Management | (TBD) |
-| Roundtable | (TBD → v1.1.3에서 업데이트) |
-| Tech Support | (→ v1.1.3에서 추가) |
+| Roundtable | (TBD -> v1.1.3에서 업데이트) |
+| Tech Support | (-> v1.1.3에서 추가) |
 
 ---
 
@@ -103,11 +155,11 @@
 
 ### 수정
 - **WIKI: SSE 응답 인코딩 버그 수정**
-  - `r.text` (ISO-8859-1 자동 디코딩) → `r.content.decode('utf-8')` 명시 처리
+  - `r.text` (ISO-8859-1 자동 디코딩) -> `r.content.decode('utf-8')` 명시 처리
   - 한글 페이지 제목/내용 깨짐 문제 해결
-- **WIKI: `get_page_by_title` MCP 서버 버그** → `cql_search`로 대체
+- **WIKI: `get_page_by_title` MCP 서버 버그** -> `cql_search`로 대체
 - **WIKI: 전체 본문 조회** — `cql_search` excerpt 대신 `get_page_by_id + expand: body.view`
-- **WIKI: HTML 테이블 구조 보존** — `</td><td>` → ` | `, `<tr>` → `\n` 변환
+- **WIKI: HTML 테이블 구조 보존** — `</td><td>` -> ` | `, `<tr>` -> `\n` 변환
 - **WIKI: MCP 세션 만료 자동 재연결** — `_is_session_error()` + `_retry` 메커니즘
 - **WIKI: Claude 답변 연도 범위 혼용 버그 수정** — 프롬프트 지침 추가
 - **중복 프로세스 방지** — `_ensure_single_instance()` + PID 파일
@@ -150,3 +202,7 @@
   - Railway: `--scheduler-only` (스케줄 발송 전담)
   - 로컬 PC: `--commands-only` (인터랙션 + 슬래시 커맨드)
 - **상태 파일 fallback** — 로컬 상태 없을 때 Slack body + config.json으로 재구성
+
+---
+
+*각 버전 항목은 변경 작업 시 Claude가 업데이트합니다.*

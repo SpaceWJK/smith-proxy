@@ -14,6 +14,9 @@ data/
 __pycache__/
 *.pyc
 
+# 레거시 대기소
+_legacy/
+
 # IDE
 .vscode/
 .idea/

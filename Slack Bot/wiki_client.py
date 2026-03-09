@@ -28,6 +28,66 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# ── wiki 조회 전용 로거 (logs/wiki_query.log) ──────────────────────────────
+_wiki_query_logger: "logging.Logger | None" = None
+
+def _get_wiki_query_logger() -> logging.Logger:
+    """wiki 조회 전용 로거를 반환합니다. 최초 호출 시 파일 핸들러를 설정합니다."""
+    global _wiki_query_logger
+    if _wiki_query_logger is not None:
+        return _wiki_query_logger
+
+    _wiki_query_logger = logging.getLogger("wiki_query")
+    _wiki_query_logger.setLevel(logging.INFO)
+    _wiki_query_logger.propagate = False  # 루트 로거로 전파 방지
+
+    # logs/ 디렉토리 (프로젝트 루트 기준)
+    bot_dir  = os.path.dirname(os.path.abspath(__file__))
+    logs_dir = os.path.join(os.path.dirname(bot_dir), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+
+    log_path = os.path.join(logs_dir, "wiki_query.log")
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    _wiki_query_logger.addHandler(fh)
+    return _wiki_query_logger
+
+
+def log_wiki_query(*, user_id: str = "", user_name: str = "",
+                   action: str, query: str, result: str = "",
+                   error: str = "", elapsed_ms: int = 0):
+    """
+    /wiki 조회 내역을 logs/wiki_query.log 에 기록합니다.
+
+    Parameters
+    ----------
+    user_id   : Slack 사용자 ID (예: U07PHCE4RCM)
+    user_name : Slack 사용자명 (예: es-wjkim)
+    action    : 동작 종류 (search / get_page / ask_claude / get_latest 등)
+    query     : 검색어 또는 페이지 제목
+    result    : 결과 요약 (예: "페이지 발견: Game Service 1")
+    error     : 에러 메시지 (없으면 빈 문자열)
+    elapsed_ms: 소요 시간 (밀리초)
+    """
+    wl = _get_wiki_query_logger()
+    status = "ERROR" if error else "OK"
+    user   = f"{user_name}({user_id})" if user_id else (user_name or "unknown")
+
+    msg = f"{status} | {action} | user={user} | query={query}"
+    if result:
+        msg += f" | result={result}"
+    if error:
+        msg += f" | error={error}"
+    if elapsed_ms > 0:
+        msg += f" | {elapsed_ms}ms"
+
+    if error:
+        wl.error(msg)
+    else:
+        wl.info(msg)
+
 MCP_URL            = "http://mcp.sginfra.net/confluence-wiki-mcp"
 _DEFAULT_SPACE_KEY = "QASGP"
 _DEFAULT_USERNAME  = "es-wjkim"

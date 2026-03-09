@@ -571,8 +571,9 @@ class SlackSender:
         - name 이 "미정" 또는 빈 값  → 미션 선정 독려 포맷
         - name 이 확정된 값          → 진행 현황 포맷
         """
-        name         = mission.get("name", "")
-        channel_name = mission.get("channel_name", "")
+        name           = mission.get("name", "")
+        channel_name   = mission.get("channel_name", "")
+        mission_number = mission.get("mission_number", "")
 
         # 날짜 문자열 (Windows 호환)
         now       = datetime.now()
@@ -587,6 +588,9 @@ class SlackSender:
             }],
         }
 
+        # 미션 번호 접두사 (있으면 "[M-01] " 형식)
+        num_prefix = f"[{mission_number}] " if mission_number else ""
+
         # ── 미션 미정 → 선정 독려 포맷 ───────────────────────────────────────
         if not name or name.strip() in ("미정",):
             return [
@@ -597,7 +601,7 @@ class SlackSender:
                 {"type": "divider"},
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": "⏳  *미션 선정 대기 중*"},
+                    "text": {"type": "mrkdwn", "text": f"⏳  *{num_prefix}미션 선정 대기 중*"},
                 },
                 {"type": "divider"},
                 {
@@ -659,7 +663,7 @@ class SlackSender:
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        f"*🎯  {name}*\n"
+                        f"*🎯  {num_prefix}{name}*\n"
                         f"📅  목표일: `{target_display}`"
                         + (f"   ⏰  `{dday}`" if dday else "")
                     ),
@@ -814,9 +818,10 @@ class SlackSender:
         -------
         str  : 전송된 메시지 ts. 실패 시 None.
         """
-        mission    = schedule.get("mission", {})
-        channel    = schedule["channel"]
-        mission_id = schedule["id"]
+        mission        = schedule.get("mission", {})
+        channel        = schedule["channel"]
+        mission_id     = schedule["id"]
+        mission_number = mission.get("mission_number", "")
 
         # 이전 상태 로드
         all_state = self._load_mission_state()
@@ -834,10 +839,11 @@ class SlackSender:
         # 블록 빌드 & 전송
         blocks = self._build_mission_blocks(mission, progress)
         _name  = mission.get("name", "")
+        _num   = f"[{mission_number}] " if mission_number else ""
         _fallback_text = (
-            "📊 미션 진행 현황 (미선정)"
+            f"📊 {_num}미션 진행 현황 (미선정)"
             if not _name or _name.strip() in ("미정",)
-            else _name
+            else f"{_num}{_name}"
         )
         kwargs = {
             "channel": channel,
@@ -851,21 +857,22 @@ class SlackSender:
             res = self.client.chat_postMessage(**kwargs)
             ts  = res["ts"]
             logger.info(
-                f"✅ 미션 리마인더 전송 | [{schedule.get('name')}] "
+                f"✅ 미션 리마인더 전송 | [{mission_number}] [{schedule.get('name')}] "
                 f"→ {channel} | {progress}% | ts: {ts}"
             )
             # 상태 저장
             all_state[mission_id] = {
-                "channel":  channel,
-                "last_ts":  ts,
-                "progress": progress,
+                "channel":        channel,
+                "mission_number": mission_number,
+                "last_ts":        ts,
+                "progress":       progress,
             }
             self._save_mission_state(all_state)
             return ts
         except SlackApiError as e:
             logger.error(
                 f"❌ 미션 리마인더 전송 실패 | "
-                f"[{schedule.get('name')}] {e.response['error']}"
+                f"[{mission_number}] [{schedule.get('name')}] {e.response['error']}"
             )
             return None
 
