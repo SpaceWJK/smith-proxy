@@ -23,6 +23,8 @@ from apscheduler.triggers.cron         import CronTrigger
 from apscheduler.triggers.date         import DateTrigger
 from apscheduler.triggers.interval     import IntervalTrigger
 
+import schedule_monitor as sm
+
 logger = logging.getLogger(__name__)
 
 # 요일 이름 → APScheduler 약어 매핑 (한/영 모두 지원)
@@ -93,6 +95,7 @@ class NotificationScheduler:
     def _make_job(self, s: dict):
         """일반 텍스트/정적 체크리스트 job 생성"""
         def job():
+            sm.log_fired(s["id"])
             self.sender.send(channel=s["channel"], schedule=s)
         job.__name__ = s.get("name", s["id"])
         return job
@@ -100,6 +103,7 @@ class NotificationScheduler:
     def _make_mission_job(self, s: dict):
         """미션 진행 현황 리마인더 job 생성"""
         def job():
+            sm.log_fired(s["id"])
             self.sender.send_mission_reminder(s)
         job.__name__ = s.get("name", s["id"])
         return job
@@ -107,6 +111,7 @@ class NotificationScheduler:
     def _make_interactive_job(self, s: dict):
         """인터랙티브 체크리스트 job 생성 (전송 후 상태 등록)"""
         def job():
+            sm.log_fired(s["id"])
             import interaction_handler as ih
             import missed_tracker as mt
 
@@ -231,6 +236,7 @@ class NotificationScheduler:
                     f"  ⏭  스킵 (마지막 주 아님): [{s.get('name')}] {today}"
                 )
                 return
+            sm.log_fired(s["id"])
             logger.info(f"  🚀  실행 (마지막 {day_name}): [{s.get('name')}] {today}")
             # message_type 에 맞는 실제 전송 수행
             self._select_job_fn(s)()
@@ -318,6 +324,7 @@ class NotificationScheduler:
                     f"  ⏭  스킵 (분기 첫째 월요일 아님): [{s.get('name')}] {today}"
                 )
                 return
+            sm.log_fired(s["id"])
             quarter = {1: 1, 4: 2, 7: 3, 10: 4}[today.month]
             logger.info(f"  🚀  실행 ({quarter}분기 첫째 월요일): [{s.get('name')}] {today}")
             self._select_job_fn(s)()
@@ -406,7 +413,37 @@ class NotificationScheduler:
             except Exception as e:
                 logger.error(f"  ❌ 등록 실패: [{name}] → {e}")
 
+        # ── 스케줄 모니터링 job 등록 ──────────────────────────────────────────
+        self._add_monitor()
         logger.info("━" * 52)
+
+    def _add_monitor(self):
+        """
+        스케줄 미실행 감지 모니터링 job을 등록합니다.
+        평일 18:00 KST 에 실행되어 당일 미실행 스케줄을 Slack으로 알립니다.
+        config.json 에 monitor_alert_channel 이 없으면 등록은 하되 실행 시 건너뜁니다.
+        """
+        config = self.config
+
+        def monitor_job():
+            sm.check_and_alert(config, self.sender.client)
+
+        monitor_job.__name__ = "schedule-monitor"
+        try:
+            self.scheduler.add_job(
+                monitor_job,
+                trigger = CronTrigger(
+                    day_of_week = "mon-fri",
+                    hour        = 18,
+                    minute      = 0,
+                    timezone    = self.tz,
+                ),
+                id   = "schedule-monitor",
+                name = "스케줄 모니터링",
+            )
+            logger.info("  ✅ 등록: [스케줄 모니터링]  (평일 18:00)")
+        except Exception as e:
+            logger.error(f"  ❌ 모니터링 등록 실패: {e}")
 
     def print_schedule(self):
         """등록된 스케줄 및 다음 실행 시각 출력"""

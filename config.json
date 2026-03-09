@@ -1,6 +1,8 @@
 {
   "timezone": "Asia/Seoul",
 
+  "monitor_alert_channel": "C0AKPGBSY7K",
+
   "user_map": {
     "U07H17HB4MD": "이동현",
     "U07HFLMSYKV": "류석호",
