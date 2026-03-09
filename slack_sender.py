@@ -5,7 +5,9 @@ slack_sender.py - Slack Web API 래퍼
   chat:write           - 메시지 전송 (필수)
   chat:write.customize - 봇 이름/이모지 커스터마이즈 (선택)
   channels:read        - 공개 채널 목록
+  channels:history     - 공개 채널 히스토리 읽기 (체크리스트 누락 폴백)
   groups:read          - 비공개 채널 목록
+  groups:history       - 비공개 채널 히스토리·스레드 읽기 (미션 진행율 폴백, 필수)
   users:read           - 사용자 검색 (--find-user 용)
 """
 
@@ -732,6 +734,50 @@ class SlackSender:
             logger.warning(f"[미션 스레드] 읽기 실패 → default({default}%) 유지: {e}")
         return default
 
+    def _find_last_mission_ts(self, channel: str, days_back: int = 7) -> str:
+        """
+        Railway 재배포로 mission_state.json이 초기화된 경우를 위한 폴백.
+
+        채널 히스토리를 직접 스캔하여 봇이 보낸 가장 최근의 미션 알림
+        메시지 ts를 반환합니다.
+
+        Parameters
+        ----------
+        channel   : Slack 채널 ID
+        days_back : 몇 일 전까지 소급 탐색할지 (기본 7일)
+
+        Returns
+        -------
+        str  : 발견된 메시지 ts. 없으면 None.
+        """
+        oldest = time.time() - days_back * 86400   # days_back일 전 Unix timestamp
+
+        try:
+            resp = self.client.conversations_history(
+                channel   = channel,
+                oldest    = str(oldest),
+                limit     = 20,
+            )
+        except Exception as e:
+            logger.warning(f"[미션 폴백] 채널 히스토리 조회 실패 ({channel}): {e}")
+            return None
+
+        for msg in resp.get("messages", []):
+            for block in msg.get("blocks", []):
+                if (
+                    block.get("type") == "header"
+                    and "미션 진행 현황" in block.get("text", {}).get("text", "")
+                ):
+                    ts = msg.get("ts")
+                    logger.info(
+                        f"[미션 폴백] 채널 히스토리에서 이전 미션 ts 발견: "
+                        f"{channel} / ts={ts}"
+                    )
+                    return ts
+
+        logger.info(f"[미션 폴백] 채널 히스토리에서 이전 미션 메시지 없음: {channel}")
+        return None
+
     def _load_mission_state(self) -> dict:
         """mission_state.json 로드 (없으면 빈 dict)"""
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mission_state.json")
@@ -779,6 +825,9 @@ class SlackSender:
         last_ts   = ms.get("last_ts")
 
         # 스레드에서 최신 진행율 업데이트
+        # mission_state.json이 Railway 재배포로 소실된 경우 채널 히스토리에서 복원
+        if not last_ts:
+            last_ts = self._find_last_mission_ts(channel)
         if last_ts:
             progress = self._read_thread_progress(channel, last_ts, progress)
 
