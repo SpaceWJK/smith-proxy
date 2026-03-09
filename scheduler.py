@@ -165,15 +165,17 @@ class NotificationScheduler:
             return self._make_interactive_job(s)
         return self._make_job(s)
 
-    def _register_job(self, s: dict, trigger, desc: str, job_fn=None):
+    def _register_job(self, s: dict, trigger, desc: str, job_fn=None, misfire_grace_time=None):
         """스케줄러에 job 등록"""
         fn = job_fn if job_fn is not None else self._select_job_fn(s)
-        self.scheduler.add_job(
-            fn,
+        kwargs = dict(
             trigger = trigger,
             id      = s["id"],
             name    = s.get("name", s["id"]),
         )
+        if misfire_grace_time is not None:
+            kwargs["misfire_grace_time"] = misfire_grace_time
+        self.scheduler.add_job(fn, **kwargs)
         logger.info(f"  ✅ 등록: [{s.get('name')}]  ({desc})")
 
     # ── 스케줄 타입별 등록 ─────────────────────────────────────
@@ -327,6 +329,9 @@ class NotificationScheduler:
         APScheduler CronTrigger 의 jitter 파라미터를 사용합니다.
         jitter=1800 → 09:00 기준 0~1800초(30분) 내 무작위 지연.
         채널마다 별도 job 이므로 동시 발송 충돌 없이 자연스럽게 분산됩니다.
+
+        misfire_grace_time=7200: Railway 재시작 등으로 jitter 발송 시각이 지났더라도
+        2시간 이내라면 재기동 후 즉시 발송. 기본값(1초)이면 jitter 구간 중 재시작 시 스킵됨.
         """
         self._register_job(
             s,
@@ -338,6 +343,7 @@ class NotificationScheduler:
             ),
             "평일 09:00~09:30 (랜덤)",
             job_fn=self._make_mission_job(s),
+            misfire_grace_time=7200,   # 2시간 — jitter 구간 중 재시작 후에도 당일 발송 보장
         )
 
     def _add_specific(self, s: dict):
