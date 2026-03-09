@@ -51,32 +51,36 @@ def register(
     schedule_id: str,
     title: str,
     items: list,
+    schedule_type: str = "",
 ):
     """
     새 인터랙티브 체크리스트 메시지를 상태 파일에 등록합니다.
 
     Parameters
     ----------
-    channel     : Slack 채널 ID (예: "C0XXXXXXXXX")
-    ts          : 메시지 타임스탬프 (chat.postMessage 응답의 ts)
-    schedule_id : config.json 의 스케줄 id
-    title       : 체크리스트 제목
-    items       : 체크리스트 항목 목록
-                  예: [{"value": "item_0", "text": "작업명", "mentions": ["U12345"]}, ...]
+    channel       : Slack 채널 ID (예: "C0XXXXXXXXX")
+    ts            : 메시지 타임스탬프 (chat.postMessage 응답의 ts)
+    schedule_id   : config.json 의 스케줄 id
+    title         : 체크리스트 제목
+    items         : 체크리스트 항목 목록
+                    예: [{"value": "item_0", "text": "작업명", "mentions": ["U12345"]}, ...]
+    schedule_type : config.json 의 type 값 (예: "daily", "weekly", "monthly" 등)
+                    period_label(주차 표시 등) 복원에 사용됩니다.
     """
     state   = _load()
     k       = _key(channel, ts)
     sent_at = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     state[k] = {
-        "channel":     channel,
-        "ts":          ts,
-        "schedule_id": schedule_id,
-        "title":       title,
-        "sent_at":     sent_at,
-        "registered":  datetime.now().isoformat(),
-        "items":       items,
-        "checked":     [],
+        "channel":       channel,
+        "ts":            ts,
+        "schedule_id":   schedule_id,
+        "schedule_type": schedule_type,
+        "title":         title,
+        "sent_at":       sent_at,
+        "registered":    datetime.now().isoformat(),
+        "items":         items,
+        "checked":       [],
     }
     _save(state)
     logger.info(f"체크리스트 등록 완료: {k}  ({len(items)}개 항목)")

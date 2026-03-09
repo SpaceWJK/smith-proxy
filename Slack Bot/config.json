@@ -1,6 +1,8 @@
 {
   "timezone": "Asia/Seoul",
 
+  "monitor_alert_channel": "C0AKPGBSY7K",
+
   "user_map": {
     "U07H17HB4MD": "이동현",
     "U07HFLMSYKV": "류석호",
@@ -16,7 +18,7 @@
       "enabled": true,
       "type": "monthly_last_weekday",
       "day_of_week": "friday",
-      "time": "10:00",
+      "time": "10:10",
       "channel": "C07PHCE4RCM",
       "message_type": "interactive_checklist",
       "title": "📋 퍼블리싱QA1팀 월간 체크리스트",
@@ -86,7 +88,7 @@
       "enabled": true,
       "type": "weekly",
       "day_of_week": "friday",
-      "time": "10:00",
+      "time": "10:05",
       "channel": "C07PHCE4RCM",
       "message_type": "interactive_checklist",
       "title": "📋 주간 QA 보고",
@@ -95,9 +97,9 @@
           "type": "group",
           "group_name": "주간 보고 작성",
           "sub_items": [
-            {"value": "w0_seokho",   "text": "류석호", "mentions": ["U07HFLMSYKV"]},
-            {"value": "w0_donghyun", "text": "이동현", "mentions": ["U07H17HB4MD"]},
-            {"value": "w0_yechan",   "text": "정예찬", "mentions": ["U07H18AD1L7"]}
+            {"value": "w0_cazena",  "text": "[카제나]",  "mentions": ["U07HFLMSYKV"]},
+            {"value": "w0_epic7",   "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
+            {"value": "w0_compat",  "text": "[호환성]",  "mentions": ["U07H18AD1L7"]}
           ]
         }
       ],
@@ -257,6 +259,14 @@
             {"value": "g6_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
             {"value": "g6_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
           ]
+        },
+        {
+          "type": "group",
+          "group_name": "[각 프로젝트] GDI 데이터 파일 업로드",
+          "sub_items": [
+            {"value": "g7_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
+            {"value": "g7_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
+          ]
         }
       ],
       "bot_name": "퍼블리싱QA 알림봇",
@@ -348,6 +358,115 @@
       "message": "🎯 *중요 이벤트 알림*\n오늘 오전 10시에 중요한 일정이 있습니다!\n관련 자료를 미리 준비해주세요.",
       "bot_name": "이벤트 알림봇",
       "bot_emoji": ":bell:"
+    },
+
+    {
+      "id": "mission-ai-driven-qa",
+      "name": "미션 진행 현황 - AI-Driven QA Efficiency",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AJK510DN1",
+      "mission": {
+        "name": "Slack QA - Supporter 활용 가이드",
+        "target_date": "2026-03-27",
+        "channel_name": "AI-Driven QA Efficiency",
+        "sub_tasks": [
+          "활용 예제 탐색 및 프롬프트 설계 → 활용 프롬프트 작성",
+          "가이드 설계 기획 → 가이드 작성",
+          "고도화 및 개선 방안 브레인스토밍 → 결과 보고"
+        ]
+      }
+    },
+
+    {
+      "id": "mission-balance-engineering",
+      "name": "미션 진행 현황 - Balance Engineering",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AJNHQ74TU",
+      "mission": {
+        "name": "미정",
+        "target_date": "",
+        "channel_name": "Balance Engineering",
+        "sub_tasks": [
+          "미정",
+          "미정",
+          "미정"
+        ]
+      }
+    },
+
+    {
+      "id": "mission-data-analysis",
+      "name": "미션 진행 현황 - Data analysis",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AJNHSUTCJ",
+      "mission": {
+        "name": "미정",
+        "target_date": "",
+        "channel_name": "Data analysis",
+        "sub_tasks": [
+          "미정",
+          "미정",
+          "미정"
+        ]
+      }
+    },
+
+    {
+      "id": "mission-knowledge-management",
+      "name": "미션 진행 현황 - Knowledge Management",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AJG69LC3V",
+      "mission": {
+        "name": "미정",
+        "target_date": "",
+        "channel_name": "Knowledge Management",
+        "sub_tasks": [
+          "미정",
+          "미정",
+          "미정"
+        ]
+      }
+    },
+
+    {
+      "id": "mission-roundtable",
+      "name": "미션 진행 현황 - Roundtable",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AKGRX2BKJ",
+      "mission": {
+        "name": "토론 진행 기획",
+        "target_date": "2026-03-27",
+        "channel_name": "Roundtable",
+        "sub_tasks": [
+          "주제 선정 기준",
+          "구성 및 진행 방식",
+          "이번 주제 선정",
+          "고도화 및 개선 방안(다음 미션) 논의"
+        ]
+      }
+    },
+
+    {
+      "id": "mission-tech-support",
+      "name": "미션 진행 현황 - Tech Support",
+      "enabled": true,
+      "type": "mission",
+      "channel": "C0AKGRTU36U",
+      "mission": {
+        "name": "Testrail TC 업로드 자동화",
+        "target_date": "2026-03-27",
+        "channel_name": "Tech Support",
+        "sub_tasks": [
+          "Testrail 이슈 문의 건 처리 현황 정리",
+          "개선/고도화 방안 모색",
+          "사용 가이드 (WiKi)페이지 최신화"
+        ]
+      }
     }
 
   ]

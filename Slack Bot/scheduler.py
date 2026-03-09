@@ -9,6 +9,7 @@ scheduler.py - APScheduler 기반 알림 스케줄 관리
   biweekly             - 격주 특정 요일 HH:MM (start_date 기준)
   nweekly              - N주 간격 특정 요일 HH:MM (week_interval + start_date 기준)
   specific             - 특정 날짜+시간 1회
+  mission              - 미션 진행 현황 리마인더, 평일 09:00~09:30 랜덤 발송
 """
 
 import calendar
@@ -21,6 +22,8 @@ from apscheduler.schedulers.background import BackgroundScheduler   # ← 논블
 from apscheduler.triggers.cron         import CronTrigger
 from apscheduler.triggers.date         import DateTrigger
 from apscheduler.triggers.interval     import IntervalTrigger
+
+import schedule_monitor as sm
 
 logger = logging.getLogger(__name__)
 
@@ -92,13 +95,23 @@ class NotificationScheduler:
     def _make_job(self, s: dict):
         """일반 텍스트/정적 체크리스트 job 생성"""
         def job():
+            sm.log_fired(s["id"])
             self.sender.send(channel=s["channel"], schedule=s)
+        job.__name__ = s.get("name", s["id"])
+        return job
+
+    def _make_mission_job(self, s: dict):
+        """미션 진행 현황 리마인더 job 생성"""
+        def job():
+            sm.log_fired(s["id"])
+            self.sender.send_mission_reminder(s)
         job.__name__ = s.get("name", s["id"])
         return job
 
     def _make_interactive_job(self, s: dict):
         """인터랙티브 체크리스트 job 생성 (전송 후 상태 등록)"""
         def job():
+            sm.log_fired(s["id"])
             import interaction_handler as ih
             import missed_tracker as mt
 
@@ -106,7 +119,15 @@ class NotificationScheduler:
             missed_items = None
             if s.get("check_missed"):
                 try:
+                    # 1차: 로컬 로그 파일 (Railway 재시작 없으면 빠름)
                     missed_items = mt.get_missed_items(self.sender.client)
+                    # 2차 폴백: 로그 파일 없을 때 Slack 채널 히스토리 직접 스캔
+                    if not missed_items:
+                        missed_items = mt.get_missed_items_from_channel(
+                            slack_client = self.sender.client,
+                            channel      = s["channel"],
+                            config_items = s.get("items", []),
+                        )
                     if missed_items:
                         total_missed = sum(len(g["items"]) for g in missed_items)
                         logger.info(
@@ -126,11 +147,12 @@ class NotificationScheduler:
             if ts:
                 # 로컬 봇의 interaction_handler 에 상태 등록
                 ih.register(
-                    channel     = s["channel"],
-                    ts          = ts,
-                    schedule_id = s["id"],
-                    title       = s.get("title", "📋 체크리스트"),
-                    items       = s.get("items", []),
+                    channel       = s["channel"],
+                    ts            = ts,
+                    schedule_id   = s["id"],
+                    title         = s.get("title", "📋 체크리스트"),
+                    items         = s.get("items", []),
+                    schedule_type = s.get("type", ""),
                 )
                 # 다음날 누락 체크를 위해 전송 로그 기록
                 if s.get("check_missed"):
@@ -156,15 +178,17 @@ class NotificationScheduler:
             return self._make_interactive_job(s)
         return self._make_job(s)
 
-    def _register_job(self, s: dict, trigger, desc: str, job_fn=None):
+    def _register_job(self, s: dict, trigger, desc: str, job_fn=None, misfire_grace_time=None):
         """스케줄러에 job 등록"""
         fn = job_fn if job_fn is not None else self._select_job_fn(s)
-        self.scheduler.add_job(
-            fn,
+        kwargs = dict(
             trigger = trigger,
             id      = s["id"],
             name    = s.get("name", s["id"]),
         )
+        if misfire_grace_time is not None:
+            kwargs["misfire_grace_time"] = misfire_grace_time
+        self.scheduler.add_job(fn, **kwargs)
         logger.info(f"  ✅ 등록: [{s.get('name')}]  ({desc})")
 
     # ── 스케줄 타입별 등록 ─────────────────────────────────────
@@ -173,8 +197,8 @@ class NotificationScheduler:
         h, m = self._parse_hm(s["time"])
         self._register_job(
             s,
-            CronTrigger(hour=h, minute=m, timezone=self.tz),
-            f"매일 {s['time']}",
+            CronTrigger(day_of_week="mon-fri", hour=h, minute=m, timezone=self.tz),
+            f"평일(월-금) {s['time']}",
         )
 
     def _add_weekly(self, s: dict):
@@ -212,6 +236,7 @@ class NotificationScheduler:
                     f"  ⏭  스킵 (마지막 주 아님): [{s.get('name')}] {today}"
                 )
                 return
+            sm.log_fired(s["id"])
             logger.info(f"  🚀  실행 (마지막 {day_name}): [{s.get('name')}] {today}")
             # message_type 에 맞는 실제 전송 수행
             self._select_job_fn(s)()
@@ -299,6 +324,7 @@ class NotificationScheduler:
                     f"  ⏭  스킵 (분기 첫째 월요일 아님): [{s.get('name')}] {today}"
                 )
                 return
+            sm.log_fired(s["id"])
             quarter = {1: 1, 4: 2, 7: 3, 10: 4}[today.month]
             logger.info(f"  🚀  실행 ({quarter}분기 첫째 월요일): [{s.get('name')}] {today}")
             self._select_job_fn(s)()
@@ -309,6 +335,30 @@ class NotificationScheduler:
             CronTrigger(day_of_week="mon", hour=h, minute=m, timezone=self.tz),
             f"분기 첫째 월요일 {s['time']} (1·4·7·10월 1~7일)",
             job_fn=job,
+        )
+
+    def _add_mission(self, s: dict):
+        """
+        미션 진행 현황 리마인더: 평일 09:00~09:30 사이 랜덤 발송
+
+        APScheduler CronTrigger 의 jitter 파라미터를 사용합니다.
+        jitter=1800 → 09:00 기준 0~1800초(30분) 내 무작위 지연.
+        채널마다 별도 job 이므로 동시 발송 충돌 없이 자연스럽게 분산됩니다.
+
+        misfire_grace_time=7200: Railway 재시작 등으로 jitter 발송 시각이 지났더라도
+        2시간 이내라면 재기동 후 즉시 발송. 기본값(1초)이면 jitter 구간 중 재시작 시 스킵됨.
+        """
+        self._register_job(
+            s,
+            CronTrigger(
+                day_of_week="mon-fri",
+                hour=9, minute=0,
+                timezone=self.tz,
+                jitter=1800,           # 0~30분 랜덤 지연
+            ),
+            "평일 09:00~09:30 (랜덤)",
+            job_fn=self._make_mission_job(s),
+            misfire_grace_time=7200,   # 2시간 — jitter 구간 중 재시작 후에도 당일 발송 보장
         )
 
     def _add_specific(self, s: dict):
@@ -337,14 +387,15 @@ class NotificationScheduler:
         logger.info("━" * 52)
 
         dispatch = {
-            "daily":                self._add_daily,
-            "weekly":               self._add_weekly,
-            "monthly":              self._add_monthly,
+            "daily":                   self._add_daily,
+            "weekly":                  self._add_weekly,
+            "monthly":                 self._add_monthly,
             "monthly_last_weekday":    self._add_monthly_last_weekday,
             "quarterly_first_monday":  self._add_quarterly_first_monday,
             "biweekly":                self._add_biweekly,
             "nweekly":                 self._add_nweekly,
             "specific":                self._add_specific,
+            "mission":                 self._add_mission,
         }
 
         for s in self.config.get("schedules", []):
@@ -362,7 +413,37 @@ class NotificationScheduler:
             except Exception as e:
                 logger.error(f"  ❌ 등록 실패: [{name}] → {e}")
 
+        # ── 스케줄 모니터링 job 등록 ──────────────────────────────────────────
+        self._add_monitor()
         logger.info("━" * 52)
+
+    def _add_monitor(self):
+        """
+        스케줄 미실행 감지 모니터링 job을 등록합니다.
+        평일 18:00 KST 에 실행되어 당일 미실행 스케줄을 Slack으로 알립니다.
+        config.json 에 monitor_alert_channel 이 없으면 등록은 하되 실행 시 건너뜁니다.
+        """
+        config = self.config
+
+        def monitor_job():
+            sm.check_and_alert(config, self.sender.client)
+
+        monitor_job.__name__ = "schedule-monitor"
+        try:
+            self.scheduler.add_job(
+                monitor_job,
+                trigger = CronTrigger(
+                    day_of_week = "mon-fri",
+                    hour        = 18,
+                    minute      = 0,
+                    timezone    = self.tz,
+                ),
+                id   = "schedule-monitor",
+                name = "스케줄 모니터링",
+            )
+            logger.info("  ✅ 등록: [스케줄 모니터링]  (평일 18:00)")
+        except Exception as e:
+            logger.error(f"  ❌ 모니터링 등록 실패: {e}")
 
     def print_schedule(self):
         """등록된 스케줄 및 다음 실행 시각 출력"""

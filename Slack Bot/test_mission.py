@@ -1,6 +1,6 @@
 import sys, json, os
-sys.path.insert(0, r"D:\Vibe Dev\Slack Bot")
-os.chdir(r"D:\Vibe Dev\Slack Bot")
+sys.path.insert(0, r"D:\Vibe Dev\Slack Bot\Slack Bot")
+os.chdir(r"D:\Vibe Dev\Slack Bot\Slack Bot")
 
 # venv 패키지 경로 추가
 sys.path.insert(0, r"D:\Vibe Dev\Slack Bot\venv\Lib\site-packages")

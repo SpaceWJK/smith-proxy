@@ -18,8 +18,8 @@ if %errorlevel% neq 0 (
 )
 
 REM ─── 경로 설정 ─────────────────────────────────────────────────
-set BOT_DIR=D:\Vibe Dev\Slack Bot
-set PYTHONW=%BOT_DIR%\venv\Scripts\pythonw.exe
+set BOT_DIR=D:\Vibe Dev\Slack Bot\Slack Bot
+set PYTHONW=D:\Vibe Dev\Slack Bot\venv\Scripts\pythonw.exe
 set SCRIPT=%BOT_DIR%\slack_bot.py
 set TASK_NAME=SlackQABot
 

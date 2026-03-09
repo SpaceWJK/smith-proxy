@@ -5,14 +5,18 @@ slack_sender.py - Slack Web API 래퍼
   chat:write           - 메시지 전송 (필수)
   chat:write.customize - 봇 이름/이모지 커스터마이즈 (선택)
   channels:read        - 공개 채널 목록
+  channels:history     - 공개 채널 히스토리 읽기 (체크리스트 누락 폴백)
   groups:read          - 비공개 채널 목록
+  groups:history       - 비공개 채널 히스토리·스레드 읽기 (미션 진행율 폴백, 필수)
   users:read           - 사용자 검색 (--find-user 용)
 """
 
 import json
 import logging
 import os
-from datetime import datetime
+import re
+import time
+from datetime import datetime, date as _date
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -88,7 +92,7 @@ class SlackSender:
                     done += 1
         return total, done
 
-    def _build_missed_section_blocks(self, missed_items: list) -> list:
+    def _build_missed_section_blocks(self, missed_items: list, action_id: str = "checklist_toggle") -> list:
         """
         누락 체크리스트 섹션 블록 생성.
 
@@ -140,7 +144,7 @@ class SlackSender:
                     "block_id": f"missed_{i}",
                     "elements": [{
                         "type":      "checkboxes",
-                        "action_id": "checklist_toggle",
+                        "action_id": action_id,
                         "options":   options,
                         # initial_options 없음 (초기 전송 시 모두 미완료)
                     }],
@@ -149,7 +153,7 @@ class SlackSender:
         return blocks
 
     def _rebuild_missed_blocks_checked(
-        self, raw_blocks: list, checked_set: set
+        self, raw_blocks: list, checked_set: set, action_id: str = "checklist_toggle"
     ) -> list:
         """
         메시지에서 추출한 누락 섹션 raw blocks 의 initial_options 를
@@ -176,14 +180,29 @@ class SlackSender:
 
                 options = elem.get("options", [])
                 initial = [opt for opt in options if opt["value"] in checked_set]
-                # initial_options 키 제거 후 재설정
-                new_elem = {k: v for k, v in elem.items() if k != "initial_options"}
+                # initial_options, action_id 제거 후 재설정 (action_id 는 동적으로 교체)
+                new_elem = {k: v for k, v in elem.items() if k not in ("initial_options", "action_id")}
+                new_elem["action_id"] = action_id
                 if initial:
                     new_elem["initial_options"] = initial
                 new_elements.append(new_elem)
 
             result.append({**block, "elements": new_elements})
         return result
+
+    @staticmethod
+    def _compute_period_label(schedule_type: str, dt: "datetime | None" = None) -> str:
+        """
+        스케줄 타입에 따른 기간 레이블 반환.
+
+        - weekly : "2026년 3월 2주차" (월 내 몇 번째 주인지 표시)
+        - 그 외  : "2026년 3월"
+        """
+        now = dt or datetime.now()
+        if schedule_type == "weekly":
+            week_of_month = (now.day - 1) // 7 + 1
+            return f"{now.year}년 {now.month}월 {week_of_month}주차"
+        return f"{now.year}년 {now.month}월"
 
     def _build_interactive_blocks(
         self,
@@ -192,6 +211,8 @@ class SlackSender:
         checked_values: list,
         sent_at: str = "",
         missed_section: list = None,
+        action_id: str = "checklist_toggle",
+        period_label: str = None,
     ) -> list:
         """
         Slack Block Kit 인터랙티브 체크리스트 블록 구성
@@ -205,15 +226,18 @@ class SlackSender:
                                 "sub_items": [{"value": ..., "text": ..., "mentions": ...}, ...]}
         checked_values : 현재 체크된 value 목록
         sent_at        : 최초 발송 시각 문자열 (context 블록 표시용)
+        period_label   : 진행 상태 헤더에 표시할 기간 레이블
+                         (None 이면 "YYYY년 M월" 자동 생성)
         """
         checked_set         = set(checked_values)
         total, done         = self._count_tasks(items, checked_set)
         filled              = int((done / total) * 10) if total > 0 else 0
         bar                 = "▓" * filled + "░" * (10 - filled)
 
-        now          = datetime.now()
-        month_label  = f"{now.year}년 {now.month}월"
-        status_text  = f"*{month_label}*  {bar}  {done}/{total} 완료"
+        now = datetime.now()
+        if period_label is None:
+            period_label = f"{now.year}년 {now.month}월"
+        status_text  = f"*{period_label}*  {bar}  {done}/{total} 완료"
         if done == total and total > 0:
             status_text += "  🎉 *모두 완료!*"
 
@@ -289,7 +313,7 @@ class SlackSender:
 
                 checkbox_elem = {
                     "type":      "checkboxes",
-                    "action_id": "checklist_toggle",
+                    "action_id": action_id,
                     "options":   options,
                 }
                 if initial_options:
@@ -315,7 +339,7 @@ class SlackSender:
                 }
                 checkbox_elem = {
                     "type":      "checkboxes",
-                    "action_id": "checklist_toggle",
+                    "action_id": action_id,
                     "options":   [opt],
                 }
                 if val in checked_set:
@@ -420,7 +444,9 @@ class SlackSender:
         -------
         str  : 전송된 메시지의 ts (타임스탬프). 실패 시 None.
         """
-        sent_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+        now      = datetime.now()
+        sent_at  = now.strftime("%Y-%m-%d %H:%M")
+        period_label = self._compute_period_label(schedule.get("type", ""), now)
 
         # 누락 섹션 블록 빌드 (있을 때만)
         missed_section = (
@@ -434,6 +460,7 @@ class SlackSender:
             checked_values = [],
             sent_at        = sent_at,
             missed_section = missed_section,
+            period_label   = period_label,
         )
 
         kwargs = {
@@ -473,9 +500,26 @@ class SlackSender:
         missed_section : 현재 메시지에서 추출한 전일 누락 섹션 raw blocks
                          (None 이면 누락 섹션 미포함)
         """
+        # ── 동적 action_id 생성 ─────────────────────────────────────────────────
+        # chat.update 마다 action_id 를 바꾸면 Slack 클라이언트가 해당 체크박스를
+        # "새 컴포넌트"로 인식해 initial_options 기준으로 강제 재렌더링합니다.
+        # → A 가 체크한 뒤 B 의 화면도 즉시 갱신되는 핵심 메커니즘.
+        dyn_action_id = f"checklist_toggle_{int(time.time() * 1000)}"
+
+        # ── period_label 복원 ────────────────────────────────────────────────
+        # 최초 발송 시각(sent_at)과 스케줄 타입으로 주차 레이블을 재계산합니다.
+        # 예: weekly → "2026년 3월 2주차" (체크 업데이트 후에도 주차 유지)
+        schedule_type = state.get("schedule_type", "")
+        sent_at_str   = state.get("sent_at", "")
+        try:
+            sent_dt = datetime.strptime(sent_at_str, "%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            sent_dt = None
+        period_label = self._compute_period_label(schedule_type, sent_dt)
+
         rebuilt_missed = (
             self._rebuild_missed_blocks_checked(
-                missed_section, set(state.get("checked", []))
+                missed_section, set(state.get("checked", [])), dyn_action_id
             )
             if missed_section else None
         )
@@ -486,6 +530,8 @@ class SlackSender:
             checked_values = state.get("checked", []),
             sent_at        = state.get("sent_at", ""),
             missed_section = rebuilt_missed,
+            action_id      = dyn_action_id,
+            period_label   = period_label,
         )
         try:
             self.client.chat_update(
@@ -499,6 +545,329 @@ class SlackSender:
         except SlackApiError as e:
             logger.error(f"❌ 메시지 업데이트 실패: {e.response['error']}")
             return False
+
+    # ──────────────────────────────────────────────────────────
+    # 미션 진행 현황 리마인더
+    # ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _make_progress_bar(progress: int, width: int = 10) -> str:
+        """진행율을 이모지 막대 그래프로 변환 (예: ██████░░░░ 60%)"""
+        filled = max(0, min(width, round(progress / 100 * width)))
+        return "█" * filled + "░" * (width - filled)
+
+    @staticmethod
+    def _build_mission_blocks(mission: dict, progress: int) -> list:
+        """
+        미션 진행 현황 블록 생성.
+
+        Parameters
+        ----------
+        mission  : config.json 의 mission 딕셔너리
+        progress : 현재 전체 진행율 (0~100)
+
+        분기
+        ----
+        - name 이 "미정" 또는 빈 값  → 미션 선정 독려 포맷
+        - name 이 확정된 값          → 진행 현황 포맷
+        """
+        name         = mission.get("name", "")
+        channel_name = mission.get("channel_name", "")
+
+        # 날짜 문자열 (Windows 호환)
+        now       = datetime.now()
+        day_names = ["월", "화", "수", "목", "금", "토", "일"]
+        date_str  = f"{now.year}년 {now.month}월 {now.day}일 ({day_names[now.weekday()]})"
+
+        footer = {
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": f"📢  #{channel_name}   |   {date_str}   |   자동 알림",
+            }],
+        }
+
+        # ── 미션 미정 → 선정 독려 포맷 ───────────────────────────────────────
+        if not name or name.strip() in ("미정",):
+            return [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "📊 미션 진행 현황", "emoji": True},
+                },
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "⏳  *미션 선정 대기 중*"},
+                },
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            "💬  *아직 이 채널의 미션이 정해지지 않았어요!*\n"
+                            "     빨리 미션을 확정하고 도전을 시작해 봐요 🔥"
+                        ),
+                    },
+                },
+                {"type": "divider"},
+                footer,
+            ]
+
+        # ── 미션 확정 → 진행 현황 포맷 ───────────────────────────────────────
+        target_str = mission.get("target_date", "")
+
+        # D-day 계산 (target_date 가 비어있거나 파싱 불가하면 "미정" 표시)
+        try:
+            if not target_str:
+                raise ValueError("target_date 미지정")
+            target    = _date.fromisoformat(target_str)
+            today     = _date.today()
+            days_left = (target - today).days
+            target_display = f"{target.month:02d}.{target.day:02d}"
+            if days_left > 0:
+                dday = f"D-{days_left}"
+            elif days_left == 0:
+                dday = "D-DAY 🔥"
+            else:
+                dday = f"D+{abs(days_left)} (기한초과)"
+        except Exception:
+            target_display = target_str if target_str else "미정"
+            dday = ""
+
+        # 진행 막대
+        bar         = SlackSender._make_progress_bar(progress)
+        is_complete = progress >= 100
+
+        # 진행율 텍스트
+        progress_text = f"`{bar}`  *{progress}%*"
+        if is_complete:
+            progress_text = f"✅ *미션 완료!*\n`{bar}`  *{progress}%*"
+
+        # 서브 태스크 텍스트 (있을 때만)
+        sub_tasks     = mission.get("sub_tasks", [])
+        sub_task_text = "\n".join(f"▸  {t}" for t in sub_tasks) if sub_tasks else ""
+
+        blocks = [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "📊 미션 진행 현황", "emoji": True},
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*🎯  {name}*\n"
+                        f"📅  목표일: `{target_display}`"
+                        + (f"   ⏰  `{dday}`" if dday else "")
+                    ),
+                },
+            },
+            {"type": "divider"},
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*전체 진행율*\n{progress_text}",
+                },
+            },
+        ]
+
+        # 서브 태스크 섹션 (config 에 sub_tasks 가 있을 때만 추가)
+        if sub_task_text:
+            blocks += [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Sub Task*\n{sub_task_text}",
+                    },
+                },
+            ]
+
+        # 진행율 댓글 요청 (미완료 시에만 표시)
+        if not is_complete:
+            blocks += [
+                {"type": "divider"},
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            "💬  *업무 마감 전, 이 메시지의 스레드에 현재 진행율(%)을 댓글로 남겨주세요!*\n"
+                            "> 예시: `현재 진행율 35%`"
+                        ),
+                    },
+                },
+            ]
+
+        blocks.append(footer)
+        return blocks
+
+    def _read_thread_progress(self, channel: str, ts: str, default: int) -> int:
+        """
+        지난 미션 메시지의 스레드에서 최신 진행율(%) 파싱.
+
+        담당자가 스레드에 '65%', '진행율 70%' 등 형태로 업데이트하면
+        가장 최근 답글에서 숫자% 를 추출합니다.
+        파싱 실패 또는 스레드가 없으면 default 값을 그대로 반환합니다.
+        """
+        try:
+            resp     = self.client.conversations_replies(channel=channel, ts=ts)
+            messages = resp.get("messages", [])
+            # messages[0] = 봇의 원본 메시지, [1:] = 담당자 스레드 답글
+            for msg in reversed(messages[1:]):
+                text  = msg.get("text", "")
+                match = re.search(r'(\d{1,3})\s*%', text)
+                if match:
+                    pct = int(match.group(1))
+                    if 0 <= pct <= 100:
+                        logger.info(
+                            f"[미션 스레드] 진행율 파싱: {pct}%  "
+                            f"(작성자: {msg.get('user', '?')})"
+                        )
+                        return pct
+        except Exception as e:
+            logger.warning(f"[미션 스레드] 읽기 실패 → default({default}%) 유지: {e}")
+        return default
+
+    def _find_last_mission_ts(self, channel: str, days_back: int = 7) -> str:
+        """
+        Railway 재배포로 mission_state.json이 초기화된 경우를 위한 폴백.
+
+        채널 히스토리를 직접 스캔하여 봇이 보낸 가장 최근의 미션 알림
+        메시지 ts를 반환합니다.
+
+        Parameters
+        ----------
+        channel   : Slack 채널 ID
+        days_back : 몇 일 전까지 소급 탐색할지 (기본 7일)
+
+        Returns
+        -------
+        str  : 발견된 메시지 ts. 없으면 None.
+        """
+        oldest = time.time() - days_back * 86400   # days_back일 전 Unix timestamp
+
+        try:
+            resp = self.client.conversations_history(
+                channel   = channel,
+                oldest    = str(oldest),
+                limit     = 20,
+            )
+        except Exception as e:
+            logger.warning(f"[미션 폴백] 채널 히스토리 조회 실패 ({channel}): {e}")
+            return None
+
+        for msg in resp.get("messages", []):
+            for block in msg.get("blocks", []):
+                if (
+                    block.get("type") == "header"
+                    and "미션 진행 현황" in block.get("text", {}).get("text", "")
+                ):
+                    ts = msg.get("ts")
+                    logger.info(
+                        f"[미션 폴백] 채널 히스토리에서 이전 미션 ts 발견: "
+                        f"{channel} / ts={ts}"
+                    )
+                    return ts
+
+        logger.info(f"[미션 폴백] 채널 히스토리에서 이전 미션 메시지 없음: {channel}")
+        return None
+
+    def _load_mission_state(self) -> dict:
+        """mission_state.json 로드 (없으면 빈 dict)"""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mission_state.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+        except Exception as e:
+            logger.warning(f"[미션 상태] 로드 실패: {e}")
+            return {}
+
+    def _save_mission_state(self, state: dict) -> None:
+        """mission_state.json 저장"""
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mission_state.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[미션 상태] 저장 실패: {e}")
+
+    def send_mission_reminder(self, schedule: dict):
+        """
+        미션 진행 현황 리마인더 전송.
+
+        흐름
+        ----
+        1. mission_state.json 에서 이전 ts 및 진행율 로드
+        2. 이전 ts 가 있으면 해당 스레드에서 최신 진행율 파싱
+        3. 미션 블록 빌드 후 채널에 전송
+        4. 새 ts + 진행율을 mission_state.json 에 저장
+
+        Returns
+        -------
+        str  : 전송된 메시지 ts. 실패 시 None.
+        """
+        mission    = schedule.get("mission", {})
+        channel    = schedule["channel"]
+        mission_id = schedule["id"]
+
+        # 이전 상태 로드
+        all_state = self._load_mission_state()
+        ms        = all_state.get(mission_id, {})
+        progress  = ms.get("progress", 0)
+        last_ts   = ms.get("last_ts")
+
+        # 스레드에서 최신 진행율 업데이트
+        # mission_state.json이 Railway 재배포로 소실된 경우 채널 히스토리에서 복원
+        if not last_ts:
+            last_ts = self._find_last_mission_ts(channel)
+        if last_ts:
+            progress = self._read_thread_progress(channel, last_ts, progress)
+
+        # 블록 빌드 & 전송
+        blocks = self._build_mission_blocks(mission, progress)
+        _name  = mission.get("name", "")
+        _fallback_text = (
+            "📊 미션 진행 현황 (미선정)"
+            if not _name or _name.strip() in ("미정",)
+            else _name
+        )
+        kwargs = {
+            "channel": channel,
+            "text":    _fallback_text,
+            "blocks":  blocks,
+        }
+        if "bot_name"  in schedule: kwargs["username"]   = schedule["bot_name"]
+        if "bot_emoji" in schedule: kwargs["icon_emoji"] = schedule["bot_emoji"]
+
+        try:
+            res = self.client.chat_postMessage(**kwargs)
+            ts  = res["ts"]
+            logger.info(
+                f"✅ 미션 리마인더 전송 | [{schedule.get('name')}] "
+                f"→ {channel} | {progress}% | ts: {ts}"
+            )
+            # 상태 저장
+            all_state[mission_id] = {
+                "channel":  channel,
+                "last_ts":  ts,
+                "progress": progress,
+            }
+            self._save_mission_state(all_state)
+            return ts
+        except SlackApiError as e:
+            logger.error(
+                f"❌ 미션 리마인더 전송 실패 | "
+                f"[{schedule.get('name')}] {e.response['error']}"
+            )
+            return None
 
     # ──────────────────────────────────────────────────────────
     # 유틸리티

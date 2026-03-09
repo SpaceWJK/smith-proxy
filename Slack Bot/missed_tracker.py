@@ -187,6 +187,128 @@ def _fetch_checked_values(slack_client, channel: str, ts: str):
         return None
 
 
+def _prev_weekday_dates(max_days: int = 3) -> list:
+    """
+    오늘 기준 직전 평일 날짜를 최대 max_days 개 반환합니다 (최근순).
+    예: 월요일 → ['2026-03-06', '2026-03-05', '2026-03-04']
+    """
+    dates   = []
+    cur     = datetime.now(_KST)
+    i       = 1
+    while len(dates) < max_days:
+        d = (cur - timedelta(days=i)).date()
+        if d.weekday() < 5:          # 월~금만
+            dates.append(d.strftime("%Y-%m-%d"))
+        i += 1
+        if i > max_days + 4:         # 무한 루프 방지
+            break
+    return dates
+
+
+def get_missed_items_from_channel(
+    slack_client,
+    channel:      str,
+    config_items: list,
+    date_str:     str = None,
+) -> list:
+    """
+    Slack 채널 히스토리를 직접 스캔하여 전일 체크리스트 누락 항목을 반환합니다.
+
+    Railway 재시작으로 로컬 로그 파일이 없을 때 사용하는 폴백입니다.
+    date_str 생략 시 가장 최근 평일(최대 3 평일 전)을 순서대로 탐색합니다.
+
+    반환 형식은 get_missed_items 와 동일합니다.
+    """
+    flat_config = extract_flat_items(config_items)
+    if not flat_config:
+        return []
+
+    search_dates = [date_str] if date_str else _prev_weekday_dates(max_days=3)
+
+    for target in search_dates:
+        try:
+            target_dt = datetime.strptime(target, "%Y-%m-%d")
+        except ValueError:
+            continue
+
+        start_ts = _KST.localize(target_dt.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )).timestamp()
+        end_ts = _KST.localize(target_dt.replace(
+            hour=23, minute=59, second=59, microsecond=0
+        )).timestamp()
+
+        try:
+            resp = slack_client.conversations_history(
+                channel   = channel,
+                oldest    = str(start_ts),
+                latest    = str(end_ts),
+                inclusive = True,
+                limit     = 50,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[missed-fallback] 채널 히스토리 조회 실패 ({channel}/{target}): {e}"
+            )
+            continue
+
+        for msg in resp.get("messages", []):
+            blocks = msg.get("blocks", [])
+
+            # 인터랙티브 체크리스트 메시지 식별
+            # (action_id 가 "checklist_toggle" 으로 시작하는 checkboxes 블록)
+            is_checklist = any(
+                elem.get("type") == "checkboxes"
+                and elem.get("action_id", "").startswith("checklist_toggle")
+                for block in blocks
+                if block.get("type") == "actions"
+                   and not block.get("block_id", "").startswith("missed_")
+                for elem in block.get("elements", [])
+            )
+            if not is_checklist:
+                continue
+
+            # 체크된 항목 수집 (initial_options)
+            checked_values: set = set()
+            for block in blocks:
+                if block.get("type") != "actions":
+                    continue
+                if block.get("block_id", "").startswith("missed_"):
+                    continue
+                for elem in block.get("elements", []):
+                    if elem.get("type") == "checkboxes":
+                        for opt in elem.get("initial_options", []):
+                            checked_values.add(opt["value"])
+
+            # 미완료 항목 계산
+            unchecked = [
+                item for item in flat_config
+                if item["value"] not in checked_values
+            ]
+
+            if not unchecked:
+                logger.info(f"[missed-fallback] {target} 체크리스트 누락 없음 ✅")
+                return []
+
+            day_kr  = _DAY_KR[target_dt.weekday()]
+            label   = f"[일일] {target_dt.strftime('%m/%d')}({day_kr})"
+            remapped = [
+                {
+                    "value":    f"missed_0_{item['value']}",
+                    "text":     item["text"],
+                    "mentions": item.get("mentions", []),
+                }
+                for item in unchecked
+            ]
+            logger.info(
+                f"[missed-fallback] {target} 채널 스캔으로 누락 {len(remapped)}개 발견"
+            )
+            return [{"label": label, "items": remapped}]
+
+    logger.info(f"[missed-fallback] 채널 히스토리에서 전일 체크리스트 없음: {channel}")
+    return []
+
+
 def get_missed_items(slack_client, date_str: str = None) -> list:
     """
     전일 전송된 체크리스트 메시지에서 미완료(체크 안 된) 항목을 조회합니다.

@@ -43,6 +43,113 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ── /wiki 검색 전략 예외처리 규칙 시스템 ──────────────────────────────────────
+# wiki_search_rules.json 에 페이지별 예외 규칙을 정의합니다.
+# 규칙이 없는 페이지 / 조건은 모두 기본 동작(페이지 직접 조회)을 사용합니다.
+
+_WIKI_RULES_PATH  = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "wiki_search_rules.json"
+)
+_wiki_rules_cache     = None   # None = 미로드, [] = 로드 완료(규칙 없음), [..] = 규칙 있음
+_wiki_rules_mtime     = 0.0    # 마지막으로 로드한 파일 mtime (변경 감지 hot reload용)
+
+
+def _load_wiki_search_rules() -> list:
+    """
+    wiki_search_rules.json 에서 활성화된 규칙 목록을 로드합니다.
+    파일이 변경된 경우 자동으로 다시 로드합니다 (hot reload).
+
+    Returns: 활성 규칙 list (파일 없거나 오류 시 [])
+    """
+    import json as _json
+    global _wiki_rules_cache, _wiki_rules_mtime
+
+    # ── hot reload: 파일 mtime 비교 ────────────────────────────────────────
+    try:
+        cur_mtime = os.path.getmtime(_WIKI_RULES_PATH)
+    except FileNotFoundError:
+        if _wiki_rules_cache is None:
+            logger.info("[wiki][규칙] wiki_search_rules.json 없음 — 기본 전략 사용")
+            _wiki_rules_cache = []
+        return _wiki_rules_cache
+
+    if _wiki_rules_cache is not None and cur_mtime == _wiki_rules_mtime:
+        return _wiki_rules_cache   # 변경 없음 → 캐시 반환
+
+    # ── 파일 로드 ─────────────────────────────────────────────────────────
+    try:
+        with open(_WIKI_RULES_PATH, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        _wiki_rules_cache = [r for r in data.get("rules", []) if r.get("enabled", True)]
+        _wiki_rules_mtime = cur_mtime
+        logger.info(
+            f"[wiki][규칙] {len(_wiki_rules_cache)}개 규칙 로드"
+            f"{' (변경 감지 — hot reload)' if _wiki_rules_mtime else ''}"
+        )
+    except Exception as e:
+        logger.warning(f"[wiki][규칙] 로드 실패: {e}")
+        _wiki_rules_cache = []
+
+    return _wiki_rules_cache
+
+
+def _find_matching_rule(page_part: str, question: str) -> "dict | None":
+    """
+    page_part + question 에 일치하는 예외처리 규칙을 반환합니다.
+    경로(A > B > C 또는 A / B / C) 형식이면 leaf 제목만 추출해 매칭합니다.
+    일치하는 규칙이 없으면 None 반환 → 기본 동작 사용.
+
+    Parameters
+    ----------
+    page_part : str   /wiki 명령의 페이지 부분 (예: "2026_MGQA", "A > B > 2026_MGQA")
+    question  : str   /wiki 명령의 질문 부분   (예: "에픽세븐 가장 최근 업무 내역 요약")
+    """
+    rules = _load_wiki_search_rules()
+    if not rules:
+        return None
+
+    # 경로 구분자가 있으면 leaf 제목만 추출 (규칙은 페이지 제목 단위로 정의됨)
+    if " / " in page_part:
+        leaf = page_part.split(" / ")[-1].strip()
+    elif ">" in page_part:
+        leaf = page_part.split(">")[-1].strip()
+    else:
+        leaf = page_part.strip()
+
+    q_lower = question.lower()
+
+    for rule in rules:
+        pattern    = rule.get("page_pattern", "")
+        match_type = rule.get("match_type", "exact")
+        keywords   = rule.get("trigger", {}).get("keywords", [])
+
+        # ── 페이지 패턴 매칭 ────────────────────────────────────────────
+        if match_type == "exact":
+            page_matched = (leaf == pattern)
+        elif match_type == "contains":
+            page_matched = (pattern in leaf)
+        elif match_type == "startswith":
+            page_matched = leaf.startswith(pattern)
+        elif match_type == "regex":
+            page_matched = bool(re.search(pattern, leaf))
+        else:
+            page_matched = False
+
+        if not page_matched:
+            continue
+
+        # ── 질문 키워드 매칭 ────────────────────────────────────────────
+        if any(kw in q_lower for kw in keywords):
+            logger.info(
+                f"[wiki][규칙매칭] id={rule.get('id')} "
+                f"page='{leaf}' strategy='{rule.get('strategy')}' "
+                f"(질문: '{question[:30]}...')"
+            )
+            return rule
+
+    return None
+
+
 # ── /wiki (페이지 조회) 헬퍼 ──────────────────────────────────────────────────
 
 def _wiki_help(respond):
@@ -51,7 +158,8 @@ def _wiki_help(respond):
         "*📄 /wiki 페이지 조회 도움말*\n\n"
         "```\n"
         "/wiki [페이지 제목]                       페이지 내용 전체 조회\n"
-        "/wiki [상위] > [하위] > [페이지]          계층 경로로 페이지 조회\n"
+        "/wiki [상위] > [하위] > [페이지]          계층 경로로 페이지 조회 (봇 포맷)\n"
+        "/wiki [상위] / [하위] / [페이지]          Confluence 경로 복사 그대로 사용 가능\n"
         "/wiki [페이지 제목] | [질문]              페이지 내용 기반 AI 답변 (Claude)\n"
         "/wiki [상위] > [페이지] | [질문]          경로 지정 + AI 답변\n"
         "/wiki search [검색어]                     키워드로 페이지 목록 검색\n"
@@ -60,20 +168,23 @@ def _wiki_help(respond):
         "예시:\n"
         "• `/wiki Game Service 1`\n"
         "• `/wiki 프로젝트 현황 > Game Service 1`\n"
+        "• `/wiki 프로젝트 현황 / Game Service 1`  ← Confluence 경로 복사 사용\n"
         "• `/wiki Game Service 1 | QA 일정 알려줘`\n"
         "• `/wiki 프로젝트 현황 > Game Service 1 | QA 일정이 어떻게 되나요?`\n"
         "• `/wiki search QA 일정`\n\n"
-        "💡 `>` 는 Confluence 페이지 계층 구조를 나타냅니다.\n"
-        "동일 제목의 페이지가 여러 곳에 있을 때 조상 경로로 구분하세요."
+        "💡 Confluence 브레드크럼 경로를 그대로 복사해서 사용할 수 있습니다.\n"
+        "동일 제목의 페이지가 여러 곳에 있을 때 경로로 구분하세요."
     ))
 
 
 def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True):
     """
-    '>' 구분자 유무에 따라 적합한 방식으로 Confluence 페이지를 조회합니다.
+    경로 구분자 유무에 따라 적합한 방식으로 Confluence 페이지를 조회합니다.
 
-    - '>' 포함 → 조상 기반 CQL 검색 (get_page_by_path)
-    - '>' 없음  → 제목 직접 검색   (get_page_by_title)
+    지원하는 경로 구분자:
+    - '>'       → /wiki A > B > C  (봇 전용 포맷)
+    - ' / '     → /wiki A / B / C  (Confluence 브레드크럼 복사 포맷)
+    - 구분자 없음 → 제목 직접 검색
 
     Parameters
     ----------
@@ -83,8 +194,15 @@ def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True):
 
     Returns: (page_dict | None, error_str | None)
     """
-    if ">" in page_part:
-        segments   = [s.strip() for s in page_part.split(">")]
+    # Confluence 브레드크럼( A / B / C ) 또는 봇 포맷( A > B > C ) 모두 지원
+    if " / " in page_part:
+        segments = [s.strip() for s in page_part.split(" / ")]
+    elif ">" in page_part:
+        segments = [s.strip() for s in page_part.split(">")]
+    else:
+        segments = []
+
+    if segments:
         leaf_title = segments[-1]
         ancestors  = segments[:-1]
         return client.get_page_by_path(ancestors, leaf_title,
@@ -487,7 +605,8 @@ def _reconstruct_checklist_state(body: dict, checked: list):
             break
 
     # ── 3. items: config.json 에서 title 로 스케줄 매칭 ────────────────────
-    items: list = []
+    items: list      = []
+    schedule_type: str = ""
     try:
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
         with open(config_path, "r", encoding="utf-8") as f:
@@ -498,8 +617,9 @@ def _reconstruct_checklist_state(body: dict, checked: list):
         logger.info(f"[체크리스트 재구성] 정규화 타이틀: {title_norm!r}")
         for sched in cfg.get("schedules", []):
             if _normalize_title(sched.get("title", "")) == title_norm:
-                items = sched.get("items", [])
-                logger.info(f"[체크리스트 재구성] config 매칭 성공: {len(items)}개")
+                items         = sched.get("items", [])
+                schedule_type = sched.get("type", "")
+                logger.info(f"[체크리스트 재구성] config 매칭 성공: {len(items)}개 / type={schedule_type!r}")
                 break
     except Exception as e:
         logger.warning(f"[체크리스트 재구성] config.json 로드 실패: {e}")
@@ -533,10 +653,11 @@ def _reconstruct_checklist_state(body: dict, checked: list):
         f"items={len(items)}개  checked={len(checked)}개"
     )
     return {
-        "title":   title,
-        "items":   items,
-        "checked": checked,
-        "sent_at": sent_at,
+        "title":         title,
+        "items":         items,
+        "checked":       checked,
+        "sent_at":       sent_at,
+        "schedule_type": schedule_type,
     }
 
 
@@ -553,71 +674,78 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
     """
     app = App(token=bot_token)
 
-    @app.action("checklist_toggle")
+    @app.action(re.compile(r"^checklist_toggle"))
     def handle_checklist_toggle(ack, body):
         """
         사용자가 체크리스트를 체크/언체크할 때 호출됩니다.
         - ack() 로 Slack 에 즉시 응답 (3초 이내 필수)
         - 상태 파일 갱신 후 chat.update 로 메시지 동기화
+
+        [다중 사용자 동기화 전략]
+        체크박스 action_id 는 chat.update 마다 동적으로 변경됩니다 (checklist_toggle_{ts_ms}).
+        따라서 핸들러는 re.compile(r"^checklist_toggle") 로 모든 버전을 수신합니다.
+
+        merge 전략:
+          1. ih.get_by_ts() — 파일 기반 권위있는 서버 상태 (conversations.history 불필요)
+          2. body["message"]["blocks"] 의 options(전체 옵션 목록) 에서
+             인터랙션된 block_id 의 가능한 모든 값 제거
+             (initial_options 는 stale 할 수 있으나 options 목록은 항상 고정)
+          3. body["state"]["values"] 의 새 선택값 추가
         """
         ack()   # Slack 에 즉시 응답
 
         channel = body["channel"]["id"]
         ts      = body["message"]["ts"]
 
-        # ── 다중 사용자 동기화: conversations.history 로 서버 최신 상태 조회 ──────
+        # ── Step 1: ih.get_by_ts() 에서 권위있는 서버 최신 체크 상태 로드 ──────
+        # conversations.history (groups:history 권한 필요) 를 사용하지 않고
+        # interaction_handler 의 파일 기반 상태를 source of truth 로 사용합니다.
+        # → ih 는 toggle 마다 갱신되므로 항상 최신 서버 상태를 반영합니다.
+        existing_state = ih.get_by_ts(channel, ts)
+        if existing_state:
+            current_checked: set = set(existing_state.get("checked", []))
+            logger.debug(f"[toggle] ih 상태 로드: checked={len(current_checked)}개")
+        else:
+            # ih 에 없을 때: body["message"]["blocks"] 의 initial_options 에서 초기값 복원
+            current_checked = set()
+            for block in body.get("message", {}).get("blocks", []):
+                if block.get("type") == "actions":
+                    for elem in block.get("elements", []):
+                        if elem.get("type") == "checkboxes":
+                            for opt in elem.get("initial_options", []):
+                                current_checked.add(opt["value"])
+            logger.debug(f"[toggle] ih 상태 없음 → body fallback: checked={len(current_checked)}개")
+
+        # ── Step 2: body["actions"] 의 실제 인터랙션 delta 만 적용 ──────────────
         #
-        # [기존 문제] body["message"]["blocks"] 는 사용자가 클릭할 당시
-        #   자신의 클라이언트에 렌더된 메시지 상태입니다.
-        #   다른 사람이 먼저 체크했더라도 본인 화면이 아직 갱신되지 않았다면
-        #   구버전 blocks 가 전달되어 → merge 시 이미 체크된 항목이 사라집니다.
+        # [왜 body["state"]["values"] 를 쓰지 않는가]
+        # state.values 는 메시지 내 모든 체크박스 블록의 상태를 담고 있습니다.
+        # 하지만 이 값은 B의 "클라이언트 렌더 상태"에 기반하므로 stale 할 수 있습니다.
+        #   → A가 5개 체크 후 B가 즉시 클릭하면, B 화면이 아직 갱신 안 된 경우
+        #     state.values 의 다른 블록들은 모두 빈 selected_options 로 전달됨
+        #   → Step 3+4 에서 ih 의 A의 5개가 모두 제거되고 B의 1개만 남는 버그 발생
         #
-        # [해결] conversations.history 로 서버의 진짜 최신 블록을 직접 조회합니다.
-        #   이를 "서버 진실(source of truth)"로 삼아 merge 하면
-        #   사용자 클라이언트의 렌더 시점에 무관하게 일관된 상태가 유지됩니다.
+        # [body["actions"] 를 사용하는 이유]
+        # actions 는 이번 인터랙션에서 실제로 변경된 블록만 포함하며 신뢰할 수 있습니다.
+        # 각 action 의 selected_options 는 해당 블록의 최신 완전한 선택 상태입니다.
+        #   → ih state (A의 5개) + actions delta (B가 클릭한 블록만 교체) = 정확한 merge
+        for action in body.get("actions", []):
+            if action.get("type") != "checkboxes":
+                continue
 
-        live_blocks: list = []
-        try:
-            hist = slack_sender.client.conversations_history(
-                channel   = channel,
-                latest    = ts,
-                oldest    = ts,
-                inclusive = True,
-                limit     = 1,
-            )
-            live_blocks = hist.get("messages", [{}])[0].get("blocks", [])
-            logger.debug(f"[toggle] conversations.history 조회 성공: {len(live_blocks)}개 블록")
-        except Exception as e:
-            # conversations.history 실패 시 body 의 blocks 로 fallback
-            logger.warning(f"[toggle] conversations.history 조회 실패, body 사용: {e}")
-            live_blocks = body.get("message", {}).get("blocks", [])
+            action_block_id = action.get("block_id", "")
 
-        # Step 1: 서버 최신 initial_options → 현재 전체 체크 상태
-        current_checked: set = set()
-        for block in live_blocks:
-            if block.get("type") == "actions":
-                for elem in block.get("elements", []):
-                    if elem.get("type") == "checkboxes":
-                        for opt in elem.get("initial_options", []):
-                            current_checked.add(opt["value"])
+            # 해당 블록의 모든 가능한 옵션값 제거 (이 블록 전체를 새 값으로 교체)
+            for block in body.get("message", {}).get("blocks", []):
+                if block.get("block_id", "") == action_block_id:
+                    for elem in block.get("elements", []):
+                        if elem.get("type") == "checkboxes":
+                            for opt in elem.get("options", []):
+                                current_checked.discard(opt["value"])
 
-        # Step 2: 이번 인터랙션이 영향을 준 block_id 목록
-        interacted_block_ids = set(body.get("state", {}).get("values", {}).keys())
-
-        # Step 3: 인터랙션된 블록의 이전 initial_options 를 제거 (새 값으로 교체 예정)
-        for block in live_blocks:
-            if block.get("block_id", "") in interacted_block_ids:
-                for elem in block.get("elements", []):
-                    if elem.get("type") == "checkboxes":
-                        for opt in elem.get("initial_options", []):
-                            current_checked.discard(opt["value"])
-
-        # Step 4: state.values 의 현재 선택 상태를 추가 (이번 인터랙션 블록 최신값)
-        for block_state in body.get("state", {}).get("values", {}).values():
-            for action_state in block_state.values():
-                if action_state.get("type") == "checkboxes":
-                    for opt in action_state.get("selected_options", []):
-                        current_checked.add(opt["value"])
+            # 해당 블록의 최신 선택 상태 추가
+            for opt in action.get("selected_options", []):
+                current_checked.add(opt["value"])
 
         checked: list = list(current_checked)
 
@@ -627,8 +755,6 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         )
 
         # 상태 갱신 (상태 파일 우선 → 없으면 body + config.json 으로 재구성)
-        # Railway(스케줄러)와 로컬 PC(커맨드 핸들러)가 분리된 환경에서는
-        # 로컬에 state.json 이 없으므로 fallback 재구성이 필요합니다.
         state = ih.update_checked(channel, ts, checked)
         if state is None:
             logger.info("상태 파일 미등록 → Slack body 에서 상태 재구성 시도")
@@ -638,12 +764,13 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 return
 
         # ── 전일 누락 섹션 추출 (block_id="missed_divider" sentinel 기준) ──────
-        # live_blocks (서버 최신) 기준으로 추출합니다.
-        # 누락 섹션 블록은 모두 "missed_" 로 시작하는 block_id 를 가집니다.
-        # footer(구분자 + context 타임스탬프)에는 block_id 가 없으므로 자연히 경계가 구분됩니다.
+        # body["message"]["blocks"] 에서 추출합니다.
+        # 누락 섹션의 options 목록은 변하지 않으므로 stale body 여도 안전합니다.
+        # (initial_options 는 _rebuild_missed_blocks_checked 에서 재계산됩니다)
+        body_blocks     = body.get("message", {}).get("blocks", [])
         missed_section: list = []
         in_missed       = False
-        for _blk in live_blocks:
+        for _blk in body_blocks:
             bid = _blk.get("block_id", "")
             if bid == "missed_divider":
                 in_missed = True
@@ -691,8 +818,35 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             page_part = page_part.strip()
             question  = question.strip()
             if page_part and question:
-                respond(text=f"🔍 *{page_part}* 페이지 조회 중...")
-                page, err = _wiki_fetch_page(client, page_part)
+                # ── 페이지별 예외처리 규칙 확인 ──────────────────────────────
+                matched_rule = _find_matching_rule(page_part, question)
+                strategy = matched_rule.get("strategy") if matched_rule else None
+
+                if strategy == "get_latest_descendant":
+                    # leaf 제목 추출 (경로 형식 대응)
+                    if " / " in page_part:
+                        leaf = page_part.split(" / ")[-1].strip()
+                    elif ">" in page_part:
+                        leaf = page_part.split(">")[-1].strip()
+                    else:
+                        leaf = page_part.strip()
+
+                    respond(text=f"🔍 *{leaf}* — 최신 하위 페이지 조회 중...")
+                    page, err = client.get_latest_descendant(leaf)
+
+                    # 하위 페이지가 없으면 원래 페이지 직접 조회로 폴백
+                    if err:
+                        logger.warning(
+                            f"[wiki][규칙폴백] get_latest_descendant 실패 → "
+                            f"페이지 직접 조회 폴백: {err}"
+                        )
+                        respond(text=f"⚠️ 하위 페이지 조회 실패, 원래 페이지 조회로 전환 중...")
+                        page, err = _wiki_fetch_page(client, page_part)
+                else:
+                    # 기본 동작: 페이지 직접 조회
+                    respond(text=f"🔍 *{page_part}* 페이지 조회 중...")
+                    page, err = _wiki_fetch_page(client, page_part)
+
                 if err:
                     respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
                     return
