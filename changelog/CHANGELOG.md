@@ -5,8 +5,8 @@
 > **버전 규칙 (Semantic Versioning)**
 > - **Major** `x.0.0` : 기존 버전과 호환되지 않는 파격적 변경 (아키텍처 전면 개편 등)
 > - **Minor** `0.x.0` : **새로운 기능 카테고리 추가 시에만** 올림
->   - 현재 기능: ① 슬랙 알리미(스케줄 알림)  ② /wiki 슬래시 커맨드  ③ /gdi 슬래시 커맨드
->   - 네 번째 기능 카테고리 추가 시 → v1.4.0
+>   - 현재 기능: ① 슬랙 알리미(스케줄 알림)  ② /wiki 슬래시 커맨드  ③ /gdi 슬래시 커맨드  ④ /jira 슬래시 커맨드
+>   - 다섯 번째 기능 카테고리 추가 시 → v1.5.0
 > - **Patch** `0.0.x` : 기능 추가 없는 버그 수정 / 기존 기능 개선 / 설정 변경
 >   - 알리미 기능 개선(미션 리마인더 등), wiki 안정화 등은 모두 Patch
 >
@@ -18,7 +18,23 @@
 
 ---
 
-## [1.3.5] - 2026-03-10 <- 현재
+## [1.4.0] - 2026-03-10 <- 현재
+
+### 추가
+- **`/jira` 슬래시 커맨드**: Jira MCP 연동 + 3계층 캐시 통합 (Phase 3)
+  - `jira_client.py` 신규 생성 — JiraClient 클래스 + Slack 포맷 헬퍼
+  - 서브커맨드: `search`, `issue`, `project`, `projects`, `help`
+  - `\` 구분자로 AI 질문 지원: `/jira QASGP-123 \ 이 이슈 요약해줘`
+  - 자동 JQL 변환: 단순 텍스트 → `summary ~ "..." ORDER BY updated DESC`
+  - JQL 직접 입력도 지원 (키워드 자동 감지)
+  - 캐시 정책: 이슈 10분, 프로젝트 1시간, 프로젝트목록 24시간, JQL검색 미캐시
+  - L1 인메모리 (5분) → L2 SQLite → L3 MCP HTTP
+  - `logs/jira_query.log`에 조회 내역 기록
+- **MCP 캐시 Jira TTL 설정**: `config.py`에 `JIRA_ISSUE_TTL_HOURS=0.17`, `JIRA_PROJECT_TTL_HOURS=1`, `JIRA_PROJECTS_TTL_HOURS=24`
+
+---
+
+## [1.3.5] - 2026-03-10
 
 ### 추가
 - **GDI MCP 캐시 통합 (Phase 2)**: `/gdi` 커맨드에 3계층 캐시 적용

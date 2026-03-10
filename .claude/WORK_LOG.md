@@ -5,6 +5,39 @@
 
 ---
 
+## 2026-03-10 (화) — 세션 11
+
+### 완료
+- **v1.4.0: `/jira` 슬래시 커맨드 + Jira MCP 캐시 통합 (Phase 3)**
+  - `jira_client.py` 신규 생성 (480줄)
+    - JiraClient 클래스: search_issues, get_issue, get_all_projects, get_project
+    - 3계층 캐시: L1 인메모리 5분 → L2 SQLite (이슈 10분, 프로젝트 1시간, 목록 24시간) → L3 MCP
+    - 자동 JQL 변환: 텍스트 → `summary ~ "..." ORDER BY updated DESC`
+    - 이슈 키 감지: `^[A-Z][A-Z0-9]+-\d+$` 패턴
+    - Slack 포맷 헬퍼: format_search_results, format_issue, format_project, format_projects_list
+    - Claude AI 컨텍스트 추출: get_issue_context_text, get_search_context_text
+    - 조회 로거: logs/jira_query.log
+  - `slack_bot.py` 수정
+    - /jira 핸들러: search, issue, project, projects, help, 파이프 AI 질문
+    - _jira_* 헬퍼 10개 추가
+  - `.env`에 JIRA_MCP_URL, JIRA_USERNAME, JIRA_TOKEN, JIRA_BASE_URL 추가
+  - `mcp-cache-layer/src/config.py`에 Jira TTL 상수 추가
+  - `IMPLEMENTATION_PLAN.md` Phase 3 완료 표시 + 산출물 기록
+
+### 버전
+- v1.3.5 → **v1.4.0**
+
+### 수정 파일
+- `Slack Bot/jira_client.py` (신규)
+- `Slack Bot/slack_bot.py` (수정 — import + 헬퍼 + 핸들러)
+- `.env` (수정 — Jira 환경변수)
+- `changelog/CHANGELOG.md` (수정 — v1.4.0 기록)
+- `.claude/DEV_RULES.md` (수정 — 구조 + 버전)
+- `mcp-cache-layer/src/config.py` (수정 — Jira TTL)
+- `mcp-cache-layer/docs/IMPLEMENTATION_PLAN.md` (수정 — Phase 3 완료)
+
+---
+
 ## 2026-03-10 (화) — 세션 10
 
 ### 완료

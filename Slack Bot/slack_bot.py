@@ -31,6 +31,7 @@ from slack_sender import SlackSender
 from scheduler    import NotificationScheduler
 import wiki_client as wc
 import gdi_client as gc
+import jira_client as jc
 
 # ── 로그 설정 ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -706,6 +707,150 @@ def _gdi_ask_claude_list(file_list_text: str, source_label: str,
     _gdi_claude_call(prompt, source_label, question, respond)
 
 
+# ── /jira 헬퍼 함수 ──────────────────────────────────────────────────────
+
+def _jira_help(respond):
+    """Jira 도움말"""
+    respond(text=(
+        "*:ticket: /jira 도움말*\n\n"
+        "```\n"
+        "/jira search [텍스트 or JQL]          이슈 검색\n"
+        "/jira issue [PROJ-123]                이슈 상세\n"
+        "/jira project [KEY]                   프로젝트 정보\n"
+        "/jira projects                        프로젝트 목록\n"
+        "/jira [이슈키] \\ [질문]               이슈 조회 + AI 답변\n"
+        "/jira [검색어] \\ [질문]               이슈 검색 + AI 답변\n"
+        "/jira help                            이 도움말\n"
+        "```\n\n"
+        "*검색 팁:*\n"
+        "• 단순 텍스트 → 제목 검색 (예: `/jira search 로그인 오류`)\n"
+        "• JQL 직접 입력 가능 (예: `/jira search project=QASGP AND status=Open`)\n"
+        "• 이슈 키만 입력하면 바로 조회 (예: `/jira QASGP-123`)"
+    ))
+
+
+def _jira_search(client, jql: str, user_id: str, user_name: str,
+                  respond):
+    """JQL 검색 결과 표시"""
+    t0 = time.time()
+    data, err = client.search_issues(jql)
+    elapsed = int((time.time() - t0) * 1000)
+    if err:
+        respond(text=f":x: Jira 검색 실패\n```\n{err}\n```")
+        jc.log_jira_query(user_id=user_id, user_name=user_name,
+                          action="search", query=jql, error=str(err),
+                          elapsed_ms=elapsed)
+        return
+    respond(text=jc.format_search_results(data, jql))
+    jc.log_jira_query(user_id=user_id, user_name=user_name,
+                      action="search", query=jql, result="검색 완료",
+                      elapsed_ms=elapsed)
+
+
+def _jira_issue(client, key: str, user_id: str, user_name: str,
+                respond):
+    """이슈 상세 표시"""
+    t0 = time.time()
+    data, err = client.get_issue(key)
+    elapsed = int((time.time() - t0) * 1000)
+    if err:
+        respond(text=f":x: 이슈 조회 실패: `{key}`\n```\n{err}\n```")
+        jc.log_jira_query(user_id=user_id, user_name=user_name,
+                          action="issue", query=key, error=str(err),
+                          elapsed_ms=elapsed)
+        return
+    respond(text=jc.format_issue(data))
+    jc.log_jira_query(user_id=user_id, user_name=user_name,
+                      action="issue", query=key, result="조회 완료",
+                      elapsed_ms=elapsed)
+
+
+def _jira_project(client, key: str, user_id: str, user_name: str,
+                   respond):
+    """프로젝트 상세 표시"""
+    t0 = time.time()
+    data, err = client.get_project(key)
+    elapsed = int((time.time() - t0) * 1000)
+    if err:
+        respond(text=f":x: 프로젝트 조회 실패: `{key}`\n```\n{err}\n```")
+        jc.log_jira_query(user_id=user_id, user_name=user_name,
+                          action="project", query=key, error=str(err),
+                          elapsed_ms=elapsed)
+        return
+    respond(text=jc.format_project(data))
+    jc.log_jira_query(user_id=user_id, user_name=user_name,
+                      action="project", query=key, result="조회 완료",
+                      elapsed_ms=elapsed)
+
+
+def _jira_projects(client, user_id: str, user_name: str, respond):
+    """프로젝트 목록 표시"""
+    t0 = time.time()
+    data, err = client.get_all_projects()
+    elapsed = int((time.time() - t0) * 1000)
+    if err:
+        respond(text=f":x: 프로젝트 목록 조회 실패\n```\n{err}\n```")
+        jc.log_jira_query(user_id=user_id, user_name=user_name,
+                          action="projects", query="all",
+                          error=str(err), elapsed_ms=elapsed)
+        return
+    respond(text=jc.format_projects_list(data))
+    jc.log_jira_query(user_id=user_id, user_name=user_name,
+                      action="projects", query="all",
+                      result="목록 조회 완료", elapsed_ms=elapsed)
+
+
+def _jira_claude_call(prompt: str, source_label: str, question: str,
+                      respond):
+    """Jira 컨텍스트 기반 Claude API 호출 + 응답 전송."""
+    import anthropic
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        respond(text=(
+            ":x: `ANTHROPIC_API_KEY` 환경변수가 설정되지 않았습니다.\n"
+            "환경변수에 Anthropic API 키를 추가하세요."
+        ))
+        return
+
+    try:
+        client_ai = anthropic.Anthropic(api_key=api_key)
+        message   = client_ai.messages.create(
+            model      = "claude-haiku-4-5-20251001",
+            max_tokens = 1024,
+            messages   = [{"role": "user", "content": prompt}],
+        )
+        answer = message.content[0].text
+    except Exception as e:
+        logger.error(f"[jira] Claude API 오류: {e}")
+        respond(text=f":x: Claude API 오류\n```\n{e}\n```")
+        return
+
+    respond(text=(
+        f"*:ticket: {source_label}* — AI 답변\n\n"
+        f"*Q: {question}*\n\n"
+        f"{answer}"
+    ))
+
+
+def _jira_ask_claude(context_text: str, source_label: str,
+                     question: str, respond):
+    """Jira 이슈/검색 결과를 컨텍스트로 Claude AI에 질문."""
+    MAX_CHARS = 20000
+    truncated = len(context_text) > MAX_CHARS
+    content   = context_text[:MAX_CHARS] if truncated else context_text
+    trunc_note = "\n*(내용이 길어 일부만 포함됨)*\n" if truncated else ""
+
+    prompt = (
+        f"다음은 Jira에서 조회한 '{source_label}' 관련 이슈 정보입니다:\n\n"
+        f"{content}{trunc_note}\n\n"
+        f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n"
+        f"질문에만 집중하세요. 질문에서 요청하지 않은 정보(메타데이터, 통계 등)는 포함하지 마세요.\n\n"
+        f"질문: {question}"
+    )
+    _jira_claude_call(prompt, source_label, question, respond)
+
+
 # ── 단일 인스턴스 보장 ────────────────────────────────────────
 
 def _ensure_single_instance(pid_file: str = "slack_bot.pid"):
@@ -1362,6 +1507,133 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             result="검색 완료",
             elapsed_ms=int((time.time() - t0) * 1000),
         )
+
+    # ── /jira 커맨드 ─────────────────────────────────────────────
+
+    @app.command("/jira")
+    def handle_jira_command(ack, respond, command):
+        r"""
+        /jira help                              → 도움말
+        /jira search [텍스트 or JQL]            → 이슈 검색
+        /jira issue [PROJ-123]                  → 이슈 상세
+        /jira project [KEY]                     → 프로젝트 상세
+        /jira projects                          → 프로젝트 목록
+        /jira [이슈키]                          → 이슈 상세
+        /jira [검색어]                          → 이슈 검색
+        /jira [이슈키] \ [질문]                 → 이슈 + AI 답변
+        /jira [검색어] \ [질문]                 → 검색 + AI 답변
+        """
+        ack()
+        text      = (command.get("text") or "").strip()
+        user_id   = command.get("user_id", "")
+        user_name = command.get("user_name", "")
+        client    = jc.JiraClient()
+
+        # ── help ──
+        if not text or text.lower() == "help":
+            _jira_help(respond)
+            return
+
+        # ── search [검색어/JQL] ──
+        if text.lower().startswith("search "):
+            query = text[7:].strip()
+            if not query:
+                _jira_help(respond)
+                return
+            jql = jc.to_jql(query)
+            respond(text=f":mag: `{query}` 검색 중...")
+            _jira_search(client, jql, user_id, user_name, respond)
+            return
+
+        # ── issue [이슈키] ──
+        if text.lower().startswith("issue "):
+            key = text[6:].strip().upper()
+            if not key:
+                _jira_help(respond)
+                return
+            respond(text=f":ticket: `{key}` 조회 중...")
+            _jira_issue(client, key, user_id, user_name, respond)
+            return
+
+        # ── projects (목록) ──
+        if text.lower() == "projects":
+            respond(text=":file_folder: 프로젝트 목록 조회 중...")
+            _jira_projects(client, user_id, user_name, respond)
+            return
+
+        # ── project [KEY] ──
+        if text.lower().startswith("project "):
+            key = text[8:].strip().upper()
+            if not key:
+                _jira_help(respond)
+                return
+            respond(text=f":file_folder: 프로젝트 `{key}` 조회 중...")
+            _jira_project(client, key, user_id, user_name, respond)
+            return
+
+        # ── 파이프(\) 구분: [대상] \ [질문] ──
+        if "\\" in text:
+            pipe_parts = [p.strip() for p in text.split("\\")]
+            if len(pipe_parts) >= 2:
+                target   = pipe_parts[0]
+                question = pipe_parts[-1]
+
+                if target and question:
+                    t0 = time.time()
+
+                    if jc.looks_like_issue_key(target):
+                        # 이슈키 → 이슈 조회 → AI 답변
+                        respond(text=f":robot_face: *{target.upper()}* — Claude 답변 생성 중...")
+                        data, err = client.get_issue(target.upper())
+                        elapsed = int((time.time() - t0) * 1000)
+                        if err:
+                            respond(text=f":x: 이슈 조회 실패: `{target}`\n```\n{err}\n```")
+                            jc.log_jira_query(user_id=user_id, user_name=user_name,
+                                              action="ask_claude_issue", query=text,
+                                              error=str(err), elapsed_ms=elapsed)
+                            return
+                        context = jc.get_issue_context_text(data)
+                        if not context:
+                            respond(text=f":information_source: `{target}` 이슈 내용을 가져올 수 없습니다.")
+                            return
+                        _jira_ask_claude(context, target.upper(), question, respond)
+                        jc.log_jira_query(user_id=user_id, user_name=user_name,
+                                          action="ask_claude_issue", query=text,
+                                          result=f"이슈: {target.upper()}",
+                                          elapsed_ms=elapsed)
+                    else:
+                        # 텍스트 → JQL 검색 → AI 답변
+                        jql = jc.to_jql(target)
+                        respond(text=f":robot_face: *{target}* — 검색 + Claude 답변 생성 중...")
+                        data, err = client.search_issues(jql)
+                        elapsed = int((time.time() - t0) * 1000)
+                        if err:
+                            respond(text=f":x: 검색 실패\n```\n{err}\n```")
+                            jc.log_jira_query(user_id=user_id, user_name=user_name,
+                                              action="ask_claude_search", query=text,
+                                              error=str(err), elapsed_ms=elapsed)
+                            return
+                        context = jc.get_search_context_text(data)
+                        if not context:
+                            respond(text=f":information_source: `{target}` 관련 이슈를 찾을 수 없습니다.")
+                            return
+                        _jira_ask_claude(context, target, question, respond)
+                        jc.log_jira_query(user_id=user_id, user_name=user_name,
+                                          action="ask_claude_search", query=text,
+                                          result=f"검색어: {target}",
+                                          elapsed_ms=elapsed)
+                    return
+
+        # ── 이슈 키 단독 입력 → 이슈 조회 ──
+        if jc.looks_like_issue_key(text):
+            respond(text=f":ticket: `{text.upper()}` 조회 중...")
+            _jira_issue(client, text.upper(), user_id, user_name, respond)
+            return
+
+        # ── 나머지: 텍스트 → JQL 검색 ──
+        jql = jc.to_jql(text)
+        respond(text=f":mag: `{text}` 검색 중...")
+        _jira_search(client, jql, user_id, user_name, respond)
 
     return app
 
