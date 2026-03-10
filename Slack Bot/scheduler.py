@@ -199,6 +199,7 @@ class NotificationScheduler:
             s,
             CronTrigger(day_of_week="mon-fri", hour=h, minute=m, timezone=self.tz),
             f"평일(월-금) {s['time']}",
+            misfire_grace_time=3600,   # Railway 재시작 시 1시간 이내라면 즉시 발송
         )
 
     def _add_weekly(self, s: dict):
@@ -208,6 +209,7 @@ class NotificationScheduler:
             s,
             CronTrigger(day_of_week=day, hour=h, minute=m, timezone=self.tz),
             f"매주 {s['day_of_week']} {s['time']}",
+            misfire_grace_time=3600,   # Railway 재시작 시 1시간 이내라면 즉시 발송
         )
 
     def _add_monthly(self, s: dict):

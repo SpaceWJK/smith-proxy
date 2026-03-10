@@ -9,7 +9,6 @@ Claude Desktop이 사용하는 것과 동일한 MCP 프록시를 이용합니다
   get_all_pages_from_space, create_page, update_page, get_all_spaces,
   cql_search, get_page_comments, add_comment, test_confluence_connection
 
-※ Team Calendar 도구는 MCP 서버에서 제공하지 않아 /calendar 기능 비활성화.
 
 환경변수:
   CONFLUENCE_URL        : https://wiki.smilegate.net (페이지 URL 생성용)
@@ -25,6 +24,8 @@ import html as _html
 import logging
 import time
 import requests
+
+from mcp_session import McpSession
 
 logger = logging.getLogger(__name__)
 
@@ -97,13 +98,6 @@ _DEFAULT_WIKI_URL  = "https://wiki.smilegate.net"
 _PAGE_CACHE: dict = {}   # {page_id: (plain_text, timestamp)}
 _PAGE_CACHE_TTL   = 300  # 5분 (초)
 
-# 슬랙 명령어 캘린더 유형 → 환경변수 키 & 표시명 매핑 (하위 호환 유지)
-CALENDAR_TYPES = {
-    "플잭": ("CONFLUENCE_CALENDAR_PROJECT",  "프로젝트 일정"),
-    "개인": ("CONFLUENCE_CALENDAR_PERSONAL", "개인/팀 일정"),
-}
-
-
 # ── HTML 처리 헬퍼 ─────────────────────────────────────────────────────────
 
 def _strip_html(html_text: str) -> str:
@@ -137,234 +131,37 @@ def _clean_title(title: str) -> str:
     return re.sub(r'@@@hl@@@|@@@endhl@@@', '', title or '').strip()
 
 
-# ── MCP 세션 (Streamable HTTP 프로토콜) ───────────────────────────────────
+# ── 싱글톤 MCP 세션 (mcp_session.McpSession 사용) ────────────────────────
 
-class _McpSession:
-    """
-    MCP Streamable HTTP 세션.
+_mcp_session: "McpSession | None" = None
 
-    프로토콜 요약:
-      1. POST /mcp-endpoint  {initialize}  → 세션 ID 발급, SSE 응답
-      2. POST /mcp-endpoint  {notifications/initialized}  → 202
-      3. POST /mcp-endpoint  {tools/call}  + Mcp-Session-Id 헤더 → SSE 응답
-    """
-
-    def __init__(self, url: str, username: str, token: str):
-        self._url         = url
-        self._session_id  = None
-        self._initialized = False
-        self._req_id      = 0
-
-        self._http = requests.Session()
-        self._http.headers.update({
-            "x-confluence-wiki-username": username,
-            "x-confluence-wiki-token"  : token,
-            "Content-Type"             : "application/json",
-            "Accept"                   : "application/json, text/event-stream",
-        })
-
-    # ── 내부 헬퍼 ─────────────────────────────────────────────────────────
-
-    def _next_id(self) -> int:
-        self._req_id += 1
-        return self._req_id
-
-    def _extra_headers(self) -> dict:
-        return {"Mcp-Session-Id": self._session_id} if self._session_id else {}
-
-    @staticmethod
-    def _is_session_error(err: str) -> bool:
-        """세션 만료/인증 오류 여부 판단 — 재연결 트리거용"""
-        low = (err or "").lower()
-        return any(kw in low for kw in (
-            "session", "http 400", "http 401", "http 403", "unauthorized",
-        ))
-
-    @staticmethod
-    def _parse_sse(text: str):
-        """SSE 스트림 텍스트에서 첫 번째 data 라인의 JSON 반환"""
-        for line in text.split('\n'):
-            line = line.strip()
-            if line.startswith('data: '):
-                try:
-                    return json.loads(line[6:])
-                except Exception:
-                    pass
-        return None
-
-    def _post(self, payload: dict, timeout: int = 30) -> tuple:
-        """
-        JSON-RPC 2.0 POST 요청 → (rpc_result_or_none, error_str_or_none)
-        """
-        try:
-            r = self._http.post(
-                self._url, json=payload,
-                headers=self._extra_headers(), timeout=timeout,
-            )
-
-            # 세션 ID 갱신
-            sid = (r.headers.get("Mcp-Session-Id")
-                   or r.headers.get("mcp-session-id"))
-            if sid:
-                self._session_id = sid
-
-            if r.status_code == 202:          # 알림에 대한 정상 응답
-                return None, None
-            if r.status_code >= 400:
-                # 세션 만료/인증 오류 → 세션 상태 초기화 (call_tool 재연결 대비)
-                if r.status_code in (400, 401, 403):
-                    self._initialized = False
-                    self._session_id  = None
-                return None, f"HTTP {r.status_code}: {r.text[:300]}"
-
-            ct = r.headers.get("Content-Type", "")
-            if "text/event-stream" in ct:
-                # r.text 는 Content-Type 에 charset 미선언 시 ISO-8859-1 로 디코딩됨
-                # (requests HTTP/1.1 기본값) → 한글 등 멀티바이트 문자 깨짐 발생
-                # SSE 응답은 실제로 UTF-8 이므로 r.content 를 명시적으로 UTF-8 디코딩
-                sse_text = r.content.decode('utf-8', errors='replace')
-                data = self._parse_sse(sse_text)
-            else:
-                try:
-                    data = r.json()
-                except Exception:
-                    return None, f"응답 파싱 실패: {r.text[:300]}"
-
-            if data is None:
-                return None, "빈 응답"
-            if "error" in data:
-                err = data["error"]
-                return None, err.get("message", str(err))
-            return data.get("result"), None
-
-        except requests.RequestException as e:
-            return None, str(e)
-
-    # ── 공개 메서드 ───────────────────────────────────────────────────────
-
-    def initialize(self) -> tuple:
-        """MCP 세션 초기화 (최초 1회). → (True/False, error_str)"""
-        if self._initialized:
-            return True, None
-
-        result, err = self._post({
-            "jsonrpc": "2.0",
-            "method" : "initialize",
-            "id"     : self._next_id(),
-            "params" : {
-                "protocolVersion": "2024-11-05",
-                "capabilities"   : {},
-                "clientInfo"     : {"name": "slack-bot", "version": "1.0"},
-            },
-        })
-        if err:
-            logger.error(f"[wiki] MCP 초기화 실패: {err}")
-            return False, f"MCP 초기화 실패: {err}"
-
-        # notifications/initialized (응답 무시)
-        self._post({"jsonrpc": "2.0", "method": "notifications/initialized"},
-                   timeout=10)
-
-        self._initialized = True
-        logger.info(f"[wiki] MCP 세션 초기화 완료. session_id={self._session_id}")
-        return True, None
-
-    def call_tool(self, name: str, arguments: dict,
-                  _retry: bool = True) -> tuple:
-        """
-        MCP 도구 호출. 세션 만료 감지 시 자동 재연결 후 1회 재시도.
-
-        Returns
-        -------
-        (raw_content, error_str)
-          raw_content : 도구가 반환한 텍스트 (JSON 문자열인 경우 많음)
-        """
-        ok, err = self.initialize()
-        if not ok:
-            return None, err
-
-        result, err = self._post({
-            "jsonrpc": "2.0",
-            "method" : "tools/call",
-            "id"     : self._next_id(),
-            "params" : {"name": name, "arguments": arguments},
-        })
-
-        # 세션 만료 감지 → 세션 리셋 후 1회 재시도
-        if err and _retry and self._is_session_error(err):
-            logger.warning(
-                f"[wiki] 세션 만료 감지, 재연결 후 재시도 ({name}): {err[:80]}"
-            )
-            self._initialized = False
-            self._session_id  = None
-            return self.call_tool(name, arguments, _retry=False)
-
-        if err:
-            logger.error(f"[wiki] MCP 도구 호출 오류 ({name}): {err}")
-            return None, err
-
-        # result = {"content": [{"type":"text","text":"..."}], "isError": false}
-        if isinstance(result, dict):
-            is_err = result.get("isError", False)
-            content = result.get("content", [])
-            parts = [
-                item.get("text", "")
-                for item in content
-                if isinstance(item, dict) and item.get("type") == "text"
-            ]
-            text = "\n".join(parts)
-            if is_err:
-                logger.warning(f"[wiki] MCP 도구 오류 ({name}): {text[:200]}")
-                return None, text or "도구 오류"
-            return text, None
-
-        return str(result) if result is not None else None, None
-
-
-# ── 싱글톤 세션 ──────────────────────────────────────────────────────────
-
-_mcp_session: "_McpSession | None" = None
-
-def _get_mcp() -> _McpSession:
+def _get_mcp() -> McpSession:
     global _mcp_session
     if _mcp_session is None:
-        _mcp_session = _McpSession(
-            url      = MCP_URL,
-            username = os.getenv("CONFLUENCE_USERNAME", _DEFAULT_USERNAME),
-            token    = os.getenv("CONFLUENCE_TOKEN", ""),
+        _mcp_session = McpSession(
+            url=MCP_URL,
+            headers={
+                "x-confluence-wiki-username": os.getenv("CONFLUENCE_USERNAME", _DEFAULT_USERNAME),
+                "x-confluence-wiki-token"   : os.getenv("CONFLUENCE_TOKEN", ""),
+            },
+            label="wiki",
         )
     return _mcp_session
 
 
-# ── ConfluenceCalendarClient (기존 인터페이스 유지) ────────────────────────
+# ── ConfluenceWikiClient ──────────────────────────────────────────────────
 
-class ConfluenceCalendarClient:
+class ConfluenceWikiClient:
     """
     Slack Bot에서 사용하는 Confluence 클라이언트.
 
     내부적으로 MCP 프록시(mcp.sginfra.net)를 통해 Confluence에 접근합니다.
-    Team Calendar 기능은 MCP 서버가 지원하지 않아 비활성화되었습니다.
     """
 
     def __init__(self):
         self._space_key = os.getenv("CONFLUENCE_SPACE_KEY", _DEFAULT_SPACE_KEY)
         self._wiki_url  = os.getenv("CONFLUENCE_URL", _DEFAULT_WIKI_URL).rstrip("/")
         self._mcp       = _get_mcp()
-
-    # ── Team Calendar (미지원) ────────────────────────────────────────────
-
-    def list_calendars(self, space_key: str = None):
-        """캘린더 목록 조회 — MCP 서버 미지원"""
-        return None, (
-            "Team Calendar 기능은 현재 MCP 서버에서 지원되지 않습니다.\n"
-            "직접 Confluence 캘린더 페이지를 이용해 주세요: "
-            f"{self._wiki_url}/spaces/{self._space_key or self._space_key}"
-        )
-
-    def create_event(self, calendar_id: str, title: str,
-                     start_date: str, end_date: str = None):
-        """이벤트 등록 — MCP 서버 미지원"""
-        return None, "Team Calendar 기능은 현재 MCP 서버에서 지원되지 않습니다."
 
     # ── 페이지 조회 ───────────────────────────────────────────────────────
 

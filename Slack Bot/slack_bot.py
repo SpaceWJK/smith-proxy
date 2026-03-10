@@ -30,6 +30,7 @@ import interaction_handler as ih
 from slack_sender import SlackSender
 from scheduler    import NotificationScheduler
 import wiki_client as wc
+import gdi_client as gc
 
 # ── 로그 설정 ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -305,199 +306,404 @@ def _wiki_search_pages(client, query: str, respond):
     respond(text="\n".join(lines))
 
 
-# ── /calendar (일정 등록) 헬퍼 ────────────────────────────────────────────────
+# ── /gdi (GDI 문서 조회) 헬퍼 ─────────────────────────────────────────────────
 
-# 캘린더 유형 키워드 → 환경변수 키 매핑 (공백 제거 후 매핑)
-_CALENDAR_ALIASES = {
-    # 프로젝트 일정
-    "플잭":         "CONFLUENCE_CALENDAR_PROJECT",
-    "프로젝트":     "CONFLUENCE_CALENDAR_PROJECT",
-    "프로잭트":     "CONFLUENCE_CALENDAR_PROJECT",   # 흔한 오타
-    "프로젝트일정": "CONFLUENCE_CALENDAR_PROJECT",
-    "프로잭트일정": "CONFLUENCE_CALENDAR_PROJECT",
-    "project":      "CONFLUENCE_CALENDAR_PROJECT",
-    # 개인/팀 일정
-    "개인":         "CONFLUENCE_CALENDAR_PERSONAL",
-    "팀":           "CONFLUENCE_CALENDAR_PERSONAL",
-    "개인일정":     "CONFLUENCE_CALENDAR_PERSONAL",
-    "개인팀일정":   "CONFLUENCE_CALENDAR_PERSONAL",
-    "personal":     "CONFLUENCE_CALENDAR_PERSONAL",
-}
-
-
-def _parse_date(date_raw: str):
+def _breadcrumb_to_path(breadcrumb: str) -> str:
     """
-    다양한 날짜 표현 → 'YYYY-MM-DD' 또는 None.
-    지원: 2026-03-12 / 26-03-12 / 2026/3/12 / 3/12
-          26년 3월 12일 / 2026년 3월 12일 / 3월 12일
+    GDI 웹 UI 스타일의 경로를 슬래시 경로로 변환합니다.
+    'Chaoszero > Test Result > 260204 > 3-9차'
+    → 'Chaoszero/Test Result/260204/3-9차/'
+    '루트 > Chaoszero > ...' 형태에서 '루트'는 자동 제거됩니다.
     """
-    from datetime import datetime
-    d = date_raw.strip()
-
-    if re.match(r'^\d{4}-\d{2}-\d{2}$', d):                           # YYYY-MM-DD
-        return d
-    m = re.match(r'^(\d{2})-(\d{2})-(\d{2})$', d)                     # YY-MM-DD
-    if m:
-        return f"20{m.group(1)}-{m.group(2)}-{m.group(3)}"
-    m = re.match(r'^(\d{2,4})/(\d{1,2})/(\d{1,2})$', d)               # YYYY/M/D or YY/M/D
-    if m:
-        y = f"20{m.group(1)}" if len(m.group(1)) == 2 else m.group(1)
-        return f"{y}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-    m = re.match(r'^(\d{1,2})/(\d{1,2})$', d)                         # M/D (당해 연도)
-    if m:
-        return f"{datetime.now().year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
-    m = re.match(r'^(\d{2,4})년\s*(\d{1,2})월\s*(\d{1,2})일$', d)     # Y년 M월 D일
-    if m:
-        y = f"20{m.group(1)}" if len(m.group(1)) == 2 else m.group(1)
-        return f"{y}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-    m = re.match(r'^(\d{1,2})월\s*(\d{1,2})일$', d)                   # M월 D일 (당해 연도)
-    if m:
-        return f"{datetime.now().year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
-    return None
+    parts = [p.strip() for p in breadcrumb.split(">") if p.strip()]
+    if parts and parts[0] == "루트":
+        parts = parts[1:]
+    return "/".join(parts) + "/" if parts else ""
 
 
-def _parse_calendar_args(text: str):
+def _has_breadcrumb(text: str) -> bool:
+    """텍스트에 '>' 구분자가 있으면 폴더 경로로 판단합니다."""
+    return ">" in text
+
+
+def _fetch_file_content(client, file_name: str) -> str:
     """
-    날짜 패턴을 기준으로 텍스트를 (캘린더 유형, 날짜, 제목) 으로 분리.
-    Returns: (cal_type_raw, date_raw, title) | None
+    파일명으로 내용(청크 텍스트)을 가져옵니다.
+    4단계 폴백: exact_match → text_match → #접두사 제거 → unified_search
+    Returns: 내용 텍스트 (없으면 빈 문자열)
     """
-    date_pats = [
-        r'\d{4}-\d{2}-\d{2}',                     # 2026-03-12
-        r'\d{2}-\d{2}-\d{2}',                     # 26-03-12
-        r'\d{2,4}년\s*\d{1,2}월\s*\d{1,2}일',     # 26년 3월 12일
-        r'\d{1,2}월\s*\d{1,2}일',                 # 3월 12일
-        r'\d{4}/\d{1,2}/\d{1,2}',                 # 2026/3/12
-        r'\d{1,2}/\d{1,2}',                       # 3/12
-    ]
-    for pat in date_pats:
-        m = re.search(pat, text)
-        if m:
-            cal_type_raw = text[:m.start()].strip().strip("'\"")
-            date_raw     = m.group(0)
-            title        = text[m.end():].strip().strip("'\"")
-            if cal_type_raw and title:
-                return cal_type_raw, date_raw, title
-    return None
+    import re as _re
+
+    # 1) exact match
+    data, err = client.search_by_filename(file_name, exact_match=True)
+    if not err:
+        text = gc.get_file_content_text(data)
+        if text:
+            return text
+
+    # 2) text match (exact_match=False)
+    data, err = client.search_by_filename(file_name, exact_match=False)
+    if not err:
+        text = gc.get_file_content_text(data)
+        if text:
+            return text
+
+    # 3) #숫자 접두사 제거 후 재시도
+    cleaned = _re.sub(r"^#\d+\s*", "", file_name).strip()
+    if cleaned and cleaned != file_name:
+        data, err = client.search_by_filename(cleaned, exact_match=False)
+        if not err:
+            text = gc.get_file_content_text(data)
+            if text:
+                return text
+
+    # 4) unified_search 폴백
+    search_query = cleaned or file_name
+    data, err = client.unified_search(search_query)
+    if not err:
+        text = gc.get_search_context_text(data)
+        if text:
+            return text
+
+    return ""
 
 
-def _resolve_calendar_type(cal_type_raw: str):
+def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
+                    question: str, respond, user_id: str, user_name: str,
+                    raw_text: str):
     """
-    캘린더 유형 문자열 → (env_key, type_name) | None.
-    공백을 제거한 뒤 별칭 dict 와 매핑.
+    폴더 경로 기반 AI 답변.
+
+    1. list_files_in_folder 로 폴더 내 파일 목록 조회
+    2. file_keyword 가 비어있으면 → 파일 1개일 때만 자동 선택
+    3. file_keyword 가 있으면 → 파일명에 키워드 포함된 것 필터
+    4. 매칭된 파일의 내용(청크)을 가져와 Claude AI 에 질문
     """
-    key = cal_type_raw.replace(" ", "")
-    env_key = _CALENDAR_ALIASES.get(key) or _CALENDAR_ALIASES.get(key.lower())
-    if env_key:
-        type_name = "프로젝트 일정" if "PROJECT" in env_key else "개인/팀 일정"
-        return env_key, type_name
-    return None
+    t0 = time.time()
+
+    # 1단계: 폴더 내 파일 목록 조회 (하위 폴더 포함 — 프리픽스 매칭)
+    respond(text=f"📁 `{folder_path}` 폴더 조회 중...")
+    data, err = client.list_files_in_folder(folder_path, page_size=100)
+    if err:
+        gc.log_gdi_query(user_id=user_id, user_name=user_name,
+                         action="folder_ai", query=raw_text, error=str(err),
+                         elapsed_ms=int((time.time() - t0) * 1000))
+        respond(text=f"❌ 폴더 조회 실패\n```\n{err}\n```")
+        return
+
+    files = data.get("files", [])
+    if not files:
+        gc.log_gdi_query(user_id=user_id, user_name=user_name,
+                         action="folder_ai", query=raw_text,
+                         error="폴더에 파일 없음",
+                         elapsed_ms=int((time.time() - t0) * 1000))
+        respond(text=f"ℹ️ `{folder_path}` 폴더에 파일이 없습니다.")
+        return
+
+    # 날짜 기준 정렬 헬퍼 (version_date > indexed_date > 빈 문자열)
+    def _file_sort_key(f):
+        return f.get("version_date", "") or f.get("indexed_date", "") or ""
+
+    # 관련도 점수 계산 헬퍼: 키워드+질문의 단어가 파일명에 몇 개 포함되는지
+    _STOP = {"가장", "최근", "관련된", "관련", "내용", "요약", "요약해줘",
+             "해줘", "알려줘", "보여줘", "대한", "기획서", "문서", "파일",
+             "의", "을", "를", "이", "가", "에", "은", "는", "과", "와"}
+    _PARTICLES = ["에서", "으로", "까지", "부터", "에게", "한테",
+                  "과", "와", "의", "을", "를", "이", "가", "에",
+                  "은", "는", "도", "만", "로"]
+
+    def _strip_particle(word: str) -> str:
+        """한국어 조사를 제거합니다. '훈장과' → '훈장'"""
+        for p in _PARTICLES:
+            if word.endswith(p) and len(word) > len(p) + 1:
+                return word[:-len(p)]
+        return word
+
+    def _relevance_score(f, kw: str, q: str) -> tuple:
+        """(관련도 DESC, 날짜 DESC) 정렬 키"""
+        name_lower = f.get("file_name", "").lower()
+        raw_terms = set((kw + " " + q).lower().split()) - _STOP
+        # 조사 제거한 버전도 추가
+        terms = set()
+        for t in raw_terms:
+            if len(t) >= 2:
+                terms.add(t)
+                stripped = _strip_particle(t)
+                if stripped != t and len(stripped) >= 2:
+                    terms.add(stripped)
+        score = sum(1 for t in terms if t in name_lower)
+        date = f.get("version_date", "") or f.get("indexed_date", "") or ""
+        return (score, date)
+
+    # 2단계: 대상 파일 필터링
+    if file_keyword:
+        kw_lower = file_keyword.lower()
+        matched = [f for f in files
+                   if kw_lower in f.get("file_name", "").lower()]
+        if not matched:
+            gc.log_gdi_query(user_id=user_id, user_name=user_name,
+                             action="folder_ai", query=raw_text,
+                             error=f"키워드 '{file_keyword}' 매칭 파일 없음",
+                             elapsed_ms=int((time.time() - t0) * 1000))
+            flist = "\n".join(f"• `{f.get('file_name', '?')}`" for f in files[:15])
+            respond(text=(
+                f"ℹ️ `{folder_path}` 폴더(하위 포함)에서 `{file_keyword}` 키워드에 매칭되는 파일이 없습니다.\n\n"
+                f"*폴더 내 파일 목록 ({len(files)}건):*\n{flist}"
+            ))
+            return
+    else:
+        matched = files
+
+    # 키워드 없이 여러 개 → 키워드 요청
+    if not file_keyword and len(matched) > 1:
+        matched.sort(key=_file_sort_key, reverse=True)
+        flist = "\n".join(
+            f"• `{f.get('file_name', '?')}`"
+            + (f"  ({(f.get('version_date') or f.get('indexed_date', ''))[:10]})"
+               if f.get('version_date') or f.get('indexed_date') else "")
+            for f in matched[:15]
+        )
+        more = f"\n_(+{len(matched) - 15}개 더)_" if len(matched) > 15 else ""
+        respond(text=(
+            f"ℹ️ `{folder_path}` 폴더(하위 포함)에 파일이 {len(matched)}개 있습니다.\n"
+            f"파일명 키워드를 추가해주세요.\n\n"
+            f"*사용법:* `/gdi 경로 | 파일키워드 | 질문`\n\n"
+            f"*폴더 내 파일 (최신순):*\n{flist}{more}"
+        ))
+        gc.log_gdi_query(user_id=user_id, user_name=user_name,
+                         action="folder_ai", query=raw_text,
+                         result=f"다수 파일 {len(matched)}건, 키워드 필요",
+                         elapsed_ms=int((time.time() - t0) * 1000))
+        return
+
+    # ── 3단계: 질문 의도 감지 ──
+    _LIST_KW = {"종류", "목록", "리스트", "뭐가", "어떤 파일", "몇개", "몇 개",
+                "무엇이", "무엇무엇", "어떤 것", "있는지", "있나", "있어"}
+    _CONTENT_KW = {"요약", "내용", "분석", "설명해", "정리해", "정리", "핵심",
+                   "변경사항", "변경점", "어떻게", "뭐가 바뀌", "뭐가 달라"}
+    q_lower = question.lower()
+    is_list_q = any(k in q_lower for k in _LIST_KW)
+    is_content_q = any(k in q_lower for k in _CONTENT_KW)
+    # 둘 다 매칭되면 content 우선 (예: "어떤 내용이 있는지 요약")
+    # 둘 다 없으면 content 기본
+    want_content = is_content_q or not is_list_q
+
+    # 관련도+날짜 정렬 (모든 경우에 공통)
+    matched.sort(
+        key=lambda f: _relevance_score(f, file_keyword, question),
+        reverse=True,
+    )
+
+    # ── 4단계: 단일 파일 또는 내용 질문 → 파일 내용 가져와서 분석 ──
+    if len(matched) == 1 or want_content:
+        target_file = matched[0]
+        target_name = target_file.get("file_name", "?")
+        target_path = target_file.get("file_path", "")
+
+        path_info = f"\n📁 `{target_path}`" if target_path else ""
+        respond(text=f"📄 `{target_name}` 파일 내용 가져오는 중...{path_info}")
+
+        context = _fetch_file_content(client, target_name)
+
+        if not context:
+            gc.log_gdi_query(user_id=user_id, user_name=user_name,
+                             action="folder_ai", query=raw_text,
+                             error=f"파일 내용 없음: {target_name}",
+                             elapsed_ms=int((time.time() - t0) * 1000))
+            respond(text=f"ℹ️ `{target_name}` 파일의 내용을 가져올 수 없습니다.\n이 파일 형식은 아직 인덱싱되지 않았을 수 있습니다.")
+            return
+
+        source_label = f"{folder_path}{target_name}"
+        respond(text=f"🤖 *{target_name}* — Claude 답변 생성 중...")
+        _gdi_ask_claude_content(context, source_label, question, respond)
+        gc.log_gdi_query(user_id=user_id, user_name=user_name,
+                         action="folder_ai", query=raw_text,
+                         result=f"파일: {target_name}",
+                         elapsed_ms=int((time.time() - t0) * 1000))
+    else:
+        # ── 5단계: 목록/종류 질문 → 파일 리스트를 Claude에게 전달 ──
+        respond(text=f"📋 `{file_keyword}` 매칭 파일 {len(matched)}건 — Claude 답변 생성 중...")
+
+        file_list_lines = []
+        for i, f in enumerate(matched[:30], 1):
+            fname = f.get("file_name", "?")
+            fpath = f.get("file_path", "")
+            stype = f.get("source_type", "")
+            vdate = (f.get("version_date") or f.get("indexed_date") or "")[:10]
+            line = f"{i}. {fname}"
+            if fpath:
+                line += f"  (경로: {fpath})"
+            extras = []
+            if stype:
+                extras.append(f"형식: {stype}")
+            if vdate:
+                extras.append(f"날짜: {vdate}")
+            if extras:
+                line += f"  [{', '.join(extras)}]"
+            file_list_lines.append(line)
+
+        file_list_context = (
+            f"폴더 '{folder_path}' 에서 키워드 '{file_keyword}' 로 검색한 결과 "
+            f"총 {len(matched)}개 파일이 매칭되었습니다:\n\n"
+            + "\n".join(file_list_lines)
+        )
+
+        source_label = f"{folder_path} (키워드: {file_keyword})"
+        _gdi_ask_claude_list(file_list_context, source_label, question, respond)
+        gc.log_gdi_query(user_id=user_id, user_name=user_name,
+                         action="folder_ai_list", query=raw_text,
+                         result=f"매칭 {len(matched)}건, 목록 기반 답변",
+                         elapsed_ms=int((time.time() - t0) * 1000))
 
 
-def _calendar_help(respond):
+def _gdi_help(respond):
     """도움말"""
     respond(text=(
-        "*📅 /calendar 일정 등록 도움말*\n\n"
+        "*📦 /gdi 문서 조회 도움말*\n\n"
         "```\n"
-        "/calendar [유형] [날짜] [제목]   Confluence 캘린더에 일정 등록\n"
-        "/calendar list                   캘린더 목록 & ID 확인\n"
-        "/calendar help                   이 도움말\n"
+        "/gdi 경로 | 질문                     폴더 파일 분석 (파일 1개일 때)\n"
+        "/gdi 경로 | 파일키워드 | 질문        폴더에서 파일 찾아 분석\n"
+        "/gdi [검색어] | [질문]               통합 검색 + AI 답변\n"
+        "/gdi search [검색어]                 통합 검색\n"
+        "/gdi file [파일명]                   파일명으로 검색\n"
+        "/gdi folder [경로]                   폴더 내 파일 목록\n"
+        "/gdi help                            이 도움말\n"
         "```\n\n"
-        "*유형 키워드:*\n"
-        "• 프로젝트 일정: `플잭`  `프로젝트`  `프로젝트 일정`\n"
-        "• 개인/팀 일정:  `개인`  `팀`  `개인 일정`\n\n"
-        "*날짜 — 아래 형식 모두 지원:*\n"
-        "• `2026-03-12`  `26-03-12`  `2026/3/12`\n"
-        "• `26년 3월 12일`  `3월 12일`  `3/12`\n\n"
+        "*경로 표기법:* `>` 로 폴더를 구분합니다 (GDI 웹과 동일)\n\n"
         "예시:\n"
-        "• `/calendar 플잭 2026-03-12 에픽세븐 v2.1 업데이트`\n"
-        "• `/calendar 프로젝트 일정 26년 3월 12일 QA 교육`\n"
-        "• `/calendar 개인 3월 15일 팀 회식`"
+        "• `/gdi Chaoszero > Test Result > 260204 > 3-9차 | 테스트 결과 요약해줘`\n"
+        "• `/gdi Chaoszero > Update Review > 20260204 > 완료 | 은하 훈장 | 내용 요약`\n"
+        "• `/gdi 에픽세븐 밸런스 | 최근 변경사항 알려줘`\n"
+        "• `/gdi file hero_balance.xlsx`\n"
+        "• `/gdi folder Chaoszero/Test Result`"
     ))
 
 
-def _calendar_list(client, respond):
-    """캘린더 목록 조회"""
-    calendars, err = client.list_calendars()
+def _gdi_search(client, query: str, respond):
+    """통합 검색 결과 표시"""
+    data, err = client.unified_search(query)
     if err:
-        respond(text=f"❌ 캘린더 조회 실패\n```\n{err}\n```")
+        respond(text=f"❌ 검색 실패\n```\n{err}\n```")
         return
-    if not calendars:
-        respond(text="ℹ️ 조회된 캘린더가 없습니다.")
-        return
-
-    lines = ["*📅 QASGP 공간 캘린더 목록*\n"]
-    for cal in calendars:
-        cid  = cal.get("id", "?")
-        name = cal.get("title") or cal.get("name", "?")
-        lines.append(f"• `{cid}`  {name}")
-    lines.append(
-        "\n💡 Railway 환경변수 설정:\n"
-        "`CONFLUENCE_CALENDAR_PROJECT=<프로젝트 일정 ID>`\n"
-        "`CONFLUENCE_CALENDAR_PERSONAL=<개인/팀 일정 ID>`"
-    )
-    respond(text="\n".join(lines))
+    respond(text=gc.format_search_results(data, query))
 
 
-def _calendar_add_event(client, text: str, respond):
-    """날짜 기준 파싱 후 캘린더 일정 등록"""
-    parsed = _parse_calendar_args(text)
-    if not parsed:
-        respond(
-            text=(
-                "❌ 명령어 형식을 인식하지 못했습니다.\n"
-                "`/calendar help` 를 입력하면 도움말을 확인할 수 있어요."
-            )
-        )
-        return
-
-    cal_type_raw, date_raw, title = parsed
-
-    resolved = _resolve_calendar_type(cal_type_raw)
-    if not resolved:
-        respond(
-            text=(
-                f"❌ 알 수 없는 캘린더 유형: `{cal_type_raw}`\n"
-                "프로젝트 일정: `플잭` `프로젝트` `프로젝트 일정`\n"
-                "개인/팀 일정:  `개인` `팀` `개인 일정`"
-            )
-        )
-        return
-
-    env_key, type_name = resolved
-    calendar_id = os.getenv(env_key, "")
-    if not calendar_id:
-        respond(
-            text=(
-                f"❌ `{env_key}` 환경변수가 설정되지 않았습니다.\n"
-                f"`/calendar list` 로 캘린더 ID를 확인한 뒤 Railway 환경변수에 추가하세요."
-            )
-        )
-        return
-
-    date_str = _parse_date(date_raw)
-    if not date_str:
-        respond(
-            text=(
-                f"❌ 날짜 형식 오류: `{date_raw}`\n"
-                "지원 형식: `2026-03-12`, `26년 3월 12일`, `3월 12일`, `3/12`"
-            )
-        )
-        return
-
-    result, err = client.create_event(calendar_id, title, date_str)
+def _gdi_file_search(client, filename: str, respond):
+    """파일명 검색 결과 표시"""
+    data, err = client.search_by_filename(filename)
     if err:
-        respond(text=f"❌ 일정 등록 실패\n```\n{err}\n```")
+        respond(text=f"❌ 파일 검색 실패\n```\n{err}\n```")
+        return
+    respond(text=gc.format_file_search(data, filename))
+
+
+def _gdi_folder_list(client, path: str, respond):
+    """폴더 목록 표시"""
+    # page:N 파싱
+    page = 1
+    if " page:" in path:
+        parts = path.rsplit(" page:", 1)
+        path = parts[0].strip()
+        try:
+            page = int(parts[1].strip())
+        except ValueError:
+            pass
+
+    data, err = client.list_files_in_folder(path, page=page)
+    if err:
+        respond(text=f"❌ 폴더 조회 실패\n```\n{err}\n```")
+        return
+    respond(text=gc.format_folder_list(data, path))
+
+
+def _gdi_claude_call(prompt: str, source_label: str, question: str,
+                     respond):
+    """Claude API 공통 호출 + 응답 전송."""
+    import anthropic
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        respond(text=(
+            "❌ `ANTHROPIC_API_KEY` 환경변수가 설정되지 않았습니다.\n"
+            "환경변수에 Anthropic API 키를 추가하세요."
+        ))
         return
 
-    respond(
-        response_type="in_channel",
-        text=(
-            f"✅ *Confluence 캘린더에 일정이 등록되었습니다!*\n"
-            f"• 캘린더: {type_name}\n"
-            f"• 날짜: {date_str}\n"
-            f"• 제목: {title}"
-        ),
+    try:
+        client_ai = anthropic.Anthropic(api_key=api_key)
+        message   = client_ai.messages.create(
+            model      = "claude-haiku-4-5-20251001",
+            max_tokens = 1024,
+            messages   = [{"role": "user", "content": prompt}],
+        )
+        answer = message.content[0].text
+    except Exception as e:
+        logger.error(f"[gdi] Claude API 오류: {e}")
+        respond(text=f"❌ Claude API 오류\n```\n{e}\n```")
+        return
+
+    respond(text=(
+        f"*📦 {source_label}* — AI 답변\n\n"
+        f"*Q: {question}*\n\n"
+        f"{answer}"
+    ))
+
+
+def _gdi_ask_claude(context_text: str, source_label: str,
+                    question: str, respond):
+    """GDI 통합검색 결과를 컨텍스트로 Claude AI 에 질문 (기존 호환)."""
+    MAX_CHARS = 20000
+    truncated = len(context_text) > MAX_CHARS
+    content   = context_text[:MAX_CHARS] if truncated else context_text
+    trunc_note = "\n*(내용이 길어 일부만 포함됨)*\n" if truncated else ""
+
+    prompt = (
+        f"다음은 GDI 문서 저장소에서 검색한 '{source_label}' 관련 내용입니다:\n\n"
+        f"{content}{trunc_note}\n\n"
+        f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n"
+        f"질문에만 집중하세요. 질문에서 요청하지 않은 정보(통계, 메타데이터 등)는 포함하지 마세요.\n\n"
+        f"질문: {question}"
     )
+    _gdi_claude_call(prompt, source_label, question, respond)
+
+
+def _gdi_ask_claude_content(context_text: str, source_label: str,
+                            question: str, respond):
+    """파일 내용 기반 Claude 답변 — 요약/분석/내용 질문용."""
+    MAX_CHARS = 20000
+    truncated = len(context_text) > MAX_CHARS
+    content   = context_text[:MAX_CHARS] if truncated else context_text
+    trunc_note = "\n*(내용이 길어 일부만 포함됨)*\n" if truncated else ""
+
+    prompt = (
+        f"다음은 '{source_label}' 파일의 실제 내용입니다:\n\n"
+        f"{content}{trunc_note}\n\n"
+        f"[답변 지침]\n"
+        f"- 위 파일 내용을 바탕으로 사용자의 질문에 한국어로 답변하세요.\n"
+        f"- 질문이 요약이면 핵심 내용을 간결하게 요약하세요.\n"
+        f"- 질문이 분석이면 주요 포인트를 정리하세요.\n"
+        f"- 파일 내용에만 집중하세요. 검색 통계, 파일 개수, 형식 정보 등 메타데이터는 포함하지 마세요.\n"
+        f"- 문서에 해당 내용이 없으면 '해당 내용을 문서에서 찾을 수 없습니다'라고 답하세요.\n\n"
+        f"질문: {question}"
+    )
+    _gdi_claude_call(prompt, source_label, question, respond)
+
+
+def _gdi_ask_claude_list(file_list_text: str, source_label: str,
+                         question: str, respond):
+    """파일 목록 기반 Claude 답변 — 종류/목록/어떤 파일 질문용."""
+    prompt = (
+        f"다음은 GDI 문서 저장소에서 검색한 파일 목록입니다:\n\n"
+        f"{file_list_text}\n\n"
+        f"[답변 지침]\n"
+        f"- 사용자가 파일의 종류/목록에 대해 질문하고 있습니다.\n"
+        f"- 각 파일의 이름과 경로를 중심으로 깔끔하게 정리해서 답변하세요.\n"
+        f"- 비슷한 파일끼리 그룹핑하거나 카테고리로 분류하면 좋습니다.\n"
+        f"- 불필요한 분석, 통계, 추측은 하지 마세요.\n"
+        f"- 질문에서 요청한 것만 답변하세요.\n\n"
+        f"질문: {question}"
+    )
+    _gdi_claude_call(prompt, source_label, question, respond)
 
 
 # ── 단일 인스턴스 보장 ────────────────────────────────────────
@@ -799,7 +1005,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         text      = (command.get("text") or "").strip()
         user_id   = command.get("user_id", "")
         user_name = command.get("user_name", "")
-        client    = wc.ConfluenceCalendarClient()
+        client    = wc.ConfluenceWikiClient()
 
         if not text or text.lower() == "help":
             _wiki_help(respond)
@@ -888,30 +1094,211 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             elapsed_ms=int((time.time() - t0) * 1000),
         )
 
-    @app.command("/calendar")
-    def handle_calendar_command(ack, respond, command):
+    @app.command("/gdi")
+    def handle_gdi_command(ack, respond, command):
         """
-        /calendar help                      → 도움말
-        /calendar list                      → 캘린더 목록 & ID 확인
-        /calendar [유형] [날짜] [제목]      → 일정 등록
-          유형 예: 플잭, 프로젝트, 프로젝트 일정, 개인, 팀
-          날짜 예: 2026-03-12, 26년 3월 12일, 3월 12일, 3/12
+        /gdi help                              → 도움말
+        /gdi search [검색어]                   → 통합 검색
+        /gdi file [파일명]                     → 파일명 검색
+        /gdi folder [경로]                     → 폴더 내 파일 목록
+        /gdi [검색어]                          → 통합 검색
+        /gdi [검색어] | [질문]                 → 검색 + AI 답변
+        /gdi [폴더명] | [파일명] | [질문]      → 폴더+파일 지정 + AI 답변
         """
         ack()
-        text   = (command.get("text") or "").strip()
-        client = wc.ConfluenceCalendarClient()
+        text      = (command.get("text") or "").strip()
+        user_id   = command.get("user_id", "")
+        user_name = command.get("user_name", "")
+        client    = gc.GdiClient()
 
         if not text or text.lower() == "help":
-            _calendar_help(respond)
+            _gdi_help(respond)
             return
 
-        parts = text.split(None, 1)
-        if parts[0].lower() == "list":
-            _calendar_list(client, respond)
+        parts_cmd = text.split(None, 1)
+
+        # /gdi search [검색어]
+        if parts_cmd[0].lower() == "search":
+            query = parts_cmd[1].strip() if len(parts_cmd) == 2 else ""
+            if query:
+                t0 = time.time()
+                respond(text=f"🔍 `{query}` 검색 중...")
+                _gdi_search(client, query, respond)
+                gc.log_gdi_query(
+                    user_id=user_id, user_name=user_name,
+                    action="search", query=query,
+                    result="검색 완료",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
+            else:
+                respond(text="❌ 검색어를 입력하세요. 예: `/gdi search 에픽세븐`")
             return
 
-        # 날짜 기준 파싱으로 일정 등록
-        _calendar_add_event(client, text, respond)
+        # /gdi file [파일명]
+        if parts_cmd[0].lower() == "file":
+            filename = parts_cmd[1].strip() if len(parts_cmd) == 2 else ""
+            if filename:
+                t0 = time.time()
+                respond(text=f"🔍 `{filename}` 파일 검색 중...")
+                _gdi_file_search(client, filename, respond)
+                gc.log_gdi_query(
+                    user_id=user_id, user_name=user_name,
+                    action="file_search", query=filename,
+                    result="검색 완료",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
+            else:
+                respond(text="❌ 파일명을 입력하세요. 예: `/gdi file hero_balance.xlsx`")
+            return
+
+        # /gdi folder [경로]
+        if parts_cmd[0].lower() == "folder":
+            path = parts_cmd[1].strip() if len(parts_cmd) == 2 else ""
+            if path:
+                t0 = time.time()
+                respond(text=f"📁 `{path}` 폴더 조회 중...")
+                _gdi_folder_list(client, path, respond)
+                gc.log_gdi_query(
+                    user_id=user_id, user_name=user_name,
+                    action="folder_list", query=path,
+                    result="조회 완료",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
+            else:
+                respond(text="❌ 폴더 경로를 입력하세요. 예: `/gdi folder Epicseven/Update Review`")
+            return
+
+        # "|" 구분자 처리
+        pipe_parts = [p.strip() for p in text.split("|")]
+
+        # ── 폴더 경로 모드: 첫 파트에 ">" 가 있으면 폴더 경로로 판단 ──
+        if len(pipe_parts) >= 2 and _has_breadcrumb(pipe_parts[0]):
+            folder_path = _breadcrumb_to_path(pipe_parts[0])
+
+            if len(pipe_parts) >= 3:
+                # 3파트: 경로 | 파일키워드 | 질문
+                # '은하 훈장' 같은 인용부호 키워드 지원
+                file_keyword = pipe_parts[1].strip("''\u2018\u2019\"")
+                question     = " | ".join(pipe_parts[2:])
+            else:
+                # 2파트: 경로 | 질문 (파일 1개일 때 자동 선택)
+                file_keyword = ""
+                question     = pipe_parts[1]
+
+            if folder_path and question:
+                _gdi_folder_ai(client, folder_path, file_keyword,
+                               question, respond, user_id, user_name, text)
+                return
+
+        # 3파트 (폴더경로 아닌 경우): 키워드 | 파일명 | 질문
+        if len(pipe_parts) >= 3:
+            search_kw   = pipe_parts[0]
+            file_name   = pipe_parts[1]
+            question    = " | ".join(pipe_parts[2:])
+
+            if search_kw and file_name and question:
+                t0 = time.time()
+                respond(text=f"🔍 `{search_kw}` 에서 `{file_name}` 파일 검색 중...")
+
+                data, err = client.search_by_filename(file_name)
+                if err:
+                    gc.log_gdi_query(
+                        user_id=user_id, user_name=user_name,
+                        action="ask_claude", query=text, error=str(err),
+                        elapsed_ms=int((time.time() - t0) * 1000),
+                    )
+                    respond(text=f"❌ 파일 검색 실패\n```\n{err}\n```")
+                    return
+
+                context = gc.get_file_content_text(data)
+
+                if not context:
+                    respond(text=f"⚠️ 파일 내용 없음, `{search_kw} {file_name}` 통합 검색으로 전환...")
+                    search_data, serr = client.unified_search(
+                        f"{search_kw} {file_name}"
+                    )
+                    if serr:
+                        gc.log_gdi_query(
+                            user_id=user_id, user_name=user_name,
+                            action="ask_claude", query=text, error=str(serr),
+                            elapsed_ms=int((time.time() - t0) * 1000),
+                        )
+                        respond(text=f"❌ 검색 실패\n```\n{serr}\n```")
+                        return
+                    context = gc.get_search_context_text(search_data)
+
+                if not context:
+                    gc.log_gdi_query(
+                        user_id=user_id, user_name=user_name,
+                        action="ask_claude", query=text,
+                        error="검색 결과 없음",
+                        elapsed_ms=int((time.time() - t0) * 1000),
+                    )
+                    respond(text=f"ℹ️ `{search_kw}/{file_name}` 관련 문서를 찾을 수 없습니다.")
+                    return
+
+                source_label = f"{search_kw}/{file_name}"
+                respond(text=f"🤖 *{source_label}* — Claude 답변 생성 중...")
+                _gdi_ask_claude(context, source_label, question, respond)
+                gc.log_gdi_query(
+                    user_id=user_id, user_name=user_name,
+                    action="ask_claude",
+                    query=text,
+                    result=f"키워드: {search_kw}, 파일: {file_name}",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
+                return
+
+        # 2파트: 검색어 | 질문
+        if len(pipe_parts) == 2:
+            search_query = pipe_parts[0]
+            question     = pipe_parts[1]
+
+            if search_query and question:
+                t0 = time.time()
+                respond(text=f"🔍 `{search_query}` 검색 중...")
+
+                data, err = client.unified_search(search_query)
+                if err:
+                    gc.log_gdi_query(
+                        user_id=user_id, user_name=user_name,
+                        action="ask_claude", query=text, error=str(err),
+                        elapsed_ms=int((time.time() - t0) * 1000),
+                    )
+                    respond(text=f"❌ 검색 실패\n```\n{err}\n```")
+                    return
+
+                context = gc.get_search_context_text(data)
+                if not context:
+                    gc.log_gdi_query(
+                        user_id=user_id, user_name=user_name,
+                        action="ask_claude", query=text,
+                        error="검색 결과 없음",
+                        elapsed_ms=int((time.time() - t0) * 1000),
+                    )
+                    respond(text=f"ℹ️ `{search_query}` 관련 문서를 찾을 수 없습니다.")
+                    return
+
+                respond(text=f"🤖 *{search_query}* — Claude 답변 생성 중...")
+                _gdi_ask_claude(context, search_query, question, respond)
+                gc.log_gdi_query(
+                    user_id=user_id, user_name=user_name,
+                    action="ask_claude", query=text,
+                    result=f"검색어: {search_query}",
+                    elapsed_ms=int((time.time() - t0) * 1000),
+                )
+                return
+
+        # 나머지: 통합 검색
+        t0 = time.time()
+        respond(text=f"🔍 `{text}` 검색 중...")
+        _gdi_search(client, text, respond)
+        gc.log_gdi_query(
+            user_id=user_id, user_name=user_name,
+            action="search", query=text,
+            result="검색 완료",
+            elapsed_ms=int((time.time() - t0) * 1000),
+        )
 
     return app
 
@@ -1042,7 +1429,7 @@ def cmd_scheduler_only(sender: SlackSender):
 def cmd_commands_only(sender: SlackSender, bolt_app: App, app_token: str):
     """
     Socket Mode 핸들러만 실행합니다 — 스케줄러 없음 (로컬 PC 전용 모드).
-    /wiki, /calendar 등 슬래시 커맨드를 사내망 PC에서 처리합니다.
+    /wiki, /gdi 등 슬래시 커맨드를 사내망 PC에서 처리합니다.
     Railway 스케줄러와 충돌하지 않습니다.
     """
     _ensure_single_instance()
@@ -1058,7 +1445,7 @@ def cmd_commands_only(sender: SlackSender, bolt_app: App, app_token: str):
 # ── 메인 ──────────────────────────────────────────────────────
 
 def main():
-    load_dotenv()
+    load_dotenv(override=True)
 
     # ── 토큰 확인 ──
     bot_token = os.getenv("SLACK_BOT_TOKEN", "").strip()
@@ -1115,7 +1502,7 @@ def main():
     parser.add_argument(
         "--commands-only", action="store_true",
         help="[로컬 PC 전용] 슬래시 커맨드만 실행 — 스케줄러 없음\n"
-             "/wiki, /calendar 등 사내망 접근이 필요한 커맨드를 처리합니다.",
+             "/wiki, /gdi 등 사내망 접근이 필요한 커맨드를 처리합니다.",
     )
     args = parser.parse_args()
 
