@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-03-10 (화) — 세션 10
+
+### 완료
+- **Wiki 캐시 통합 커밋 + Railway 재배포 (v1.3.4)**
+  - wiki_client.py 3계층 캐시 + /wiki-sync 커맨드 + 구분자 변경
+  - `git push origin main` → Railway 자동 배포
+- **MCP Cache Phase 2: GDI MCP 캐시 통합 (v1.3.5)**
+  - 설계 문서: `mcp-cache-layer/docs/PHASE2_GDI_DESIGN.md`
+  - `gdi_client.py`: 3계층 캐시 통합 (L1 메모리 → L2 SQLite → L3 MCP)
+    - `list_files_in_folder`: page=1 캐시 (폴더 TTL 6시간)
+    - `search_by_filename`: page=1 + page_size≤20 캐시 (파일 TTL 24시간)
+    - `unified_search`: 캐시 미적용 (검색 결과 매번 다름)
+  - `config.py`: GDI 전용 TTL 상수 추가
+  - `log_gdi_query()`: `cache_status` 필드 추가
+  - 봇 재시작 완료 (PID 30760), DB init 2회 확인 (wiki + gdi)
+
+### 보류
+- Railway 재배포 (v1.3.5): `/gdi` 캐시는 로컬만 사용 가능, Railway는 다음 커밋+push 시 배포
+
+---
+
 ## 2026-03-10 (화) — 세션 9
 
 ### 완료

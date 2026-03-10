@@ -18,7 +18,32 @@
 
 ---
 
-## [1.3.3] - 2026-03-10 <- 현재
+## [1.3.5] - 2026-03-10 <- 현재
+
+### 추가
+- **GDI MCP 캐시 통합 (Phase 2)**: `/gdi` 커맨드에 3계층 캐시 적용
+  - L1 인메모리 (5분 TTL) → L2 SQLite (폴더 6시간, 파일 24시간) → L3 MCP HTTP
+  - 캐시 대상: `list_files_in_folder` (폴더 목록), `search_by_filename` (파일 내용)
+  - 반복 조회 시 응답시간 5-14초 → <100ms로 단축
+  - `gdi_query.log`에 `cache=` 필드 추가 (HIT_MEM, HIT_DB, MISS, STORE 등)
+- **MCP 캐시 GDI TTL 설정**: `config.py`에 `GDI_FOLDER_TTL_HOURS=6`, `GDI_FILE_TTL_HOURS=24`
+
+---
+
+## [1.3.4] - 2026-03-10
+
+### 추가
+- **Wiki 캐시 통합 (Phase 1)**: `/wiki` 커맨드에 3계층 캐시 적용
+  - L1 인메모리 (5분 TTL) → L2 SQLite (24시간) → L3 MCP HTTP
+  - `wiki_query.log`에 `cache=` 필드 추가
+- **`/wiki-sync` 커맨드**: 캐시 동기화 관리 (status/full/delta)
+
+### 변경
+- `/wiki`, `/gdi` 커맨드 구분자: `|` → `\` (Jira 필터 충돌 방지)
+
+---
+
+## [1.3.3] - 2026-03-10
 
 ### 수정
 - **daily/weekly 중복 발송 버그 수정**: `misfire_grace_time` 3600 → 60초

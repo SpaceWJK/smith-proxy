@@ -4,6 +4,11 @@ gdi_client.py - GDI(Game Doc Insight) MCP 클라이언트
 MCP 프록시(mcp-dev.sginfra.net)를 통해 GDI 문서 저장소에 접근합니다.
 wiki_client.py 와 동일한 패턴으로, mcp_session.McpSession 을 공유합니다.
 
+캐시 계층 (Phase 2):
+  L1: 인메모리 dict (_GDI_MEM_CACHE) — 5분 TTL
+  L2: SQLite (mcp-cache-layer) — 폴더 6시간, 파일 24시간 TTL
+  L3: MCP HTTP 호출 (폴백)
+
 사용 가능한 GDI MCP 도구:
   unified_search, search_by_filename, list_files_in_folder,
   fetch_row_documents, search_vector_candidates,
@@ -21,6 +26,51 @@ import time
 from mcp_session import McpSession
 
 logger = logging.getLogger(__name__)
+
+# ── MCP 캐시 레이어 (옵셔널 — 임포트 실패 시 캐시 없이 동작) ──────────
+_GDI_CACHE_ENABLED = False
+_gdi_cache = None
+_ops_log = None
+_perf = None
+_GDI_FOLDER_TTL = 6     # 기본값 (config 로드 실패 시)
+_GDI_FILE_TTL = 24
+_GDI_MEM_TTL = 300
+
+try:
+    import sys as _sys
+    _cache_path = "D:/Vibe Dev/QA Ops/mcp-cache-layer"
+    if _cache_path not in _sys.path:
+        _sys.path.insert(0, _cache_path)
+    from src.cache_manager import CacheManager as _CacheManager
+    from src.cache_logger import ops_log as _ops_log_mod, perf as _perf_mod
+    from src import config as _cache_config
+    _gdi_cache = _CacheManager()
+    _ops_log = _ops_log_mod
+    _perf = _perf_mod
+    _GDI_FOLDER_TTL = getattr(_cache_config, "GDI_FOLDER_TTL_HOURS", 6)
+    _GDI_FILE_TTL = getattr(_cache_config, "GDI_FILE_TTL_HOURS", 24)
+    _GDI_MEM_TTL = getattr(_cache_config, "GDI_MEM_TTL_SEC", 300)
+    _GDI_CACHE_ENABLED = True
+    logger.info("[gdi] 캐시 레이어 로드 완료 (folder TTL=%dh, file TTL=%dh, mem TTL=%ds)",
+                _GDI_FOLDER_TTL, _GDI_FILE_TTL, _GDI_MEM_TTL)
+except Exception as _e:
+    logger.info("[gdi] 캐시 레이어 미사용: %s", _e)
+
+# ── L1 인메모리 캐시 ─────────────────────────────────────────────────────
+_GDI_MEM_CACHE: dict = {}  # {key: (data, timestamp)}
+
+
+def _mem_get(key: str):
+    """L1 메모리 캐시 조회. TTL 초과 시 None."""
+    entry = _GDI_MEM_CACHE.get(key)
+    if entry and (time.time() - entry[1]) < _GDI_MEM_TTL:
+        return entry[0]
+    return None
+
+
+def _mem_set(key: str, data):
+    """L1 메모리 캐시 저장."""
+    _GDI_MEM_CACHE[key] = (data, time.time())
 
 GDI_MCP_URL = os.getenv(
     "GDI_MCP_URL", "http://mcp-dev.sginfra.net/game-doc-insight-mcp"
@@ -55,10 +105,13 @@ def _get_gdi_query_logger() -> logging.Logger:
 
 def log_gdi_query(*, user_id: str = "", user_name: str = "",
                   action: str, query: str, result: str = "",
-                  error: str = "", elapsed_ms: int = 0):
+                  error: str = "", elapsed_ms: int = 0,
+                  cache_status: str = ""):
     """
     /gdi 조회 내역을 logs/gdi_query.log 에 기록합니다.
     wiki_client.log_wiki_query() 와 동일 인터페이스.
+
+    cache_status: HIT_MEM, HIT_DB, MISS, MISS_STALE, STORE, DISABLED
     """
     gl     = _get_gdi_query_logger()
     status = "ERROR" if error else "OK"
@@ -69,6 +122,8 @@ def log_gdi_query(*, user_id: str = "", user_name: str = "",
         msg += f" | result={result}"
     if error:
         msg += f" | error={error}"
+    if cache_status:
+        msg += f" | cache={cache_status}"
     if elapsed_ms > 0:
         msg += f" | {elapsed_ms}ms"
 
@@ -96,7 +151,7 @@ def _get_mcp() -> McpSession:
 # ── GdiClient ────────────────────────────────────────────────────────────
 
 class GdiClient:
-    """GDI MCP 클라이언트."""
+    """GDI MCP 클라이언트 (3계층 캐시 통합)."""
 
     def __init__(self):
         self._mcp = _get_mcp()
@@ -110,10 +165,84 @@ class GdiClient:
                 return raw
         return raw
 
+    # ── 캐시 내부 헬퍼 ────────────────────────────────────────
+
+    @staticmethod
+    def _cache_key_folder(folder_path: str) -> str:
+        return f"folder:{folder_path}"
+
+    @staticmethod
+    def _cache_key_file(filename: str) -> str:
+        return f"file:{filename}"
+
+    def _try_cache_get(self, cache_key: str) -> tuple:
+        """L1→L2 캐시 조회. (data, cache_status) 반환. 미스 시 (None, status)."""
+        if not _GDI_CACHE_ENABLED:
+            return None, "DISABLED"
+
+        # L1: 메모리
+        mem = _mem_get(cache_key)
+        if mem is not None:
+            if _ops_log:
+                _ops_log.cache_hit(cache_key, source="memory")
+            return mem, "HIT_MEM"
+
+        # L2: SQLite
+        t0 = _perf.now_ms() if _perf else 0
+        node = _gdi_cache.get_node("gdi", cache_key)
+        if node:
+            if _gdi_cache.is_stale(node["id"]):
+                return None, "MISS_STALE"
+            content = _gdi_cache.get_content(node["id"])
+            if content and content.get("body_text"):
+                try:
+                    data = json.loads(content["body_text"])
+                    _mem_set(cache_key, data)  # L2 → L1 승격
+                    if _ops_log:
+                        elapsed = _perf.elapsed_ms(t0) if _perf else 0
+                        _ops_log.cache_hit(cache_key, source="sqlite",
+                                           node_id=node["id"], elapsed_ms=elapsed)
+                    return data, "HIT_DB"
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        if _ops_log:
+            elapsed = _perf.elapsed_ms(t0) if _perf else 0
+            _ops_log.cache_miss(cache_key, reason="not_found", elapsed_ms=elapsed)
+        return None, "MISS"
+
+    def _cache_store(self, cache_key: str, title: str, data, *,
+                     node_type: str = "file", ttl_hours: int = 24,
+                     path: str | None = None):
+        """L2 SQLite + L1 메모리에 캐시 저장."""
+        if not _GDI_CACHE_ENABLED or data is None:
+            return
+        t0 = _perf.now_ms() if _perf else 0
+        try:
+            body_text = json.dumps(data, ensure_ascii=False)
+            node_id = _gdi_cache.put_page(
+                "gdi", cache_key, title,
+                node_type=node_type, path=path,
+                body_text=body_text,
+            )
+            _gdi_cache.upsert_meta(node_id, ttl_hours=ttl_hours)
+            _mem_set(cache_key, data)
+            if _ops_log:
+                elapsed = _perf.elapsed_ms(t0) if _perf else 0
+                _ops_log.cache_store(title, node_id=node_id,
+                                     source_id=cache_key,
+                                     char_count=len(body_text),
+                                     has_body=True, elapsed_ms=elapsed)
+        except Exception as e:
+            logger.warning("[gdi] 캐시 저장 실패 (%s): %s", cache_key, e)
+
+    # ── MCP 호출 메서드 (캐시 통합) ───────────────────────────
+
     def unified_search(self, query_text: str, game_name: str = None,
                        top_k: int = 10) -> tuple:
         """
         크로스 컬렉션 통합 검색.
+        (캐시 미적용 — 검색 결과는 매번 달라질 수 있음)
 
         Returns: (parsed_data, error_str)
         """
@@ -132,9 +261,21 @@ class GdiClient:
                            exact_match: bool = False) -> tuple:
         """
         파일명 기반 검색 (청크 내용 포함, 페이지네이션).
+        page=1 + page_size ≤ 20 일 때만 캐시 적용.
 
-        Returns: (parsed_data, error_str)
+        Returns: (parsed_data, error_str, cache_status)
         """
+        cache_status = ""
+
+        # 캐시 조회 (첫 페이지 + 소규모만)
+        use_cache = (page == 1 and page_size <= 20)
+        if use_cache:
+            cache_key = self._cache_key_file(filename_query)
+            cached, cache_status = self._try_cache_get(cache_key)
+            if cached is not None:
+                return cached, None
+
+        # MCP 호출
         args = {"file_name_query": filename_query, "page": page,
                 "page_size": page_size}
         if game_name:
@@ -145,15 +286,41 @@ class GdiClient:
         raw, err = self._mcp.call_tool("search_by_filename", args)
         if err:
             return None, err
-        return self._parse_raw(raw), None
+        data = self._parse_raw(raw)
+
+        # 캐시 저장 (성공 + 파일 정보 있을 때)
+        if use_cache and data and isinstance(data, dict) and data.get("file"):
+            file_info = data["file"]
+            title = file_info.get("file_name", filename_query)
+            fpath = file_info.get("file_path", "")
+            self._cache_store(
+                self._cache_key_file(filename_query), title, data,
+                node_type="file", ttl_hours=_GDI_FILE_TTL, path=fpath,
+            )
+            if not cache_status:
+                cache_status = "STORE"
+
+        return data, None
 
     def list_files_in_folder(self, folder_path: str, page: int = 1,
                              page_size: int = 20) -> tuple:
         """
         폴더 내 파일 목록 조회.
+        page=1 일 때만 캐시 적용.
 
         Returns: (parsed_data, error_str)
         """
+        cache_status = ""
+
+        # 캐시 조회 (첫 페이지만)
+        use_cache = (page == 1)
+        if use_cache:
+            cache_key = self._cache_key_folder(folder_path)
+            cached, cache_status = self._try_cache_get(cache_key)
+            if cached is not None:
+                return cached, None
+
+        # MCP 호출
         raw, err = self._mcp.call_tool("list_files_in_folder", {
             "folder_path": folder_path,
             "page": page,
@@ -161,7 +328,18 @@ class GdiClient:
         })
         if err:
             return None, err
-        return self._parse_raw(raw), None
+        data = self._parse_raw(raw)
+
+        # 캐시 저장
+        if use_cache and data and isinstance(data, dict) and data.get("success"):
+            self._cache_store(
+                self._cache_key_folder(folder_path), folder_path, data,
+                node_type="folder", ttl_hours=_GDI_FOLDER_TTL, path=folder_path,
+            )
+            if not cache_status:
+                cache_status = "STORE"
+
+        return data, None
 
 
 # ── Slack 포맷 헬퍼 ──────────────────────────────────────────────────────

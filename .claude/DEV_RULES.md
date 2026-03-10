@@ -61,7 +61,7 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트 (Git 레포)
   - MAJOR: 아키텍처 변경, 호환성 깨짐
   - MINOR: 새 기능 추가
   - PATCH: 버그 수정, 작은 개선
-- 현재 버전: **v1.3.2** (changelog/CHANGELOG.md 참조)
+- 현재 버전: **v1.3.5** (changelog/CHANGELOG.md 참조)
 - 버전 변경 시 CHANGELOG.md 반드시 업데이트
 
 ## 4. 배포 규칙
