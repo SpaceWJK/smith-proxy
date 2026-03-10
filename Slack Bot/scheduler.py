@@ -440,8 +440,9 @@ class NotificationScheduler:
                     minute      = 0,
                     timezone    = self.tz,
                 ),
-                id   = "schedule-monitor",
-                name = "스케줄 모니터링",
+                id                 = "schedule-monitor",
+                name               = "스케줄 모니터링",
+                misfire_grace_time = 3600,  # Railway 재시작 시 18:00 이후 1시간 이내라면 즉시 실행
             )
             logger.info("  ✅ 등록: [스케줄 모니터링]  (평일 18:00)")
         except Exception as e:
@@ -463,12 +464,32 @@ class NotificationScheduler:
                 print(f"    └ 다음 실행: {nxt_str}")
         print("=" * 60 + "\n")
 
+    def _notify_startup(self):
+        """
+        Railway 재시작 시 monitor_alert_channel 에 알림을 발송합니다.
+        재시작 시각을 Slack으로 즉시 알림 → 조기 감지 + 수동 대응 가능.
+        """
+        alert_channel = self.config.get("monitor_alert_channel")
+        if not alert_channel:
+            return
+        try:
+            now_kst = datetime.now(self.tz).strftime("%Y-%m-%d %H:%M:%S")
+            self.sender.client.chat_postMessage(
+                channel = alert_channel,
+                text    = f"[Railway] 스케줄러 재시작 — {now_kst} KST\n"
+                          f"misfire_grace_time=3600 적용 중 (재시작 후 1시간 이내 스케줄 자동 발송)",
+            )
+            logger.info(f"[startup] Railway 재시작 알림 발송 → {alert_channel}")
+        except Exception as e:
+            logger.warning(f"[startup] 재시작 알림 발송 실패: {e}")
+
     def start(self):
         """스케줄 등록 후 백그라운드 실행 (논블로킹 — Bolt 와 공존 가능)"""
         self.setup()
         self.print_schedule()
-        logger.info("🤖  슬랙 알림 봇 스케줄러 시작 (백그라운드)")
+        logger.info("슬랙 알림 봇 스케줄러 시작 (백그라운드)")
         self.scheduler.start()
+        self._notify_startup()   # Railway 재시작 알림 (monitor_alert_channel)
 
     def shutdown(self):
         """스케줄러 중지"""

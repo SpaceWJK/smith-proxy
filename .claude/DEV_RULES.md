@@ -14,6 +14,7 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트 (Git 레포)
 │   └── WORK_LOG.md                ← 일일 작업 히스토리
 ├── logs/                           ← 로그 (wiki 조회, 디버그)
 │   ├── wiki_query.log             ← /wiki 조회 내역 + 에러
+│   ├── gdi_query.log              ← /gdi 조회 내역 + 에러
 │   └── debug.log                  ← 디버그 상세 로그
 ├── changelog/                      ← 버전 히스토리
 │   └── CHANGELOG.md               ← 패치/업데이트 이력
@@ -22,7 +23,9 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트 (Git 레포)
 │   ├── slack_sender.py            ← Slack Web API 래퍼 + Block Kit 빌더
 │   ├── scheduler.py               ← APScheduler 스케줄 관리
 │   ├── interaction_handler.py     ← 체크리스트 상태 관리
+│   ├── mcp_session.py             ← MCP Streamable HTTP 세션 공용 모듈
 │   ├── wiki_client.py             ← Confluence Wiki MCP 클라이언트
+│   ├── gdi_client.py              ← GDI(Game Doc Insight) MCP 클라이언트
 │   ├── missed_tracker.py          ← 전일 미체크 항목 추적
 │   ├── schedule_monitor.py        ← 스케줄 모니터링
 │   ├── config.json                ← 스케줄 정의 + 사용자 매핑
@@ -58,7 +61,7 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트 (Git 레포)
   - MAJOR: 아키텍처 변경, 호환성 깨짐
   - MINOR: 새 기능 추가
   - PATCH: 버그 수정, 작은 개선
-- 현재 버전: **v1.2.0** (changelog/CHANGELOG.md 참조)
+- 현재 버전: **v1.3.2** (changelog/CHANGELOG.md 참조)
 - 버전 변경 시 CHANGELOG.md 반드시 업데이트
 
 ## 4. 배포 규칙
