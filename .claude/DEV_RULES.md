@@ -1,6 +1,6 @@
 # Slack Bot 개발 규칙
-> **Version**: 1.1.0
-> **Last Updated**: 2026-03-09
+> **Version**: 1.2.0
+> **Last Updated**: 2026-03-10
 > **Author**: Claude (AI Assistant)
 
 ---
@@ -12,14 +12,18 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트 (Git 레포)
 ├── .claude/                        ← Claude 메모리 (개발 규칙, 작업 히스토리)
 │   ├── DEV_RULES.md               ← 이 파일
 │   └── WORK_LOG.md                ← 일일 작업 히스토리
-├── logs/                           ← 로그 (wiki 조회, 디버그)
+├── logs/                           ← 로그
 │   ├── wiki_query.log             ← /wiki 조회 내역 + 에러
 │   ├── gdi_query.log              ← /gdi 조회 내역 + 에러
-│   └── debug.log                  ← 디버그 상세 로그
+│   └── jira_query.log             ← /jira 조회 내역 + 에러
 ├── changelog/                      ← 버전 히스토리
 │   └── CHANGELOG.md               ← 패치/업데이트 이력
+├── scripts/                        ← 유틸리티 스크립트
+│   ├── cleanup_mcp_processes.ps1  ← MCP 프로세스 정리
+│   ├── mcp_launcher.cmd           ← MCP 런처
+│   └── run_cleanup.bat            ← 정리 배치
 ├── Slack Bot/                      ← 소스 코드 디렉토리
-│   ├── slack_bot.py               ← 메인 진입점
+│   ├── slack_bot.py               ← 메인 진입점 (~1700줄)
 │   ├── slack_sender.py            ← Slack Web API 래퍼 + Block Kit 빌더
 │   ├── scheduler.py               ← APScheduler 스케줄 관리
 │   ├── interaction_handler.py     ← 체크리스트 상태 관리
@@ -36,6 +40,22 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트 (Git 레포)
 ├── venv/                           ← Python 가상환경
 ├── .env                            ← 환경변수 (토큰, API 키)
 └── .gitignore
+```
+
+### 관련 외부 프로젝트
+
+```
+D:\Vibe Dev\QA Ops\mcp-cache-layer\ ← MCP 캐시 레이어 (별도 레포)
+├── src/                            ← 캐시 코어 모듈
+│   ├── cache_manager.py           ← CacheManager 클래스 (SQLite)
+│   ├── sync_engine.py             ← Wiki/Jira 동기화 엔진
+│   ├── config.py                  ← TTL 설정 (Wiki/GDI/Jira)
+│   └── ...
+├── scripts/
+│   └── auto_sync.py               ← 2시간 주기 캐시 동기화
+├── cache/
+│   └── mcp_cache.db               ← SQLite 캐시 DB (schema v2)
+└── docs/                           ← 설계 문서
 ```
 
 ## 2. 작업 디렉토리 규칙
@@ -62,14 +82,14 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트 (Git 레포)
   - MAJOR: 아키텍처 변경, 호환성 깨짐
   - MINOR: 새 기능 추가
   - PATCH: 버그 수정, 작은 개선
-- 현재 버전: **v1.4.0** (changelog/CHANGELOG.md 참조)
+- 현재 버전: **v1.4.1** (changelog/CHANGELOG.md 참조)
 - 버전 변경 시 CHANGELOG.md 반드시 업데이트
 
 ## 4. 배포 규칙
 
 ### 로컬 PC (커맨드 핸들러)
 - 모드: `python slack_bot.py --commands-only`
-- 역할: 슬래시 커맨드(/wiki), 체크리스트 토글 핸들러
+- 역할: 슬래시 커맨드(/wiki, /gdi, /jira), 체크리스트 토글 핸들러
 - 시작: `start_bot.bat` (venv 활성화 포함)
 - 백그라운드 실행: WMI 방식 (Start-Process는 타임아웃 이슈)
   ```powershell

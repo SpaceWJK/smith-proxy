@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-03-10 (화) — 세션 12
+
+### 완료
+- **v1.4.1: 검색 정확도 전면 개선 (Wiki + Jira + GDI)**
+  - `wiki_client.py`: `search_with_context()` 메서드 추가
+    - 질문에서 연도(20XX) 추출 → 제목 키워드와 조합하여 CQL 검색
+    - CamelCase 분리: "HotFix" → ["Hot", "Fix"] (Confluence 토크나이저 대응)
+    - 예: "2026년 핫픽스 알려줘" + 제목 "HotFix 내역" → CQL `title ~ "2026" AND title ~ "Hot"` → "2026_Hot Fix" 페이지 발견
+    - 실패 시 `get_page_by_title()` 폴백
+  - `slack_bot.py`: `_wiki_fetch_page()`에 `question` 파라미터 추가
+    - 파이프(`\`) 핸들러에서 질문 맥락을 검색에 전달
+  - `jira_client.py`: `_extract_keywords()`, `question_to_jql_variants()` 추가
+    - 점진적 확장: 전체 키워드 → 앞 2개 → 첫 키워드만
+    - `question_to_jql()`: `summary ~` → `text ~` (전체 필드 검색)
+    - 한국어 불용어 제거 (알려줘, 보여줘, 관련, 최근 등)
+  - `slack_bot.py`: Jira 프로젝트 파이프 핸들러에 broadening 패턴 적용
+    - `jql_variants` 순회하며 첫 결과 발견 시 break
+- **MCP 캐시 auto_sync 완료 확인**
+  - Wiki Full Ingest: 2000페이지 스캔, 1462 추가, 538 갱신, 0 에러 (978.95초)
+  - Jira Delta Sync: 6 프로젝트 (EP7, GCZ, LDN, LNA, PRH, SMQA), 0건 신규
+- **봇 재시작**: PID 43524 → PID 41436 (전체 변경사항 적용)
+- **3개 파일 문법 검증 통과** (`py_compile`)
+
+### 보류
+- **자기 학습 검색 시스템**: 사용자 제안 3가지 방향 중 선택 대기
+  1. 질의 패턴 학습 (로그 기반 매핑 테이블)
+  2. AI 질의 재구성 (Haiku로 검색어 전처리)
+  3. 벡터/시맨틱 검색 (임베딩 기반)
+- **auto_sync Windows 작업 스케줄러 등록** (2시간 주기 자동 실행)
+
+### 버전
+- v1.4.0 → **v1.4.1**
+
+### 수정 파일
+- `Slack Bot/wiki_client.py` (수정 — search_with_context 추가)
+- `Slack Bot/jira_client.py` (수정 — _extract_keywords, question_to_jql_variants 추가)
+- `Slack Bot/slack_bot.py` (수정 — _wiki_fetch_page question 파라미터, jira broadening)
+- `changelog/CHANGELOG.md` (수정 — v1.4.1 기록)
+
+---
+
 ## 2026-03-10 (화) — 세션 11
 
 ### 완료

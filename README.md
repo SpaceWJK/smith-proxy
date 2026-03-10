@@ -1,6 +1,6 @@
 # 🤖 퍼블리싱QA1팀 Slack 알림 봇 (QA Supporter)
 
-**현재 버전: `v1.1.5`** | [변경 이력 →](./CHANGELOG.md)
+**현재 버전: `v1.4.1`** | [변경 이력 →](./changelog/CHANGELOG.md)
 
 > **SGP 퍼블리싱QA1팀** 전용 Slack 자동화 봇
 > 일일 업무 헤더, QA 체크리스트, 주간 보고, 업데이트 차수 점검, 월간·분기 체크리스트를 자동 발송하고 담당자가 직접 체크할 수 있는 인터랙티브 메시지를 제공합니다.
@@ -13,7 +13,7 @@
 ┌─────────────────────────────────────────────────────────────┐
 │  로컬 PC (D:\Vibe Dev\Slack Bot\)                           │
 │  ▶ 실행 모드: --commands-only                               │
-│  ▶ 역할: 슬래시 커맨드(/wiki) + 체크박스 인터랙션 처리      │
+│  ▶ 역할: 슬래시 커맨드(/wiki,/gdi,/jira) + 인터랙션 처리    │
 │  ▶ 봇 시작: start_bot.bat (WMI 백그라운드 실행)             │
 └────────────────┬────────────────────────────────────────────┘
                  │ git push (Slack Bot/ 서브폴더)
@@ -42,7 +42,7 @@
 | 항목 | 로컬 PC | Railway |
 |------|---------|---------|
 | 실행 모드 | `--commands-only` | `--scheduler-only` |
-| 주요 역할 | 체크박스 클릭 처리, `/wiki` 커맨드 | 스케줄 메시지 발송 |
+| 주요 역할 | 체크박스 클릭 처리, `/wiki` `/gdi` `/jira` 커맨드 | 스케줄 메시지 발송 |
 | 상태 파일 | 없음 (fallback 재구성) | `data/checklist_state.json` |
 | 봇 재시작 | 수동 (`start_bot.bat`) | push 시 자동 재배포 |
 
@@ -51,24 +51,32 @@
 ## 📁 파일 구조
 
 ```
-Slack Bot/
-├── slack_bot.py            # 메인 진입점 (CLI, Bolt 앱, 인터랙션 핸들러)
-├── scheduler.py            # APScheduler 스케줄 관리 (6가지 타입 지원)
-├── slack_sender.py         # Slack Web API 래퍼 (블록 빌더, 템플릿 치환)
-├── interaction_handler.py  # 인터랙티브 체크리스트 상태 관리 (JSON 파일)
-├── wiki_client.py          # Confluence Wiki MCP 클라이언트 (/wiki 커맨드)
-├── wiki_search_rules.json  # ★ wiki 페이지별 검색 전략 예외처리 규칙 (hot reload)
-├── config.json             # ★ 스케줄 설정 파일 (여기를 수정)
-├── data/
-│   └── checklist_state.json    # 체크 상태 저장 (Railway 자동 생성)
-├── .env                    # 토큰 설정 (비공개 — .gitignore 처리)
-├── .env.example            # 토큰 템플릿
-├── requirements.txt        # 의존 패키지
-├── Procfile                # Railway 실행 명령
-├── runtime.txt             # Railway Python 버전
-├── start_bot.bat           # 로컬 봇 시작 스크립트
-├── setup.bat               # 최초 설치 스크립트
-└── run.bat                 # 단순 실행 스크립트
+D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트
+├── .claude/                        ← Claude 메모리 (개발 규칙, 작업 히스토리)
+├── logs/                           ← 조회 로그
+│   ├── wiki_query.log             ← /wiki 조회 내역
+│   ├── gdi_query.log              ← /gdi 조회 내역
+│   └── jira_query.log             ← /jira 조회 내역
+├── changelog/
+│   └── CHANGELOG.md               ← 버전 히스토리
+├── scripts/                        ← 유틸리티 스크립트
+├── Slack Bot/                      ← 소스 코드 디렉토리
+│   ├── slack_bot.py               ← 메인 진입점 (~1700줄)
+│   ├── scheduler.py               ← APScheduler 스케줄 관리
+│   ├── slack_sender.py            ← Slack Web API 래퍼 + Block Kit 빌더
+│   ├── interaction_handler.py     ← 인터랙티브 체크리스트 상태 관리
+│   ├── mcp_session.py             ← MCP Streamable HTTP 세션 공용 모듈
+│   ├── wiki_client.py             ← Confluence Wiki MCP 클라이언트
+│   ├── gdi_client.py              ← GDI(Game Doc Insight) MCP 클라이언트
+│   ├── jira_client.py             ← Jira MCP 클라이언트
+│   ├── missed_tracker.py          ← 전일 미체크 항목 추적
+│   ├── schedule_monitor.py        ← 스케줄 모니터링
+│   ├── config.json                ← ★ 스케줄 설정 파일
+│   └── wiki_search_rules.json     ← ★ wiki 검색 전략 예외 (hot reload)
+├── .env                            ← 환경변수 (비공개)
+├── requirements.txt                ← 의존 패키지
+├── Procfile                        ← Railway 실행 명령
+└── start_bot.bat                   ← 로컬 봇 시작 스크립트
 ```
 
 ---
@@ -342,7 +350,7 @@ Confluence Wiki 페이지를 Slack에서 직접 조회합니다.
 | `/wiki [페이지 제목]` | 해당 제목의 Wiki 페이지 내용 조회 |
 | `/wiki [상위] > [하위] > [페이지]` | `>` 구분자로 계층 경로 지정 조회 |
 | `/wiki [상위] / [하위] / [페이지]` | Confluence 브레드크럼 경로 그대로 붙여넣기 가능 |
-| `/wiki [페이지] \| [질문]` | 페이지 내용 기반 Claude AI 답변 |
+| `/wiki [페이지] \ [질문]` | 페이지 내용 기반 Claude AI 답변 |
 | `/wiki search [검색어]` | 키워드로 페이지 목록 검색 |
 | `/wiki help` | 도움말 출력 |
 
@@ -357,7 +365,7 @@ Confluence Wiki 페이지를 Slack에서 직접 조회합니다.
 
 #### 페이지별 검색 전략 예외처리 (`wiki_search_rules.json`)
 
-`/wiki [페이지] | [질문]` 사용 시 페이지와 질문 조건에 따라 **다른 조회 전략**을 적용할 수 있습니다.
+`/wiki [페이지] \ [질문]` 사용 시 페이지와 질문 조건에 따라 **다른 조회 전략**을 적용할 수 있습니다.
 봇 재시작 없이 파일 수정만으로 즉시 반영됩니다 (**hot reload**).
 
 | 항목 | 내용 |
@@ -389,7 +397,47 @@ Confluence Wiki 페이지를 Slack에서 직접 조회합니다.
 
 ---
 
-### 5. 미션 진행 현황 리마인더
+### 5. `/gdi` 슬래시 커맨드 (v1.3.0~)
+
+GDI(Game Doc Insight) 문서 데이터를 Slack에서 검색합니다.
+
+| 커맨드 | 설명 |
+|--------|------|
+| `/gdi search [검색어]` | 크로스 컬렉션 통합 검색 |
+| `/gdi file [파일명]` | 파일명 기반 검색 (청크 내용 포함) |
+| `/gdi folder [경로]` | 폴더 내 파일 목록 조회 |
+| `/gdi [검색어] \ [질문]` | 검색 결과 기반 Claude AI 답변 |
+| `/gdi [폴더명] \ [파일명] \ [질문]` | 폴더+파일 지정 후 Claude AI 답변 |
+| `/gdi help` | 도움말 출력 |
+
+- MCP 서버: `http://mcp-dev.sginfra.net/game-doc-insight-mcp`
+- 질문 의도 감지: 목록 질문 vs 내용 질문 자동 분기
+- 3계층 캐시: 폴더 6시간, 파일 24시간
+
+---
+
+### 6. `/jira` 슬래시 커맨드 (v1.4.0~)
+
+Jira 이슈/프로젝트를 Slack에서 조회합니다.
+
+| 커맨드 | 설명 |
+|--------|------|
+| `/jira search [텍스트 or JQL]` | JQL 검색 (자동 변환 지원) |
+| `/jira issue [PROJ-123]` | 이슈 상세 조회 |
+| `/jira project [KEY]` | 프로젝트 정보 조회 |
+| `/jira projects` | 전체 프로젝트 목록 |
+| `/jira [이슈키] \ [질문]` | 이슈 기반 Claude AI 답변 |
+| `/jira [검색어] \ [질문]` | 검색 결과 기반 Claude AI 답변 |
+| `/jira help` | 도움말 출력 |
+
+- MCP 서버: `http://mcp.sginfra.net/confluence-jira-mcp`
+- 자동 JQL 변환: 단순 텍스트 → `text ~ "..." ORDER BY updated DESC`
+- 점진적 확장 검색: 0건 시 키워드를 줄여가며 자동 재시도 (v1.4.1)
+- 3계층 캐시: 이슈 10분, 프로젝트 1시간, 프로젝트목록 24시간
+
+---
+
+### 7. 미션 진행 현황 리마인더
 
 각 채널의 미션 진행 상황을 매일 자동 알림합니다.
 
@@ -602,13 +650,13 @@ ANTHROPIC_API_KEY=sk-ant-... # Claude API (wiki 요약)
 | 항목 | 내용 |
 |------|------|
 | 버전 형식 | Semantic Versioning (`Major.Minor.Patch`) |
-| 변경 이력 | [`CHANGELOG.md`](./CHANGELOG.md) |
+| 변경 이력 | [`CHANGELOG.md`](./changelog/CHANGELOG.md) |
 | 롤백 방법 | `git checkout v1.1.3` → `git checkout main` 으로 복귀 |
 | 태그 목록 | `git tag -l` |
 
 **버전 규칙 요약:**
 - **Major**: 기존 아키텍처와 호환 불가한 파격적 변경
-- **Minor**: **새 기능 카테고리** 추가 시에만 (현재 기능: ① 알리미 ② /wiki)
+- **Minor**: **새 기능 카테고리** 추가 시에만 (현재 기능: ① 알리미 ② /wiki ③ /gdi ④ /jira)
 - **Patch**: 기존 기능 수정/개선 (버그 수정, 미션 채널 추가, wiki 예외처리 등 모두 Patch)
 
 ---
@@ -636,37 +684,51 @@ ANTHROPIC_API_KEY=sk-ant-... # Claude API (wiki 요약)
 
 | 파일 | 역할 | 주요 수정 케이스 |
 |------|------|----------------|
-| `slack_bot.py` | 봇 진입점, 슬래시 커맨드 핸들러 | 새 커맨드 추가, wiki 응답 로직 변경, 미션/체크리스트 수정 |
-| `wiki_client.py` | Confluence MCP 클라이언트 | MCP 도구 추가, 검색 전략 메서드 추가, CQL 쿼리 변경 |
-| `wiki_search_rules.json` | 페이지별 검색 전략 예외처리 규칙 | 새 예외 규칙 추가/수정 (봇 재시작 불필요) |
+| `slack_bot.py` | 봇 진입점, 슬래시 커맨드 핸들러 (~1700줄) | 새 커맨드 추가, 응답 로직 변경, 미션/체크리스트 수정 |
+| `mcp_session.py` | MCP Streamable HTTP 세션 공용 모듈 | MCP 통신 프로토콜 변경 |
+| `wiki_client.py` | Confluence Wiki MCP 클라이언트 | CQL 쿼리 변경, 검색 전략 추가 |
+| `gdi_client.py` | GDI MCP 클라이언트 | 검색/파일/폴더 조회 로직 변경 |
+| `jira_client.py` | Jira MCP 클라이언트 | JQL 변환, 이슈/프로젝트 조회 변경 |
+| `wiki_search_rules.json` | wiki 검색 전략 예외처리 규칙 | 새 예외 규칙 추가/수정 (hot reload) |
 | `scheduler.py` | APScheduler 기반 스케줄 실행 | 새 스케줄 타입 추가 |
 | `interaction_handler.py` | 체크박스 인터랙션(Block Kit 동기화) | 체크리스트 UI 변경 |
 | `config.json` | 스케줄 정의, 채널 ID, 메시지 템플릿 | 스케줄 추가/수정, 메시지 내용 변경 |
-| `mission_state.json` | 미션별 진행율 상태 저장 (런타임 생성) | 직접 수정 불필요 |
-| `CHANGELOG.md` | 버전 이력 (Semantic Versioning) | 버전 업 시 반드시 업데이트 |
+| `changelog/CHANGELOG.md` | 버전 이력 (Semantic Versioning) | 버전 업 시 반드시 업데이트 |
 
-### 🔑 현재 구현된 두 가지 핵심 기능
+### 🔑 현재 구현된 네 가지 핵심 기능
 
 #### ① 슬랙 알리미 (Slack Notification)
-- **핵심 파일**: `slack_bot.py` (스케줄 발송), `scheduler.py`, `config.json`
+- **핵심 파일**: `slack_bot.py`, `scheduler.py`, `config.json`
 - **포함 기능**: 인터랙티브 체크리스트, 미션 진행 현황 리마인더, 헤더 메시지 등
-- **스케줄 설계**: `config.json`의 `"schedules"` 배열에 정의. `schedule_type`별 시간 계산 로직은 `scheduler.py`에 있음
 - **다중 사용자 체크**: `body[actions]` delta 방식으로 동기화 (`interaction_handler.py`)
 - **미션 진행율**: 전날 스레드 댓글에서 `N%` 패턴 자동 파싱 → `mission_state.json` 업데이트
 
 #### ② /wiki 슬래시 커맨드 (Wiki Response)
-- **핵심 파일**: `slack_bot.py` (`_wiki_*` 함수들), `wiki_client.py`, `wiki_search_rules.json`
+- **핵심 파일**: `slack_bot.py` (`_wiki_*` 함수들), `wiki_client.py`
 - **MCP 서버**: `http://mcp.sginfra.net/confluence-wiki-mcp` (Streamable HTTP)
 - **기본 흐름**:
   ```
-  /wiki [페이지] | [질문]
+  /wiki [페이지] \ [질문]
     → _find_matching_rule()       ← wiki_search_rules.json 규칙 매칭 (hot reload)
     → 규칙 있으면 해당 전략 실행  ← 예: get_latest_descendant()
-    → 규칙 없으면 _wiki_fetch_page() 기본 조회
+    → 규칙 없으면 search_with_context() ← 질문 맥락(연도/키워드) 인식 검색
     → _wiki_ask_claude()          ← Claude Haiku로 답변 생성
   ```
-- **페이지 조회**: `wiki_client.py`의 `get_page_by_path()` → CQL 3단계 폴백
-- **콘텐츠 캐시**: `get_page_content()` TTL 캐시 300초 (`wiki_client.py`)
+- **페이지 조회**: CQL 3단계 폴백 + 질문 맥락 인식 스마트 검색 (v1.4.1)
+- **3계층 캐시**: L1 인메모리 (5분) → L2 SQLite (24시간) → L3 MCP HTTP
+
+#### ③ /gdi 슬래시 커맨드 (GDI Response, v1.3.0~)
+- **핵심 파일**: `slack_bot.py` (`_gdi_*` 함수들), `gdi_client.py`
+- **MCP 서버**: `http://mcp-dev.sginfra.net/game-doc-insight-mcp`
+- **질문 의도 감지**: 목록 질문 vs 내용 질문 자동 분기 (v1.3.1)
+- **3계층 캐시**: 폴더 6시간, 파일 24시간
+
+#### ④ /jira 슬래시 커맨드 (Jira Response, v1.4.0~)
+- **핵심 파일**: `slack_bot.py` (`_jira_*` 함수들), `jira_client.py`
+- **MCP 서버**: `http://mcp.sginfra.net/confluence-jira-mcp`
+- **자동 JQL 변환**: 단순 텍스트 → `text ~ "..."` (불용어 제거)
+- **점진적 확장 검색**: 0건 시 키워드 축소 자동 재시도 (v1.4.1)
+- **3계층 캐시**: 이슈 10분, 프로젝트 1시간, 프로젝트목록 24시간
 
 ### 🗂️ wiki_search_rules.json 상세 가이드
 
@@ -699,16 +761,14 @@ hot reload: mtime 비교 방식, 봇 재시작 없이 자동 반영
 
 ### 🔖 버전 관리 및 롤백 상세 가이드
 
-**현재 버전: v1.1.5** | 기능 수 2개 (알리미, Wiki)
+**현재 버전: v1.4.1** | 기능 4개 (알리미, /wiki, /gdi, /jira)
 
 **버전 규칙 재확인**
 ```
 Major (x.0.0): 아키텍처 전면 개편
-Minor (0.x.0): 세 번째 기능 카테고리 추가 시에만 (예: /gdi, /jira 등 신규 슬래시 커맨드)
+Minor (0.x.0): 새 기능 카테고리 추가 시에만 (다섯 번째 기능 → v1.5.0)
 Patch (0.0.x): 그 외 모든 변경사항
-  - 기존 알리미 개선 (새 체크리스트, 새 채널, 새 스케줄 타입)
-  - wiki 안정화/예외처리 개선
-  - 버그 수정, 설정 변경
+  - 기존 기능 개선, 버그 수정, 설정 변경
 ```
 
 **새 버전 릴리즈 절차**
@@ -748,6 +808,16 @@ git checkout -b rollback/v1.1.3 v1.1.3
 | `v1.1.2` | `672acde` | 미션 리마인더 추가 |
 | `v1.1.3` | `7535f2a` | wiki 안정화 + 미션 채널 추가 |
 | `v1.1.4` | `774445c` | wiki 페이지별 예외처리 + CHANGELOG |
+| `v1.1.5` | `b614e58` | 미션 미정 채널 선정 독려 포맷 |
+| `v1.2.0` | `19022a4` | 미션 넘버링 시스템 + 레포 정리 |
+| `v1.3.0` | `e5e696c` | /gdi 슬래시 커맨드 추가 |
+| `v1.3.1` | `01aa03c` | GDI 질문 의도 감지 + 안정화 |
+| `v1.3.2` | `86c50b4` | Railway 재시작 감지 강화 |
+| `v1.3.3` | `552720f` | daily/weekly 발송 반복 방지 |
+| `v1.3.4` | `de59d61` | Wiki 캐시 통합 + 구분자 변경 |
+| `v1.3.5` | `d0c1420` | GDI 캐시 통합 (L1+L2) |
+| `v1.4.0` | `dcfacf0` | /jira 슬래시 커맨드 + Jira 캐시 통합 |
+| `v1.4.1` | — | 검색 정확도 개선 (Wiki/Jira/GDI) |
 
 ### 🚀 봇 재시작 방법 (로컬 PC)
 

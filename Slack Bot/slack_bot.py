@@ -160,19 +160,18 @@ def _wiki_help(respond):
     respond(text=(
         "*Wiki 도움말*\n\n"
         "```\n"
-        "/wiki 페이지명                  페이지 내용 조회\n"
         "/wiki 페이지명 \\ 질문           페이지 조회 + AI 답변\n"
-        "/wiki search 검색어             키워드로 페이지 검색\n"
+        "/wiki search \\ 질문            키워드로 페이지 검색\n"
         "/wiki help                      이 도움말\n"
         "```\n\n"
         "예시:\n"
-        "• `/wiki Game Service 1`\n"
         "• `/wiki Game Service 1 \\ QA 일정 알려줘`\n"
-        "• `/wiki search QA 일정`"
+        "• `/wiki search \\ 에픽세븐 배포 일정`"
     ))
 
 
-def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True):
+def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True,
+                     question: str = ""):
     """
     경로 구분자 유무에 따라 적합한 방식으로 Confluence 페이지를 조회합니다.
 
@@ -186,6 +185,9 @@ def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True):
     fetch_full : bool
         True  → get_page_by_id 추가 MCP 호출로 전체 본문 조회 (AI 질의용)
         False → cql_search body.view 만 사용 (단순 표시용, MCP 호출 1회 절약)
+    question : str
+        파이프(\\) 뒤의 질문 텍스트. 비어 있지 않으면 질문 맥락(연도 등)을
+        활용한 스마트 검색을 먼저 시도합니다.
 
     Returns: (page_dict | None, error_str | None)
     """
@@ -202,6 +204,12 @@ def _wiki_fetch_page(client, page_part: str, fetch_full: bool = True):
         ancestors  = segments[:-1]
         return client.get_page_by_path(ancestors, leaf_title,
                                        fetch_full=fetch_full)
+
+    # 질문 맥락이 있으면 스마트 검색 (연도·키워드 인식)
+    if question:
+        return client.search_with_context(
+            page_part, question=question, fetch_full=fetch_full
+        )
     return client.get_page_by_title(page_part, fetch_full=fetch_full)
 
 
@@ -246,7 +254,8 @@ def _wiki_ask_claude(page_title: str, page_text: str, page_url: str, question: s
         return
 
     # 페이지 내용이 너무 길면 앞부분만 사용 (토큰 절약)
-    MAX_PAGE_CHARS = 20000
+    # 47K+ 페이지에서 2026년 데이터가 잘리지 않도록 40K로 확장
+    MAX_PAGE_CHARS = 40000
     truncated = len(page_text) > MAX_PAGE_CHARS
     content   = page_text[:MAX_PAGE_CHARS] if truncated else page_text
     trunc_note = "\n*(내용이 길어 일부만 포함됨)*\n" if truncated else ""
@@ -385,12 +394,30 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
         return
 
     files = data.get("files", [])
+
+    # 게임명 누락 보정: 파일 없으면 알려진 게임명을 접두사로 붙여 재시도
+    if not files:
+        _GAME_PREFIXES = ["Chaoszero", "Epicseven"]
+        first_seg = folder_path.split("/")[0] if "/" in folder_path else folder_path.rstrip("/")
+        if first_seg not in _GAME_PREFIXES:
+            for prefix in _GAME_PREFIXES:
+                alt_path = f"{prefix}/{folder_path}"
+                alt_data, alt_err = client.list_files_in_folder(alt_path, page_size=100)
+                if not alt_err and alt_data and alt_data.get("files"):
+                    folder_path = alt_path
+                    data = alt_data
+                    files = alt_data["files"]
+                    respond(text=f"📁 `{folder_path}` 경로로 보정하여 조회했습니다.")
+                    break
+
     if not files:
         gc.log_gdi_query(user_id=user_id, user_name=user_name,
                          action="folder_ai", query=raw_text,
                          error="폴더에 파일 없음",
                          elapsed_ms=int((time.time() - t0) * 1000))
-        respond(text=f"ℹ️ `{folder_path}` 폴더에 파일이 없습니다.")
+        respond(text=f"ℹ️ `{folder_path}` 폴더에 파일이 없습니다.\n"
+                f"💡 게임명을 포함한 전체 경로를 입력해보세요.\n"
+                f"예: `Chaoszero > {folder_path.replace('/', ' > ').rstrip(' > ')}`")
         return
 
     # 날짜 기준 정렬 헬퍼 (version_date > indexed_date > 빈 문자열)
@@ -554,15 +581,13 @@ def _gdi_help(respond):
     respond(text=(
         "*GDI 도움말*\n\n"
         "```\n"
-        "/gdi 폴더명 \\ 질문                   폴더 파일 분석\n"
-        "/gdi 폴더명 \\ 파일키워드 \\ 질문      파일 찾아 분석\n"
-        "/gdi search 검색어                   통합 검색\n"
-        "/gdi help                            이 도움말\n"
+        "/gdi 폴더명 \\ 질문                     폴더 내 파일 분석\n"
+        "/gdi 폴더명 \\ '파일키워드' \\ 질문       특정 파일 찾아 분석\n"
+        "/gdi help                              이 도움말\n"
         "```\n\n"
         "예시:\n"
-        "• `/gdi Chaoszero > Test Result \\ 테스트 결과 요약해줘`\n"
-        "• `/gdi Chaoszero > Update Review \\ 은하 훈장 \\ 내용 요약`\n"
-        "• `/gdi search 에픽세븐 밸런스`"
+        "• `/gdi Chaoszero Test Result \\ 테스트 결과 요약해줘`\n"
+        "• `/gdi Chaoszero Update Review \\ '은하 훈장' \\ 내용 요약`"
     ))
 
 
@@ -600,6 +625,21 @@ def _gdi_folder_list(client, path: str, respond):
     if err:
         respond(text=f"❌ 폴더 조회 실패\n```\n{err}\n```")
         return
+
+    # 게임명 누락 보정
+    files = data.get("files", []) if isinstance(data, dict) else []
+    if not files and page == 1:
+        _GAME_PREFIXES = ["Chaoszero", "Epicseven"]
+        first_seg = path.split("/")[0] if "/" in path else path.rstrip("/")
+        if first_seg not in _GAME_PREFIXES:
+            for prefix in _GAME_PREFIXES:
+                alt_path = f"{prefix}/{path}"
+                alt_data, alt_err = client.list_files_in_folder(alt_path, page=page)
+                if not alt_err and alt_data and isinstance(alt_data, dict) and alt_data.get("files"):
+                    path = alt_path
+                    data = alt_data
+                    break
+
     respond(text=gc.format_folder_list(data, path))
 
 
@@ -700,16 +740,19 @@ def _jira_help(respond):
     respond(text=(
         "*JIRA 도움말*\n\n"
         "```\n"
-        "/jira 검색어                          이슈 검색\n"
-        "/jira 검색어 \\ 질문                   이슈 검색 + AI 답변\n"
-        "/jira PROJ-123                        이슈 상세 조회\n"
-        "/jira PROJ-123 \\ 질문                 이슈 조회 + AI 답변\n"
-        "/jira help                            이 도움말\n"
+        "/jira 프로젝트명 \\ 질문               프로젝트 이슈 검색 + AI 답변\n"
+        "/jira help                           이 도움말\n"
         "```\n\n"
+        "프로젝트 목록:\n"
+        "• `에픽세븐` / `EP7`\n"
+        "• `리젝` / `PRH`\n"
+        "• `카제나` / `GCZ`\n"
+        "• `QA팀` / `SMQA`\n"
+        "• `로드나인` / `LDN`\n"
+        "• `로드나인아시아` / `LNA`\n\n"
         "예시:\n"
-        "• `/jira 접속 불가`\n"
-        "• `/jira 로그인 오류 \\ 최근 이슈 요약해줘`\n"
-        "• `/jira QASGP-123 \\ 이 이슈 요약해줘`"
+        "• `/jira 에픽세븐 \\ 접속 불가 이슈 알려줘`\n"
+        "• `/jira EP7 \\ 최근 Compatibility 버그 요약`"
     ))
 
 
@@ -1189,9 +1232,10 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                         respond(text=f"⚠️ 하위 페이지 조회 실패, 원래 페이지 조회로 전환 중...")
                         page, err = _wiki_fetch_page(client, page_part)
                 else:
-                    # 기본 동작: 페이지 직접 조회
+                    # 기본 동작: 질문 맥락 인식 페이지 조회
                     respond(text=f"🔍 *{page_part}* 페이지 조회 중...")
-                    page, err = _wiki_fetch_page(client, page_part)
+                    page, err = _wiki_fetch_page(client, page_part,
+                                                 question=question)
 
                 if err:
                     wc.log_wiki_query(
@@ -1494,6 +1538,26 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
     # ── /jira 커맨드 ─────────────────────────────────────────────
 
+    _JIRA_PROJECT_NAMES = {
+        "리젝": "PRH",
+        "에픽세븐": "EP7",
+        "에픽 세븐": "EP7",
+        "카제나": "GCZ",
+        "qa팀": "SMQA",
+        "로드나인": "LDN",
+        "로드나인아시아": "LNA",
+        "로드나인 아시아": "LNA",
+    }
+    _JIRA_VALID_KEYS = {"PRH", "EP7", "GCZ", "SMQA", "LDN", "LNA"}
+
+    def _resolve_jira_project(text: str):
+        """프로젝트명 또는 키 → 프로젝트 키. 매핑 없으면 None."""
+        if text.lower() in _JIRA_PROJECT_NAMES:
+            return _JIRA_PROJECT_NAMES[text.lower()]
+        if text.upper() in _JIRA_VALID_KEYS:
+            return text.upper()
+        return None
+
     @app.command("/jira")
     def handle_jira_command(ack, respond, command):
         r"""
@@ -1551,7 +1615,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             _jira_project(client, key, user_id, user_name, respond)
             return
 
-        # ── 파이프(\) 구분: [대상] \ [질문] ──
+        # ── 파이프(\) 구분: [프로젝트명/이슈키/검색어] \ [질문] ──
         if "\\" in text:
             pipe_parts = [p.strip() for p in text.split("\\")]
             if len(pipe_parts) >= 2:
@@ -1561,7 +1625,47 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 if target and question:
                     t0 = time.time()
 
-                    if jc.looks_like_issue_key(target):
+                    # 프로젝트명 or 프로젝트 키 → 스코프 검색
+                    project_key = _resolve_jira_project(target)
+                    if project_key:
+                        # broadening 패턴: 키워드 축소하며 재시도
+                        jql_variants = jc.question_to_jql_variants(question)
+                        respond(text=f":robot_face: *{target}* 프로젝트 — 검색 + Claude 답변 생성 중...")
+
+                        data, err, used_jql = None, None, ""
+                        for base_jql in jql_variants:
+                            if " ORDER BY " in base_jql.upper():
+                                idx = base_jql.upper().index(" ORDER BY ")
+                                jql = f"project = {project_key} AND {base_jql[:idx]}{base_jql[idx:]}"
+                            else:
+                                jql = f"project = {project_key} AND {base_jql}"
+                            data, err = client.search_issues(jql)
+                            used_jql = jql
+                            if err:
+                                break  # MCP 오류 시 더 시도해봐야 의미 없음
+                            context = jc.get_search_context_text(data)
+                            if context:
+                                break  # 결과 있음
+                            logger.info(f"[jira][broadening] 0건 → 다음 JQL 시도: {jql}")
+
+                        elapsed = int((time.time() - t0) * 1000)
+                        if err:
+                            respond(text=f":x: 검색 실패\n```\n{err}\n```")
+                            jc.log_jira_query(user_id=user_id, user_name=user_name,
+                                              action="ask_claude_project", query=text,
+                                              error=str(err), elapsed_ms=elapsed)
+                            return
+                        context = jc.get_search_context_text(data)
+                        if not context:
+                            respond(text=f":information_source: *{target}* 프로젝트에서 관련 이슈를 찾을 수 없습니다.")
+                            return
+                        _jira_ask_claude(context, target, question, respond)
+                        jc.log_jira_query(user_id=user_id, user_name=user_name,
+                                          action="ask_claude_project", query=text,
+                                          result=f"프로젝트: {project_key}",
+                                          elapsed_ms=elapsed)
+
+                    elif jc.looks_like_issue_key(target):
                         # 이슈키 → 이슈 조회 → AI 답변
                         respond(text=f":robot_face: *{target.upper()}* — Claude 답변 생성 중...")
                         data, err = client.get_issue(target.upper())

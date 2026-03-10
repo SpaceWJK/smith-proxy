@@ -119,25 +119,34 @@ _PAGE_CACHE_TTL   = 300  # 5분 (초)
 # ── HTML 처리 헬퍼 ─────────────────────────────────────────────────────────
 
 def _strip_html(html_text: str) -> str:
-    """HTML 태그 제거 + 엔티티 디코딩 → 읽기 쉬운 일반 텍스트
+    """Confluence 저장 형식 HTML → 일반 텍스트.
 
-    - script/style 태그와 내용 전체 제거 (JS·CSS 코드 잡음 방지)
-    - 테이블 행/열 구조를 | 구분자로 보존 (셀 간 관계 유지)
-    - 나머지 HTML 태그 제거 후 공백 정규화
+    ac:parameter, ac:emoticon 등 Confluence 매크로 메타데이터를 제거하고
+    CDATA, 링크 텍스트 등 실제 콘텐츠만 추출합니다.
     """
-    # 1. script / style 태그 + 내용 전체 제거
+    text = html_text or ''
+    # 1. script / style 전체 제거
     text = re.sub(
         r'<(script|style)[^>]*>.*?</\1>', '',
-        html_text or '', flags=re.DOTALL | re.IGNORECASE,
+        text, flags=re.DOTALL | re.IGNORECASE,
     )
-    # 2. 테이블 구조 보존: 셀 경계 → ' | ', 행 경계 → '\n'
+    # 2. Confluence 매크로 파라미터 전체 제거 (매크로 설정값 노이즈)
+    text = re.sub(
+        r'<ac:parameter[^>]*>.*?</ac:parameter>', '',
+        text, flags=re.DOTALL,
+    )
+    # 3. CDATA 내용 추출: <![CDATA[텍스트]]> → 텍스트
+    text = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', text, flags=re.DOTALL)
+    # 4. ac:emoticon 제거
+    text = re.sub(r'<ac:emoticon[^/]*/>', '', text)
+    # 5. 테이블 구조 보존: 셀 경계 → ' | ', 행 경계 → '\n'
     text = re.sub(r'</t[dh]>\s*<t[dh][^>]*>', ' | ', text, flags=re.IGNORECASE)
     text = re.sub(r'</?tr[^>]*>', '\n', text, flags=re.IGNORECASE)
-    # 3. 나머지 HTML 태그 제거
+    # 6. 나머지 HTML/XML 태그 제거
     text = re.sub(r'<[^>]+>', ' ', text)
-    # 4. HTML 엔티티 디코딩
+    # 7. HTML 엔티티 디코딩
     text = _html.unescape(text)
-    # 5. 공백 정규화
+    # 8. 공백 정규화
     text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r'\n[ \t]+', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
@@ -182,6 +191,93 @@ class ConfluenceWikiClient:
         self._mcp       = _get_mcp()
 
     # ── 페이지 조회 ───────────────────────────────────────────────────────
+
+    def search_with_context(self, title: str, question: str = "",
+                            space_key: str = None, fetch_full: bool = True):
+        """
+        질문 맥락을 활용한 스마트 페이지 검색.
+
+        질문에서 연도·핵심 키워드를 추출하여, 해당 맥락에 맞는 페이지를
+        우선 검색합니다. 실패 시 일반 get_page_by_title 로 폴백.
+
+        예: title="HotFix 내역", question="2026년 핫픽스 알려줘"
+          → CQL: title ~ "2026" AND title ~ "Hot" → "2026_Hot Fix" 발견
+          → 이 페이지에 2026 데이터가 있어 정확한 답변 가능
+
+        Parameters
+        ----------
+        title      : 사용자가 입력한 페이지 제목/키워드
+        question   : 파이프(\\) 뒤의 질문 텍스트
+        space_key  : Confluence 공간 키
+        fetch_full : True → 전체 본문 조회 (AI 질의용)
+        """
+        sk = space_key or self._space_key
+
+        # ── 질문에서 연도 추출 ────────────────────────────────────
+        year = None
+        if question:
+            m = re.search(r'(20\d{2})', question)
+            if m:
+                year = m.group(1)
+
+        if year:
+            # 제목 키워드 분리 (CamelCase, _, 공백, - 분리)
+            raw_words = re.split(r'[\s_\-]+', title)
+            keywords = []
+            for w in raw_words:
+                # CamelCase 분리: "HotFix" → ["Hot", "Fix"]
+                parts = re.findall(r'[A-Z][a-z]+|[a-z]+|[가-힣]+|\d+', w)
+                keywords.extend(parts if parts else [w])
+            keywords = [w for w in keywords if len(w) >= 2]
+
+            # 각 키워드와 연도 조합으로 CQL 시도 (최대 3개)
+            for kw in keywords[:3]:
+                cql = (
+                    f'title ~ "{year}" AND title ~ "{kw}" '
+                    f'AND space = "{sk}" AND type=page '
+                    f'ORDER BY lastmodified DESC'
+                )
+                logger.info(f"[wiki][스마트검색] CQL: {cql}")
+                raw, err = self._mcp.call_tool(
+                    "cql_search",
+                    {"cql": cql, "limit": 5, "expand": "body.view"},
+                )
+                if err:
+                    continue
+                results = self._parse_cql_results(raw)
+                if not results:
+                    continue
+
+                # 연도가 제목에 명시적으로 포함된 결과를 우선 선택
+                best = None
+                for r in results:
+                    r_title = _clean_title(
+                        r.get("title") or
+                        (r.get("content") or {}).get("title") or ""
+                    )
+                    if year in r_title:
+                        best = r
+                        break
+
+                if best:
+                    page = self._cql_result_to_page_dict(
+                        best, title, fetch_full=fetch_full
+                    )
+                    logger.info(
+                        f"[wiki][스마트검색] 연도 특정 페이지 발견: "
+                        f"{page['title']} (연도={year}, 키워드={kw})"
+                    )
+                    return page, None
+
+            logger.info(
+                f"[wiki][스마트검색] 연도 특정 페이지 미발견 → 일반 검색 폴백 "
+                f"(연도={year}, 키워드={keywords})"
+            )
+
+        # 폴백: 일반 제목 검색
+        return self.get_page_by_title(
+            title, space_key=space_key, fetch_full=fetch_full
+        )
 
     def get_page_by_title(self, title: str, space_key: str = None,
                           fetch_full: bool = True):

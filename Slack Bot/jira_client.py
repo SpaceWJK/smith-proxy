@@ -184,6 +184,76 @@ def to_jql(text: str) -> str:
     return f'summary ~ "{safe}" ORDER BY updated DESC'
 
 
+# 자연어 질문에서 제거할 한국어 지시어/조사
+_STOP_WORDS = {
+    "알려줘", "보여줘", "찾아줘", "검색해줘", "조회해줘", "요약해줘",
+    "설명해줘", "확인해줘", "정리해줘", "분석해줘",
+    "이슈", "관련", "관한", "대한", "어떤", "최근", "현재",
+    "내용", "정보", "목록", "리스트", "뭐야", "뭐가",
+    "있는지", "있나", "있어", "어때", "좀", "해줘", "줘",
+    "어떻게", "무엇이", "무슨", "모든", "전체", "중에서",
+}
+
+
+def _extract_keywords(text: str) -> list:
+    """자연어에서 불용어를 제거한 핵심 키워드 목록 반환."""
+    words = text.split()
+    keywords = [w for w in words if w not in _STOP_WORDS]
+    return keywords if keywords else words[:3]
+
+
+def question_to_jql(question: str) -> str:
+    """자연어 질문에서 검색 키워드를 추출하여 JQL로 변환합니다.
+
+    '/jira 카제나 \\ 접속 불가 이슈 알려줘' 같은 파이프 질문에서
+    핵심 키워드만 추출 → text ~ "키워드" (전체 텍스트 필드 검색).
+
+    to_jql()과 달리 summary가 아닌 text 필드를 사용하여 더 넓은 범위 검색.
+    """
+    if is_jql(question):
+        return question
+    keywords = _extract_keywords(question)
+    keyword_text = " ".join(keywords)
+    safe = keyword_text.replace('"', '\\"')
+    return f'text ~ "{safe}" ORDER BY updated DESC'
+
+
+def question_to_jql_variants(question: str) -> list:
+    """자연어 질문에서 점진적으로 넓어지는 JQL 변환 목록 반환.
+
+    첫 번째가 가장 구체적이고, 뒤로 갈수록 넓은 범위 검색.
+    첫 번째 JQL로 0건이면 다음 것을 시도하는 broadening 패턴에 사용.
+
+    예: "접속 불가 현상 관련 이슈" →
+      1. text ~ "접속 불가 현상" (전체 키워드)
+      2. text ~ "접속 불가"      (앞 2개 키워드)
+      3. text ~ "접속"           (첫 키워드만)
+    """
+    if is_jql(question):
+        return [question]
+
+    keywords = _extract_keywords(question)
+    if not keywords:
+        return [f'text ~ "{question}" ORDER BY updated DESC']
+
+    variants = []
+    # 전체 키워드
+    full = " ".join(keywords).replace('"', '\\"')
+    variants.append(f'text ~ "{full}" ORDER BY updated DESC')
+
+    # 키워드가 2개 이상이면 앞 2개만
+    if len(keywords) >= 3:
+        partial = " ".join(keywords[:2]).replace('"', '\\"')
+        variants.append(f'text ~ "{partial}" ORDER BY updated DESC')
+
+    # 첫 키워드만 (2자 이상일 때)
+    if len(keywords) >= 2 and len(keywords[0]) >= 2:
+        single = keywords[0].replace('"', '\\"')
+        variants.append(f'text ~ "{single}" ORDER BY updated DESC')
+
+    return variants
+
+
 def looks_like_issue_key(text: str) -> bool:
     """이슈 키 패턴(PROJ-123)인지 판별합니다."""
     return bool(_ISSUE_KEY_RE.match(text.strip().upper()))

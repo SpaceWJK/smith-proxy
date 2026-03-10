@@ -18,7 +18,31 @@
 
 ---
 
-## [1.4.0] - 2026-03-10 <- 현재
+## [1.4.1] - 2026-03-10 <- 현재
+
+### 개선
+- **Wiki 질문 맥락 인식 검색 (`search_with_context`)**: 질문에서 연도·키워드를 추출하여 맥락에 맞는 페이지 우선 검색
+  - 예: `/wiki HotFix 내역 \ 2026년 핫픽스 알려줘` → 인덱스 페이지 대신 `2026_Hot Fix` 페이지 발견
+  - CamelCase 분리 ("HotFix" → "Hot"+"Fix") + 연도 CQL 조합으로 정확도 향상
+  - `_wiki_fetch_page()`에 `question` 파라미터 추가, 파이프 핸들러 연동
+- **Jira 검색 점진적 확장 (broadening fallback)**: 0건 결과 시 키워드를 줄여가며 자동 재시도
+  - `question_to_jql_variants()`: 전체 키워드 → 앞 2개 → 첫 키워드만 (점진적 확장)
+  - `_extract_keywords()`: 한국어 불용어 제거 후 핵심 키워드 추출
+  - 프로젝트 파이프 핸들러에서 JQL variants 순회 로직 적용
+- **Jira 자연어→JQL 변환 개선**: `summary ~` → `text ~`로 변경 (summary+description+comments 전체 검색)
+  - 한국어 불용어(알려줘, 보여줘, 관련 등) 제거 로직 추가
+- **GDI 게임명 접두사 자동 보정**: 폴더 미발견 시 Chaoszero/Epicseven 접두사 자동 시도
+- **Wiki MAX_PAGE_CHARS 확장**: 20,000 → 40,000자 (긴 페이지 본문 절단 방지)
+
+### 추가
+- **`auto_sync.py` (mcp-cache-layer)**: 2시간 주기 캐시 동기화 스크립트
+  - Wiki Full Ingest: 전체 페이지 스캔 + 캐시 갱신 (2000페이지 ~16분)
+  - Jira Delta Sync: 프로젝트별 최근 이슈 동기화
+  - 경로: `D:\Vibe Dev\QA Ops\mcp-cache-layer\scripts\auto_sync.py`
+
+---
+
+## [1.4.0] - 2026-03-10
 
 ### 추가
 - **`/jira` 슬래시 커맨드**: Jira MCP 연동 + 3계층 캐시 통합 (Phase 3)
