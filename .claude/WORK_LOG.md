@@ -5,6 +5,58 @@
 
 ---
 
+## 2026-03-10 (월) — 세션 7
+
+### 완료
+- **03.10 일일 QA 체크리스트 누락 수동 발송**
+  - Railway 재시작으로 인해 10:00 스케줄 미실행 → 로컬에서 수동 발송 스크립트 실행
+  - `ts=1773104704.056779` — 발송 성공, 상태 등록 + missed_tracker 로그 기록 완료
+- **Railway misfire_grace_time 누락 버그 수정 (v1.3.1)**
+  - `scheduler.py` `_add_daily` / `_add_weekly` 에 `misfire_grace_time=3600` 추가
+  - Railway 재시작 후 1시간 이내 → 즉시 발송 보장 (미션은 이미 7200초 적용 중)
+- **/gdi AI 답변 품질 개선** (v1.3.1)
+  - 질문 의도 감지: 목록 질문 vs 내용 질문 분기
+  - 목록 질문(종류/뭐가 있는지) → 파일 리스트+경로 중심 답변
+  - 내용 질문(요약/분석) → 최관련 파일 1개 내용 가져와서 요약
+  - 전용 Claude 프롬프트 3종 분리: `_gdi_ask_claude_content`, `_gdi_ask_claude_list`, `_gdi_ask_claude`
+  - `_fetch_file_content` 헬퍼 생성 (4단계 폴백 파일 내용 조회)
+- **v1.3.1 커밋/Push → Railway 자동 재배포**
+
+### 원인/교훈
+- Railway 재시작 원인 불명 (크래시 또는 롤링 재시작 추정)
+- **교훈**: APScheduler `misfire_grace_time` 미설정 시 Railway 재시작 타이밍에 따라 스케줄 누락 발생
+  - mission은 jitter 때문에 7200초 설정했는데, daily/weekly는 누락되어 있었음
+
+### 핵심 변경 파일
+| 파일 | 유형 | 설명 |
+|------|------|------|
+| `scheduler.py` | 수정 | daily/weekly misfire_grace_time=3600 추가 |
+| `slack_bot.py` | 수정 | 질문 의도 감지 + 전용 Claude 프롬프트 분리, _fetch_file_content 헬퍼 |
+| `changelog/CHANGELOG.md` | 수정 | v1.3.1 기록 |
+
+---
+
+## 2026-03-09 (일) — 세션 6
+
+### 완료
+- **v1.3.0 /gdi 슬래시 커맨드 구현** (GDI MCP 연동)
+  - `mcp_session.py` 신규: `_McpSession`을 공용 `McpSession` 클래스로 추출
+  - `wiki_client.py` 리팩토링: `_McpSession` 삭제 → `McpSession` import
+  - `gdi_client.py` 신규: GdiClient (unified_search, search_by_filename, list_files_in_folder)
+  - `slack_bot.py`: `/gdi` 핸들러 + 헬퍼 함수 추가 (search/file/folder/AI 답변)
+  - `logs/gdi_query.log` 조회 로거 추가
+- **`/calendar` 슬래시 커맨드 제거** — MCP 서버 미지원으로 사용 안 함
+
+### 핵심 변경 파일
+| 파일 | 유형 | 설명 |
+|------|------|------|
+| `mcp_session.py` | 신규 | MCP 세션 공용 모듈 |
+| `gdi_client.py` | 신규 | GDI MCP 클라이언트 |
+| `wiki_client.py` | 수정 | McpSession import로 리팩토링 |
+| `slack_bot.py` | 수정 | /gdi 핸들러, /calendar 제거 |
+
+---
+
 ## 2026-03-09 (일) — 세션 5
 
 ### 완료

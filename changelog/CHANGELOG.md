@@ -5,8 +5,8 @@
 > **버전 규칙 (Semantic Versioning)**
 > - **Major** `x.0.0` : 기존 버전과 호환되지 않는 파격적 변경 (아키텍처 전면 개편 등)
 > - **Minor** `0.x.0` : **새로운 기능 카테고리 추가 시에만** 올림
->   - 현재 기능: ① 슬랙 알리미(스케줄 알림)  ② /wiki 슬래시 커맨드
->   - 세 번째 기능 카테고리 추가 시 → v1.3.0
+>   - 현재 기능: ① 슬랙 알리미(스케줄 알림)  ② /wiki 슬래시 커맨드  ③ /gdi 슬래시 커맨드
+>   - 네 번째 기능 카테고리 추가 시 → v1.4.0
 > - **Patch** `0.0.x` : 기능 추가 없는 버그 수정 / 기존 기능 개선 / 설정 변경
 >   - 알리미 기능 개선(미션 리마인더 등), wiki 안정화 등은 모두 Patch
 >
@@ -18,7 +18,45 @@
 
 ---
 
-## [1.2.0] - 2026-03-09 <- 현재
+## [1.3.1] - 2026-03-10 <- 현재
+
+### 수정
+- **Railway 스케줄 누락 방지**: `daily`/`weekly` 스케줄에 `misfire_grace_time=3600` 추가
+  - Railway 재시작 후 1시간 이내면 즉시 발송 (기존: 기본값 1초 → 재시작 시 누락)
+  - 미션 리마인더는 이미 7200초 설정되어 있었음
+- **`/gdi` AI 답변 품질 개선** (질문 의도 감지)
+  - "종류/목록" 질문 → 파일 목록+경로 중심 답변 (`_gdi_ask_claude_list`)
+  - "요약/내용/분석" 질문 → 가장 관련도 높은 파일 1개 내용 가져와서 답변 (`_gdi_ask_claude_content`)
+  - 불필요한 검색 통계/메타데이터 제거, 질문에 집중하는 전용 프롬프트 적용
+- **`_fetch_file_content` 헬퍼 분리**: 4단계 폴백 파일 내용 조회 (exact→text→#제거→unified)
+
+---
+
+## [1.3.0] - 2026-03-09
+
+### 추가
+- **`/gdi` 슬래시 커맨드** — GDI(Game Doc Insight) MCP 연동 (세 번째 기능 카테고리)
+  - `/gdi search [검색어]` — 크로스 컬렉션 통합 검색
+  - `/gdi file [파일명]` — 파일명 기반 검색 (청크 내용 포함)
+  - `/gdi folder [경로]` — 폴더 내 파일 목록 조회
+  - `/gdi [검색어] | [질문]` — 검색 결과 기반 Claude AI 답변
+  - `/gdi [폴더명] | [파일명] | [질문]` — 폴더+파일 지정 후 Claude AI 답변
+  - GDI MCP 서버: `http://mcp-dev.sginfra.net/game-doc-insight-mcp` (인증 불필요)
+- **`mcp_session.py` 신규** — MCP Streamable HTTP 세션 공용 모듈
+  - `wiki_client.py`의 `_McpSession` 클래스를 `McpSession`으로 추출
+  - wiki, gdi 등 여러 MCP 클라이언트에서 공유
+- **`gdi_client.py` 신규** — GDI MCP 클라이언트 + Slack 포맷 헬퍼 + 조회 로거
+  - `logs/gdi_query.log`에 조회 내역 기록
+
+### 수정
+- **`wiki_client.py` 리팩토링** — `_McpSession` → `mcp_session.McpSession` 사용으로 변경
+
+### 제거
+- **`/calendar` 슬래시 커맨드** 제거 — 사용하지 않음 (MCP 서버 미지원)
+
+---
+
+## [1.2.0] - 2026-03-09
 
 ### 추가
 - **미션 넘버링 시스템** (`config.json`, `slack_sender.py`)
