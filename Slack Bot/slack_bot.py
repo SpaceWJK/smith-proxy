@@ -162,8 +162,8 @@ def _wiki_help(respond):
         "/wiki [페이지 제목]                       페이지 내용 전체 조회\n"
         "/wiki [상위] > [하위] > [페이지]          계층 경로로 페이지 조회 (봇 포맷)\n"
         "/wiki [상위] / [하위] / [페이지]          Confluence 경로 복사 그대로 사용 가능\n"
-        "/wiki [페이지 제목] | [질문]              페이지 내용 기반 AI 답변 (Claude)\n"
-        "/wiki [상위] > [페이지] | [질문]          경로 지정 + AI 답변\n"
+        "/wiki [페이지 제목] \\ [질문]              페이지 내용 기반 AI 답변 (Claude)\n"
+        "/wiki [상위] > [페이지] \\ [질문]          경로 지정 + AI 답변\n"
         "/wiki search [검색어]                     키워드로 페이지 목록 검색\n"
         "/wiki help                                이 도움말\n"
         "```\n\n"
@@ -171,8 +171,8 @@ def _wiki_help(respond):
         "• `/wiki Game Service 1`\n"
         "• `/wiki 프로젝트 현황 > Game Service 1`\n"
         "• `/wiki 프로젝트 현황 / Game Service 1`  ← Confluence 경로 복사 사용\n"
-        "• `/wiki Game Service 1 | QA 일정 알려줘`\n"
-        "• `/wiki 프로젝트 현황 > Game Service 1 | QA 일정이 어떻게 되나요?`\n"
+        "• `/wiki Game Service 1 \\ QA 일정 알려줘`\n"
+        "• `/wiki 프로젝트 현황 > Game Service 1 \\ QA 일정이 어떻게 되나요?`\n"
         "• `/wiki search QA 일정`\n\n"
         "💡 Confluence 브레드크럼 경로를 그대로 복사해서 사용할 수 있습니다.\n"
         "동일 제목의 페이지가 여러 곳에 있을 때 경로로 구분하세요."
@@ -467,7 +467,7 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
         respond(text=(
             f"ℹ️ `{folder_path}` 폴더(하위 포함)에 파일이 {len(matched)}개 있습니다.\n"
             f"파일명 키워드를 추가해주세요.\n\n"
-            f"*사용법:* `/gdi 경로 | 파일키워드 | 질문`\n\n"
+            f"*사용법:* `/gdi 경로 \\ 파일키워드 \\ 질문`\n\n"
             f"*폴더 내 파일 (최신순):*\n{flist}{more}"
         ))
         gc.log_gdi_query(user_id=user_id, user_name=user_name,
@@ -561,9 +561,9 @@ def _gdi_help(respond):
     respond(text=(
         "*📦 /gdi 문서 조회 도움말*\n\n"
         "```\n"
-        "/gdi 경로 | 질문                     폴더 파일 분석 (파일 1개일 때)\n"
-        "/gdi 경로 | 파일키워드 | 질문        폴더에서 파일 찾아 분석\n"
-        "/gdi [검색어] | [질문]               통합 검색 + AI 답변\n"
+        "/gdi 경로 \\ 질문                     폴더 파일 분석 (파일 1개일 때)\n"
+        "/gdi 경로 \\ 파일키워드 \\ 질문        폴더에서 파일 찾아 분석\n"
+        "/gdi [검색어] \\ [질문]               통합 검색 + AI 답변\n"
         "/gdi search [검색어]                 통합 검색\n"
         "/gdi file [파일명]                   파일명으로 검색\n"
         "/gdi folder [경로]                   폴더 내 파일 목록\n"
@@ -571,9 +571,9 @@ def _gdi_help(respond):
         "```\n\n"
         "*경로 표기법:* `>` 로 폴더를 구분합니다 (GDI 웹과 동일)\n\n"
         "예시:\n"
-        "• `/gdi Chaoszero > Test Result > 260204 > 3-9차 | 테스트 결과 요약해줘`\n"
-        "• `/gdi Chaoszero > Update Review > 20260204 > 완료 | 은하 훈장 | 내용 요약`\n"
-        "• `/gdi 에픽세븐 밸런스 | 최근 변경사항 알려줘`\n"
+        "• `/gdi Chaoszero > Test Result > 260204 > 3-9차 \\ 테스트 결과 요약해줘`\n"
+        "• `/gdi Chaoszero > Update Review > 20260204 > 완료 \\ 은하 훈장 \\ 내용 요약`\n"
+        "• `/gdi 에픽세븐 밸런스 \\ 최근 변경사항 알려줘`\n"
         "• `/gdi file hero_balance.xlsx`\n"
         "• `/gdi folder Chaoszero/Test Result`"
     ))
@@ -1028,9 +1028,9 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 respond(text="❌ 검색어를 입력하세요. 예: `/wiki search QA 일정`")
             return
 
-        # "|" 구분자 → [경로/페이지 제목] | [질문] 으로 Claude AI 답변
-        if "|" in text:
-            page_part, _, question = text.partition("|")
+        # "\" 구분자 → [경로/페이지 제목] \ [질문] 으로 Claude AI 답변
+        if "\\" in text:
+            page_part, _, question = text.partition("\\")
             page_part = page_part.strip()
             question  = question.strip()
             if page_part and question:
@@ -1094,16 +1094,79 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             elapsed_ms=int((time.time() - t0) * 1000),
         )
 
+    @app.command("/wiki-sync")
+    def handle_wiki_sync_command(ack, respond, command):
+        """
+        /wiki-sync          → Delta Sync (변경분만)
+        /wiki-sync full     → Full Ingest (전체 재수집)
+        /wiki-sync status   → 캐시 통계
+        """
+        ack()
+        text = (command.get("text") or "").strip().lower()
+
+        # 캐시 모듈 확인
+        if not wc._CACHE_ENABLED:
+            respond(text="❌ MCP 캐시 모듈이 로드되지 않았습니다.")
+            return
+
+        if text == "status":
+            stats = wc._wiki_cache.get_stats()
+            lines = [
+                "📊 *Wiki 캐시 현황*",
+                f"• 총 노드: {stats['total_nodes']}건",
+                f"• 소스별: {stats.get('by_source', {})}",
+                f"• 본문 캐시: {stats['total_content']}건 ({stats['total_chars']:,}자)",
+                f"• DB 크기: {stats['db_size_kb']}KB",
+            ]
+            if stats.get("last_sync"):
+                ls = stats["last_sync"]
+                lines.append(f"• 최근 동기화: {ls['sync_type']} {ls['scope']} ({ls['started_at']}) — {ls['status']}")
+            else:
+                lines.append("• 최근 동기화: 없음")
+            respond(text="\n".join(lines))
+            return
+
+        # SyncEngine 생성
+        try:
+            import sys as _sys
+            _sys.path.insert(0, "D:/Vibe Dev/QA Ops/mcp-cache-layer")
+            from src.sync_engine import SyncEngine
+            engine = SyncEngine(wc._wiki_cache, wc._get_mcp())
+        except Exception as e:
+            respond(text=f"❌ 동기화 엔진 로드 실패: {e}")
+            return
+
+        space_key = wc._DEFAULT_SPACE_KEY
+
+        if text == "full":
+            respond(text=f"🔄 *{space_key}* 전체 동기화 시작... (시간이 걸릴 수 있습니다)")
+            result = engine.full_ingest("wiki", space_key)
+        else:
+            respond(text=f"🔄 *{space_key}* 변경분 동기화 시작...")
+            result = engine.delta_sync("wiki", space_key)
+
+        if "error" in result:
+            respond(text=f"❌ 동기화 실패: {result['error']}")
+        else:
+            respond(text=(
+                f"✅ *{space_key}* 동기화 완료\n"
+                f"• 스캔: {result['scanned']}건\n"
+                f"• 추가: {result['added']}건\n"
+                f"• 갱신: {result['updated']}건\n"
+                f"• 에러: {result['errors']}건\n"
+                f"• 소요: {result['duration_sec']}초"
+            ))
+
     @app.command("/gdi")
     def handle_gdi_command(ack, respond, command):
-        """
+        r"""
         /gdi help                              → 도움말
         /gdi search [검색어]                   → 통합 검색
         /gdi file [파일명]                     → 파일명 검색
         /gdi folder [경로]                     → 폴더 내 파일 목록
         /gdi [검색어]                          → 통합 검색
-        /gdi [검색어] | [질문]                 → 검색 + AI 답변
-        /gdi [폴더명] | [파일명] | [질문]      → 폴더+파일 지정 + AI 답변
+        /gdi [검색어] \ [질문]                 → 검색 + AI 답변
+        /gdi [폴더명] \ [파일명] \ [질문]      → 폴더+파일 지정 + AI 답변
         """
         ack()
         text      = (command.get("text") or "").strip()
@@ -1168,20 +1231,20 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 respond(text="❌ 폴더 경로를 입력하세요. 예: `/gdi folder Epicseven/Update Review`")
             return
 
-        # "|" 구분자 처리
-        pipe_parts = [p.strip() for p in text.split("|")]
+        # "\" 구분자 처리
+        pipe_parts = [p.strip() for p in text.split("\\")]
 
         # ── 폴더 경로 모드: 첫 파트에 ">" 가 있으면 폴더 경로로 판단 ──
         if len(pipe_parts) >= 2 and _has_breadcrumb(pipe_parts[0]):
             folder_path = _breadcrumb_to_path(pipe_parts[0])
 
             if len(pipe_parts) >= 3:
-                # 3파트: 경로 | 파일키워드 | 질문
+                # 3파트: 경로 \ 파일키워드 \ 질문
                 # '은하 훈장' 같은 인용부호 키워드 지원
                 file_keyword = pipe_parts[1].strip("''\u2018\u2019\"")
-                question     = " | ".join(pipe_parts[2:])
+                question     = " \\ ".join(pipe_parts[2:])
             else:
-                # 2파트: 경로 | 질문 (파일 1개일 때 자동 선택)
+                # 2파트: 경로 \ 질문 (파일 1개일 때 자동 선택)
                 file_keyword = ""
                 question     = pipe_parts[1]
 
@@ -1190,11 +1253,11 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                                question, respond, user_id, user_name, text)
                 return
 
-        # 3파트 (폴더경로 아닌 경우): 키워드 | 파일명 | 질문
+        # 3파트 (폴더경로 아닌 경우): 키워드 \ 파일명 \ 질문
         if len(pipe_parts) >= 3:
             search_kw   = pipe_parts[0]
             file_name   = pipe_parts[1]
-            question    = " | ".join(pipe_parts[2:])
+            question    = " \\ ".join(pipe_parts[2:])
 
             if search_kw and file_name and question:
                 t0 = time.time()
@@ -1249,7 +1312,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 )
                 return
 
-        # 2파트: 검색어 | 질문
+        # 2파트: 검색어 \ 질문
         if len(pipe_parts) == 2:
             search_query = pipe_parts[0]
             question     = pipe_parts[1]

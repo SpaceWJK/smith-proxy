@@ -27,6 +27,20 @@ import requests
 
 from mcp_session import McpSession
 
+# ── MCP 캐시 레이어 (optional — import 실패 시 캐시 없이 동작) ──────────────
+try:
+    import sys as _sys
+    _sys.path.insert(0, "D:/Vibe Dev/QA Ops/mcp-cache-layer")
+    from src.cache_manager import CacheManager as _CacheManager
+    from src.cache_logger import ops_log as _ops_log, perf as _perf
+    _wiki_cache = _CacheManager()
+    _CACHE_ENABLED = True
+except Exception:
+    _wiki_cache = None
+    _ops_log = None
+    _perf = None
+    _CACHE_ENABLED = False
+
 logger = logging.getLogger(__name__)
 
 # ── wiki 조회 전용 로거 (logs/wiki_query.log) ──────────────────────────────
@@ -58,25 +72,29 @@ def _get_wiki_query_logger() -> logging.Logger:
 
 def log_wiki_query(*, user_id: str = "", user_name: str = "",
                    action: str, query: str, result: str = "",
-                   error: str = "", elapsed_ms: int = 0):
+                   error: str = "", elapsed_ms: int = 0,
+                   cache_status: str = ""):
     """
     /wiki 조회 내역을 logs/wiki_query.log 에 기록합니다.
 
     Parameters
     ----------
-    user_id   : Slack 사용자 ID (예: U07PHCE4RCM)
-    user_name : Slack 사용자명 (예: es-wjkim)
-    action    : 동작 종류 (search / get_page / ask_claude / get_latest 등)
-    query     : 검색어 또는 페이지 제목
-    result    : 결과 요약 (예: "페이지 발견: Game Service 1")
-    error     : 에러 메시지 (없으면 빈 문자열)
-    elapsed_ms: 소요 시간 (밀리초)
+    user_id      : Slack 사용자 ID (예: U07PHCE4RCM)
+    user_name    : Slack 사용자명 (예: es-wjkim)
+    action       : 동작 종류 (search / get_page / ask_claude / get_latest 등)
+    query        : 검색어 또는 페이지 제목
+    result       : 결과 요약 (예: "페이지 발견: Game Service 1")
+    error        : 에러 메시지 (없으면 빈 문자열)
+    elapsed_ms   : 소요 시간 (밀리초)
+    cache_status : 캐시 상태 (hit / miss / stale / disabled, 빈 문자열=미사용)
     """
     wl = _get_wiki_query_logger()
     status = "ERROR" if error else "OK"
     user   = f"{user_name}({user_id})" if user_id else (user_name or "unknown")
 
     msg = f"{status} | {action} | user={user} | query={query}"
+    if cache_status:
+        msg += f" | cache={cache_status}"
     if result:
         msg += f" | result={result}"
     if error:
@@ -371,23 +389,56 @@ class ConfluenceWikiClient:
         """
         페이지 ID로 전체 본문 조회 (get_page_by_id MCP 도구).
         cql_search 의 excerpt 대신 실제 페이지 전체 내용을 가져옵니다.
-        결과는 _PAGE_CACHE_TTL 초 동안 캐시되어 반복 조회 시 재사용됩니다.
+
+        캐시 순서: L1 인메모리(_PAGE_CACHE) → L2 SQLite → L3 MCP 호출
 
         Returns: (plain_text | None, error_str | None)
         """
-        # ── 캐시 적중 확인 ──────────────────────────────────────────────
+        t0 = _perf.now_ms() if _perf else 0
+
+        # ── L1: 인메모리 캐시 적중 확인 ─────────────────────────────────
         cached = _PAGE_CACHE.get(page_id)
         if cached and (time.time() - cached[1]) < _PAGE_CACHE_TTL:
-            logger.info(f"[wiki] 캐시 적중 (TTL {_PAGE_CACHE_TTL}s): id={page_id}")
+            elapsed = _perf.elapsed_ms(t0) if _perf else 0
+            logger.info(f"[wiki] 인메모리 캐시 적중 (TTL {_PAGE_CACHE_TTL}s): id={page_id}")
+            if _ops_log:
+                _ops_log.cache_hit(f"page#{page_id}", source="memory",
+                                   elapsed_ms=elapsed)
             return cached[0], None
 
-        # ── MCP 호출 ────────────────────────────────────────────────────
+        # ── L2: SQLite 캐시 적중 확인 ───────────────────────────────────
+        if _CACHE_ENABLED:
+            try:
+                node = _wiki_cache.get_node("wiki", page_id)
+                if node and not _wiki_cache.is_stale(node["id"]):
+                    content = _wiki_cache.get_content(node["id"])
+                    if content and content["body_text"]:
+                        _PAGE_CACHE[page_id] = (content["body_text"], time.time())
+                        elapsed = _perf.elapsed_ms(t0) if _perf else 0
+                        logger.info(f"[wiki] SQLite 캐시 적중: id={page_id}, chars={content['char_count']}")
+                        if _ops_log:
+                            _ops_log.cache_hit(
+                                node.get("title", f"page#{page_id}"),
+                                source="sqlite", node_id=node["id"],
+                                elapsed_ms=elapsed,
+                            )
+                        return content["body_text"], None
+            except Exception as e:
+                logger.warning(f"[wiki] SQLite 캐시 조회 실패 (무시): {e}")
+
+        # ── L3: MCP 호출 ────────────────────────────────────────────────
+        mcp_t0 = _perf.now_ms() if _perf else 0
         raw, err = self._mcp.call_tool(
             "get_page_by_id",
             {"page_id": page_id, "expand": "body.view"},
         )
+        mcp_elapsed = _perf.elapsed_ms(mcp_t0) if _perf else 0
+
         if err:
             logger.warning(f"[wiki] get_page_by_id 실패 (id={page_id}): {err}")
+            if _ops_log:
+                _ops_log.cache_miss(f"page#{page_id}", reason="mcp_error",
+                                    elapsed_ms=_perf.elapsed_ms(t0) if _perf else 0)
             return None, err
 
         data = self._parse_raw(raw)
@@ -400,12 +451,38 @@ class ConfluenceWikiClient:
 
         if html_body:
             text = _strip_html(html_body)
-            # ── 캐시 저장 ──────────────────────────────────────────────
+            title = data.get("title", f"page#{page_id}")
+            total_elapsed = _perf.elapsed_ms(t0) if _perf else 0
+
+            # ── 인메모리 캐시 저장 ─────────────────────────────────────
             _PAGE_CACHE[page_id] = (text, time.time())
             logger.info(
                 f"[wiki] 전체 본문 캐시 저장: id={page_id}, "
                 f"html_len={len(html_body)}, text_len={len(text)}"
             )
+
+            if _ops_log:
+                _ops_log.cache_miss(title, reason="not_cached",
+                                    elapsed_ms=total_elapsed)
+
+            # ── SQLite 캐시 저장 ───────────────────────────────────────
+            if _CACHE_ENABLED:
+                try:
+                    version_data = data.get("version", {})
+                    _wiki_cache.put_page(
+                        "wiki", page_id, title or f"page_{page_id}",
+                        space_key=self._space_key,
+                        last_modified=version_data.get("when") if isinstance(version_data, dict) else None,
+                        version=version_data.get("number") if isinstance(version_data, dict) else None,
+                        author=(version_data.get("by", {}).get("displayName")
+                                if isinstance(version_data, dict) else None),
+                        body_raw=html_body,
+                        body_text=text,
+                    )
+                    logger.info(f"[wiki] SQLite 캐시 저장: id={page_id}, title={title}")
+                except Exception as e:
+                    logger.warning(f"[wiki] SQLite 캐시 저장 실패 (무시): {e}")
+
             return text, None
 
         return None, "본문(body.view)을 찾을 수 없습니다"
@@ -498,6 +575,24 @@ class ConfluenceWikiClient:
             text = (_strip_html(html_body)
                     if html_body
                     else (excerpt_text or _html.unescape(excerpt_raw)))
+
+        # ── SQLite 캐시에 메타데이터 저장 (본문 조회 여부와 무관) ──────────
+        if _CACHE_ENABLED and page_id:
+            try:
+                version_data = content.get("version", {})
+                _wiki_cache.upsert_node(
+                    "wiki", page_id, page_title,
+                    space_key=self._space_key, url=page_url,
+                )
+                node = _wiki_cache.get_node("wiki", page_id)
+                if node:
+                    _wiki_cache.upsert_meta(
+                        node["id"],
+                        last_modified=version_data.get("when") if isinstance(version_data, dict) else None,
+                        version=version_data.get("number") if isinstance(version_data, dict) else None,
+                    )
+            except Exception as e:
+                logger.debug(f"[wiki] CQL 결과 캐시 저장 실패 (무시): {e}")
 
         logger.debug(f"[wiki] 페이지 파싱: id={page_id}, title={page_title}, "
                      f"fetch_full={fetch_full}, text_len={len(str(text))}")
