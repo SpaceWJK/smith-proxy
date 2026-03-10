@@ -18,7 +18,23 @@
 
 ---
 
-## [1.3.2] - 2026-03-10 <- 현재
+## [1.3.3] - 2026-03-10 <- 현재
+
+### 수정
+- **daily/weekly 중복 발송 버그 수정**: `misfire_grace_time` 3600 → 60초
+  - v1.3.1에서 daily/weekly 잡에 1시간 grace 적용 → Railway 재시작 3회(10:00~10:05) 시 각각 발동 → 체크리스트 3번 중복 발송
+  - 60초로 축소: Railway 재시작(수초~수십초) 1회는 허용, 연속 재시작 시 중복 방지
+- **전일 누락 항목 업무명 누락 수정** (`missed_tracker.py`)
+  - `extract_flat_items()`: group 타입 항목에서 `group_name` 접두사(`[각 프로젝트]` 등)를 제거하고 sub_item text와 결합
+  - 예: `group_name="[각 프로젝트] 서비스 장애"`, sub text=`"[에픽세븐]"` → `"[에픽세븐] 서비스 장애"`
+  - 기존: `"[에픽세븐]"` 만 표시 (group_name 유실)
+- **전일 누락 항목 체크박스 제거** (`slack_sender.py`)
+  - `_build_missed_section_blocks()`: `action/checkboxes` 블록 → `section/mrkdwn` 텍스트 리스트
+  - 형식: `• *업무명*  담당: 이름` (체크박스 없이 누락 현황만 표시)
+
+---
+
+## [1.3.2] - 2026-03-10
 
 ### 수정
 - **Railway 재시작 즉시 Slack 알림**: 스케줄러 시작 시 `monitor_alert_channel`에 재시작 시각 알림 발송

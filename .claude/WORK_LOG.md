@@ -5,6 +5,60 @@
 
 ---
 
+## 2026-03-10 (화) — 세션 9
+
+### 완료
+- **daily/weekly 중복 발송 버그 수정 (v1.3.3)**
+  - 원인: v1.3.1에서 daily/weekly `misfire_grace_time=3600` 추가 → Railway 10:00~10:05 사이 3번 재시작 → 각각 1시간 이내 판단으로 3번 발동 → 체크리스트 3개 중복 발송
+  - 수정: `scheduler.py` `_add_daily()` / `_add_weekly()` `misfire_grace_time`: 3600 → **60**
+  - 중복 메시지 2개(ts=1773104401.221139, 1773104687.395599) 삭제는 사용자가 직접 처리
+  - 남길 메시지: ts=1773104704.056779 (checklist_state.json에 등록된 최신 메시지)
+- **03/10 체크리스트 전일 누락 섹션 재수정**
+  - `fix_missed_0310.py` 실행 → ts=1773104704.056779 메시지 `chat.update`
+  - 올바른 전일 날짜: `"[일일] 03/09(월)"` (이전 스크립트: `"03/06(금)"` 오류)
+  - 올바른 누락 4개: `[에픽세븐] Next Checklist`, `[에픽세븐] 커뮤니티 이슈`, `[에픽세븐] GDI 데이터 파일 업로드`, `[카제나] GDI 데이터 파일 업로드`
+  - 체크 상태 6개 유지 (g0_cazena, g1_cazena, g4_cazena, g5_cazena, g3_cazena, g6_cazena)
+- **`extract_flat_items()` group_name 결합 수정** (`missed_tracker.py`)
+  - group 항목 sub_item에 group_name 접두사 제거 후 결합 (`"[에픽세븐] 서비스 장애"`)
+- **`_build_missed_section_blocks()` 체크박스 제거** (`slack_sender.py`)
+  - action/checkboxes → section/mrkdwn 텍스트 리스트 (`• *업무명*  담당: 이름`)
+
+### Railway 재배포 필요
+- `scheduler.py` 변경(misfire_grace_time 60초) → Railway 재배포해야 적용됨
+
+---
+
+## 2026-03-10 (월) — 세션 8
+
+### 완료
+- **03.10 체크리스트 메시지에 전일(03.06 금) 누락 항목 추가**
+  - 재발송 없이 `chat.update`로 기존 메시지(ts=1773104704.056779) 수정
+  - `groups:history` 없으므로 전일 체크 상태 불가 → 로그(slack_bot.log)에서 오늘 체크된 6개 항목 파악 후 나머지 9개를 "[일일] 03/06(금)" 누락으로 표시
+  - `add_missed_0310.py` 1회성 스크립트 실행 후 `_legacy/`로 이동
+- **재발 방지 대책 구현 (v1.3.2)**
+  - `_notify_startup()`: Railway 재시작 시 즉시 `monitor_alert_channel`에 알림 발송
+    → 기존에는 18:00 모니터링 전까지 재시작 여부 인지 불가 → 이제 즉시 감지
+  - `schedule-monitor` 잡 `misfire_grace_time=3600` 추가
+    → 18:00 모니터링 잡 자체도 Railway 재시작 시 누락 방지
+  - v1.3.2 커밋/Push → Railway 자동 재배포
+
+### 재발 방지 구조 요약
+
+| 레이어 | 조치 | 커버 케이스 |
+|--------|------|-------------|
+| v1.3.1 | daily/weekly misfire_grace_time=3600 | 재시작 후 1시간 이내 스케줄 자동 발송 |
+| v1.3.2 | Railway 재시작 즉시 Slack 알림 | 재시작 즉시 인지 → 수동 대응 |
+| v1.3.2 | monitor 잡 misfire_grace_time=3600 | 18:00 모니터링 잡 자체 누락 방지 |
+| 기존 | 18:00 schedule_monitor check_and_alert | 당일 미발송 잡 18:00에 알림 |
+
+### 미해결 케이스 (수동 대응 필요)
+- Railway가 10:00~11:00 사이가 아닌 더 늦게 재시작되는 경우 (예: 12:00 재시작)
+  → misfire_grace_time=3600 초과 → 스케줄 누락
+  → **_notify_startup 알림으로 즉시 인지 → 수동 발송으로 대응**
+  → 18:00 모니터링도 재확인
+
+---
+
 ## 2026-03-10 (월) — 세션 7
 
 ### 완료

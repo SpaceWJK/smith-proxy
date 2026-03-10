@@ -86,14 +86,24 @@ def extract_flat_items(items: list) -> list:
     """
     config.json items (group 포함) → flat list
     반환: [{"value": str, "text": str, "mentions": list}, ...]
+
+    group 항목은 group_name 에서 "[각 프로젝트] " 등 접두사를 제거한 업무명을
+    sub_item text 와 결합하여 표시합니다.
+    예: group_name="[각 프로젝트] 서비스 장애", sub text="[에픽세븐]"
+        → combined text="[에픽세븐] 서비스 장애"
     """
     flat = []
     for item in items:
         if item.get("type") == "group":
+            group_name  = item.get("group_name", "")
+            # "[각 프로젝트] " 등 대괄호 접두사 제거
+            clean_group = re.sub(r"^\[[^\]]+\]\s*", "", group_name).strip()
             for sub in item.get("sub_items", []):
+                sub_text = sub.get("text", "")
+                combined = f"{sub_text} {clean_group}" if clean_group else sub_text
                 flat.append({
                     "value":    sub["value"],
-                    "text":     sub.get("text", ""),
+                    "text":     combined,
                     "mentions": sub.get("mentions", []),
                 })
         else:

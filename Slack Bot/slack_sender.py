@@ -94,7 +94,7 @@ class SlackSender:
 
     def _build_missed_section_blocks(self, missed_items: list, action_id: str = "checklist_toggle") -> list:
         """
-        누락 체크리스트 섹션 블록 생성.
+        누락 체크리스트 섹션 블록 생성 (텍스트 리스트 형식, 체크박스 없음).
 
         Parameters
         ----------
@@ -105,7 +105,7 @@ class SlackSender:
             - block_id="missed_divider"  → 구분자 (sentinel: 로컬 봇이 섹션 위치 식별용)
             - block_id="missed_header"   → "⚠️ 전일 누락 항목" 헤더
             - block_id=f"missed_grp_{i}" → 그룹 레이블 (스케줄별)
-            - block_id=f"missed_{i}"     → 해당 그룹의 체크박스
+            - block_id=f"missed_{i}"     → 누락 항목 텍스트 목록 (체크박스 없음)
         """
         blocks = [
             {"type": "divider", "block_id": "missed_divider"},
@@ -117,37 +117,29 @@ class SlackSender:
         ]
 
         for i, group in enumerate(missed_items):
-            label      = group.get("label", "")
+            label       = group.get("label", "")
             group_items = group.get("items", [])
 
-            # 그룹 레이블 (예: 📋 [일일] 03/04(화))
+            # 그룹 레이블 (예: 📋 [일일] 03/09(월))
             blocks.append({
                 "type":     "section",
                 "block_id": f"missed_grp_{i}",
                 "text": {"type": "mrkdwn", "text": f"*📋 {label}*"},
             })
 
-            # 체크박스 옵션 빌드
-            options: list = []
+            # 텍스트 리스트 (체크박스 불필요: 조회/확인 목적)
+            lines: list = []
             for item in group_items:
                 names = [self.user_map.get(uid, "") for uid in item.get("mentions", [])]
                 names = [n for n in names if n]
                 mention_str = ("  담당: " + ", ".join(names)) if names else ""
-                options.append({
-                    "text":  {"type": "mrkdwn", "text": f"*{item['text']}*{mention_str}"},
-                    "value": item["value"],
-                })
+                lines.append(f"• *{item['text']}*{mention_str}")
 
-            if options:
+            if lines:
                 blocks.append({
-                    "type":     "actions",
+                    "type":     "section",
                     "block_id": f"missed_{i}",
-                    "elements": [{
-                        "type":      "checkboxes",
-                        "action_id": action_id,
-                        "options":   options,
-                        # initial_options 없음 (초기 전송 시 모두 미완료)
-                    }],
+                    "text":     {"type": "mrkdwn", "text": "\n".join(lines)},
                 })
 
         return blocks
