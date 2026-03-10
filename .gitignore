@@ -17,6 +17,14 @@ __pycache__/
 # 레거시 대기소
 _legacy/
 
+# 런타임 파일
+*.pid
+*.bak
+
+# 유틸리티 스크립트 (로컬 전용)
+scripts/
+*.vbs
+
 # IDE
 .vscode/
 .idea/

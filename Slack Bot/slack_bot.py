@@ -158,25 +158,17 @@ def _find_matching_rule(page_part: str, question: str) -> "dict | None":
 def _wiki_help(respond):
     """도움말"""
     respond(text=(
-        "*📄 /wiki 페이지 조회 도움말*\n\n"
+        "*Wiki 도움말*\n\n"
         "```\n"
-        "/wiki [페이지 제목]                       페이지 내용 전체 조회\n"
-        "/wiki [상위] > [하위] > [페이지]          계층 경로로 페이지 조회 (봇 포맷)\n"
-        "/wiki [상위] / [하위] / [페이지]          Confluence 경로 복사 그대로 사용 가능\n"
-        "/wiki [페이지 제목] \\ [질문]              페이지 내용 기반 AI 답변 (Claude)\n"
-        "/wiki [상위] > [페이지] \\ [질문]          경로 지정 + AI 답변\n"
-        "/wiki search [검색어]                     키워드로 페이지 목록 검색\n"
-        "/wiki help                                이 도움말\n"
+        "/wiki 페이지명                  페이지 내용 조회\n"
+        "/wiki 페이지명 \\ 질문           페이지 조회 + AI 답변\n"
+        "/wiki search 검색어             키워드로 페이지 검색\n"
+        "/wiki help                      이 도움말\n"
         "```\n\n"
         "예시:\n"
         "• `/wiki Game Service 1`\n"
-        "• `/wiki 프로젝트 현황 > Game Service 1`\n"
-        "• `/wiki 프로젝트 현황 / Game Service 1`  ← Confluence 경로 복사 사용\n"
         "• `/wiki Game Service 1 \\ QA 일정 알려줘`\n"
-        "• `/wiki 프로젝트 현황 > Game Service 1 \\ QA 일정이 어떻게 되나요?`\n"
-        "• `/wiki search QA 일정`\n\n"
-        "💡 Confluence 브레드크럼 경로를 그대로 복사해서 사용할 수 있습니다.\n"
-        "동일 제목의 페이지가 여러 곳에 있을 때 경로로 구분하세요."
+        "• `/wiki search QA 일정`"
     ))
 
 
@@ -560,23 +552,17 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
 def _gdi_help(respond):
     """도움말"""
     respond(text=(
-        "*📦 /gdi 문서 조회 도움말*\n\n"
+        "*GDI 도움말*\n\n"
         "```\n"
-        "/gdi 경로 \\ 질문                     폴더 파일 분석 (파일 1개일 때)\n"
-        "/gdi 경로 \\ 파일키워드 \\ 질문        폴더에서 파일 찾아 분석\n"
-        "/gdi [검색어] \\ [질문]               통합 검색 + AI 답변\n"
-        "/gdi search [검색어]                 통합 검색\n"
-        "/gdi file [파일명]                   파일명으로 검색\n"
-        "/gdi folder [경로]                   폴더 내 파일 목록\n"
+        "/gdi 폴더명 \\ 질문                   폴더 파일 분석\n"
+        "/gdi 폴더명 \\ 파일키워드 \\ 질문      파일 찾아 분석\n"
+        "/gdi search 검색어                   통합 검색\n"
         "/gdi help                            이 도움말\n"
         "```\n\n"
-        "*경로 표기법:* `>` 로 폴더를 구분합니다 (GDI 웹과 동일)\n\n"
         "예시:\n"
-        "• `/gdi Chaoszero > Test Result > 260204 > 3-9차 \\ 테스트 결과 요약해줘`\n"
-        "• `/gdi Chaoszero > Update Review > 20260204 > 완료 \\ 은하 훈장 \\ 내용 요약`\n"
-        "• `/gdi 에픽세븐 밸런스 \\ 최근 변경사항 알려줘`\n"
-        "• `/gdi file hero_balance.xlsx`\n"
-        "• `/gdi folder Chaoszero/Test Result`"
+        "• `/gdi Chaoszero > Test Result \\ 테스트 결과 요약해줘`\n"
+        "• `/gdi Chaoszero > Update Review \\ 은하 훈장 \\ 내용 요약`\n"
+        "• `/gdi search 에픽세븐 밸런스`"
     ))
 
 
@@ -712,20 +698,18 @@ def _gdi_ask_claude_list(file_list_text: str, source_label: str,
 def _jira_help(respond):
     """Jira 도움말"""
     respond(text=(
-        "*:ticket: /jira 도움말*\n\n"
+        "*JIRA 도움말*\n\n"
         "```\n"
-        "/jira search [텍스트 or JQL]          이슈 검색\n"
-        "/jira issue [PROJ-123]                이슈 상세\n"
-        "/jira project [KEY]                   프로젝트 정보\n"
-        "/jira projects                        프로젝트 목록\n"
-        "/jira [이슈키] \\ [질문]               이슈 조회 + AI 답변\n"
-        "/jira [검색어] \\ [질문]               이슈 검색 + AI 답변\n"
+        "/jira 검색어                          이슈 검색\n"
+        "/jira 검색어 \\ 질문                   이슈 검색 + AI 답변\n"
+        "/jira PROJ-123                        이슈 상세 조회\n"
+        "/jira PROJ-123 \\ 질문                 이슈 조회 + AI 답변\n"
         "/jira help                            이 도움말\n"
         "```\n\n"
-        "*검색 팁:*\n"
-        "• 단순 텍스트 → 제목 검색 (예: `/jira search 로그인 오류`)\n"
-        "• JQL 직접 입력 가능 (예: `/jira search project=QASGP AND status=Open`)\n"
-        "• 이슈 키만 입력하면 바로 조회 (예: `/jira QASGP-123`)"
+        "예시:\n"
+        "• `/jira 접속 불가`\n"
+        "• `/jira 로그인 오류 \\ 최근 이슈 요약해줘`\n"
+        "• `/jira QASGP-123 \\ 이 이슈 요약해줘`"
     ))
 
 
@@ -1212,7 +1196,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 if err:
                     wc.log_wiki_query(
                         user_id=user_id, user_name=user_name,
-                        action="ask_claude", query=f"{page_part} | {question}",
+                        action="ask_claude", query=f"{page_part} \\ {question}",
                         error=str(err),
                         elapsed_ms=int((time.time() - t0) * 1000),
                     )
@@ -1222,7 +1206,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 _wiki_ask_claude(page["title"], page["text"], page["url"], question, respond)
                 wc.log_wiki_query(
                     user_id=user_id, user_name=user_name,
-                    action="ask_claude", query=f"{page_part} | {question}",
+                    action="ask_claude", query=f"{page_part} \\ {question}",
                     result=f"페이지: {page['title']}",
                     elapsed_ms=int((time.time() - t0) * 1000),
                 )
@@ -1513,15 +1497,11 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
     @app.command("/jira")
     def handle_jira_command(ack, respond, command):
         r"""
-        /jira help                              → 도움말
-        /jira search [텍스트 or JQL]            → 이슈 검색
-        /jira issue [PROJ-123]                  → 이슈 상세
-        /jira project [KEY]                     → 프로젝트 상세
-        /jira projects                          → 프로젝트 목록
-        /jira [이슈키]                          → 이슈 상세
-        /jira [검색어]                          → 이슈 검색
-        /jira [이슈키] \ [질문]                 → 이슈 + AI 답변
-        /jira [검색어] \ [질문]                 → 검색 + AI 답변
+        /jira help              → 도움말
+        /jira [검색어]          → 이슈 검색
+        /jira [검색어] \ [질문] → 이슈 검색 + AI 답변
+        /jira [이슈키]          → 이슈 상세
+        /jira [이슈키] \ [질문] → 이슈 + AI 답변
         """
         ack()
         text      = (command.get("text") or "").strip()
