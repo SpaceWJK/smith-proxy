@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-03-11 (화) — 세션 17
+
+### 완료
+- **v1.5.4 Wiki 4단계 Fallback 파이프라인**
+  - `slack_bot.py`: `_wiki_call_claude()` 분리 + `_NOT_FOUND_PATTERN` 감지 + 4단계 자동 fallback
+  - `wiki_client.py`: `get_descendant_pages()`, `fetch_page_live()`, `search_content_live()` 신규 메서드
+  - `wiki_client.py`: `get_page_by_title()` CQL 정확 매칭 우선 + 유사도 스코어링 개선
+  - `slack_bot.py`: `_log_answer_miss()` — 모든 fallback 실패 시 `logs/answer_miss.log` 기록
+  - `scripts/analyze_answer_miss.py` 신규 — 실패 분석 도구 (빈도/추이/개선제안/CSV)
+  - py_compile 통과 + 봇 재시작 완료
+
+---
+
 ## 2026-03-10 (화) — 세션 16
 
 ### 완료

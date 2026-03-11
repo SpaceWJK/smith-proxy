@@ -18,7 +18,30 @@
 
 ---
 
-## [1.5.3] - 2026-03-11 <- 현재
+## [1.5.4] - 2026-03-11 <- 현재
+
+### 추가
+- **Wiki 4단계 Fallback 파이프라인** (`slack_bot.py`)
+  - Stage 1: 적재 데이터(캐시) → Claude 답변
+  - Stage 2: 하위 페이지(descendant) 검색 → Claude 재질의
+  - Stage 3-A: MCP 실시간 원본 페이지 재조회 → Claude 재질의
+  - Stage 3-B: MCP 본문 전문 검색(CQL text~) → Claude 재질의
+  - "찾을 수 없습니다" 패턴 감지 시 자동 단계 진행
+- **Wiki 검색 정확도 개선** (`wiki_client.py`)
+  - `get_page_by_title()`: 2단계 CQL — 정확 매칭 우선 → 퍼지 매칭 + 제목 유사도 스코어링
+  - `get_descendant_pages()`: 하위 페이지 검색 신규 메서드
+  - `fetch_page_live()`: 캐시 우회 MCP 실시간 페이지 조회
+  - `search_content_live()`: MCP CQL 본문 전문 검색
+- **답변 실패(Answer Miss) 로깅** (`slack_bot.py`)
+  - 모든 fallback 단계 실패 시 `logs/answer_miss.log`에 자동 기록
+  - 로그 포맷: `timestamp | MISS | user | page | question | stages`
+- **답변 실패 분석 스크립트** (`scripts/analyze_answer_miss.py`)
+  - 페이지별/사용자별/키워드별 실패 빈도, 일별 추이, 개선 제안 출력
+  - `--days N` (최근 N일 분석), `--csv` (CSV 내보내기) 옵션
+
+---
+
+## [1.5.3] - 2026-03-11
 
 ### 추가
 - **통합 응답 포맷 (`response_formatter.py`)**

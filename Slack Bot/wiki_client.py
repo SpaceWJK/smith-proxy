@@ -523,6 +523,10 @@ class ConfluenceWikiClient:
         페이지 제목으로 Confluence 페이지 조회.
         (get_page_by_title MCP 도구는 서버 버그로 cql_search로 대체)
 
+        검색 우선순위:
+          1단계: 정확 일치 (title = "...")
+          2단계: 부분 일치 (title ~ "...") — 결과 중 제목 유사도가 가장 높은 것 선택
+
         Parameters
         ----------
         fetch_full : bool
@@ -535,14 +539,30 @@ class ConfluenceWikiClient:
           page_dict = {"id", "title", "url", "text"}
         """
         sk  = space_key or self._space_key
-        # title ~ "..." : 부분 일치 (제목에 키워드 포함)
-        cql = (f'title ~ "{title}" AND space = "{sk}"'
-               f' AND type=page ORDER BY lastmodified DESC')
-        logger.info(f"[wiki] 제목 검색 CQL: {cql} (fetch_full={fetch_full})")
 
+        # ── 1단계: 정확 일치 우선 ──────────────────────────────────────
+        cql_exact = (f'title = "{title}" AND space = "{sk}"'
+                     f' AND type=page')
+        logger.info(f"[wiki] 제목 정확 검색 CQL: {cql_exact}")
         raw, err = self._mcp.call_tool(
             "cql_search",
-            {"cql": cql, "limit": 5, "expand": "body.view"},
+            {"cql": cql_exact, "limit": 1, "expand": "body.view"},
+        )
+        if not err:
+            results = self._parse_cql_results(raw)
+            if results:
+                logger.info(f"[wiki] 정확 일치 발견: {title}")
+                return self._cql_result_to_page_dict(
+                    results[0], title, fetch_full=fetch_full
+                ), None
+
+        # ── 2단계: 부분 일치 (관련도 정렬) ─────────────────────────────
+        cql_fuzzy = (f'title ~ "{title}" AND space = "{sk}"'
+                     f' AND type=page ORDER BY lastmodified DESC')
+        logger.info(f"[wiki] 제목 부분 검색 CQL: {cql_fuzzy} (fetch_full={fetch_full})")
+        raw, err = self._mcp.call_tool(
+            "cql_search",
+            {"cql": cql_fuzzy, "limit": 5, "expand": "body.view"},
         )
         if err:
             return None, err
@@ -550,7 +570,22 @@ class ConfluenceWikiClient:
         results = self._parse_cql_results(raw)
         if not results:
             return None, f"'{title}' 페이지를 찾을 수 없습니다. (공간: {sk})"
-        return self._cql_result_to_page_dict(results[0], title,
+
+        # 제목 유사도로 최적 결과 선택 (쿼리 단어가 제목에 많이 포함된 것 우선)
+        query_words = set(re.split(r'[\s_\-]+', title.lower()))
+        query_words = {w for w in query_words if len(w) >= 2}
+
+        best, best_score = results[0], 0
+        for r in results:
+            r_title = _clean_title(
+                r.get("title") or
+                (r.get("content") or {}).get("title") or ""
+            ).lower()
+            score = sum(1 for w in query_words if w in r_title)
+            if score > best_score:
+                best, best_score = r, score
+
+        return self._cql_result_to_page_dict(best, title,
                                              fetch_full=fetch_full), None
 
     def get_page_by_path(self, ancestors: list, leaf_title: str,
@@ -693,6 +728,131 @@ class ConfluenceWikiClient:
         return self._cql_result_to_page_dict(
             results[0], page_title, fetch_full=fetch_full
         ), None
+
+    def get_descendant_pages(self, page_id: str, space_key: str = None,
+                             limit: int = 5, fetch_full: bool = True):
+        """
+        페이지 ID의 하위(descendant) 페이지 목록 조회.
+
+        '찾을 수 없습니다' fallback 시 부모 페이지의 자식 페이지를 탐색하여
+        실제 데이터가 있는 하위 페이지 내용을 가져옵니다.
+
+        Parameters
+        ----------
+        page_id    : 부모 페이지의 Confluence ID
+        space_key  : Confluence 공간 키
+        limit      : 최대 하위 페이지 수
+        fetch_full : True → 전체 본문 조회 (AI 질의용)
+
+        Returns
+        -------
+        (list[page_dict], error_str | None)
+        """
+        sk = space_key or self._space_key
+        cql = (f'ancestor = {page_id} AND space = "{sk}"'
+               f' AND type=page ORDER BY title ASC')
+        logger.info(f"[wiki][하위검색] CQL: {cql}")
+
+        raw, err = self._mcp.call_tool(
+            "cql_search",
+            {"cql": cql, "limit": limit, "expand": "body.view"},
+        )
+        if err:
+            logger.error(f"[wiki][하위검색] MCP 오류: {err}")
+            return [], err
+
+        results = self._parse_cql_results(raw)
+        if not results:
+            logger.info(f"[wiki][하위검색] 하위 페이지 없음 (parent_id={page_id})")
+            return [], None
+
+        pages = []
+        for r in results:
+            page = self._cql_result_to_page_dict(
+                r, "", fetch_full=fetch_full
+            )
+            pages.append(page)
+
+        logger.info(
+            f"[wiki][하위검색] {len(pages)}건 발견 "
+            f"(parent_id={page_id}, titles={[p['title'] for p in pages]})"
+        )
+        return pages, None
+
+    def fetch_page_live(self, page_id: str):
+        """
+        MCP를 통해 Confluence 페이지를 **캐시 우회**하여 실시간 조회.
+
+        적재된 데이터에서 답변을 찾지 못했을 때 최종 fallback으로 사용합니다.
+        인메모리/SQLite 캐시를 건너뛰고 MCP → Confluence API 직접 호출.
+
+        Returns: (plain_text | None, error_str | None)
+        """
+        logger.info(f"[wiki][MCP실시간] 캐시 우회 조회: id={page_id}")
+        raw, err = self._mcp.call_tool(
+            "get_page_by_id",
+            {"page_id": page_id, "expand": "body.view"},
+        )
+        if err:
+            logger.warning(f"[wiki][MCP실시간] 실패 (id={page_id}): {err}")
+            return None, err
+
+        data = self._parse_raw(raw)
+        if not isinstance(data, dict):
+            return None, "페이지 데이터 형식 오류"
+
+        body_val  = data.get("body", {})
+        html_body = (body_val.get("view", {}).get("value", "")
+                     if isinstance(body_val, dict) else "")
+
+        if html_body:
+            text = _strip_html(html_body)
+            logger.info(
+                f"[wiki][MCP실시간] 성공: id={page_id}, "
+                f"text_len={len(text)}"
+            )
+            return text, None
+
+        return None, "본문(body.view)을 찾을 수 없습니다"
+
+    def search_content_live(self, query: str, space_key: str = None,
+                            limit: int = 3):
+        """
+        MCP CQL로 본문 내용 검색 → 페이지 목록 + 내용 반환.
+
+        적재 데이터와 하위 페이지 모두 실패 시 최종 fallback으로,
+        질문 키워드로 Confluence 전문 검색을 수행합니다.
+
+        Returns: (list[page_dict], error_str | None)
+        """
+        sk = space_key or self._space_key
+        cql = (f'space="{sk}" AND text ~ "{query}"'
+               f' AND type=page ORDER BY lastmodified DESC')
+        logger.info(f"[wiki][MCP본문검색] CQL: {cql}")
+
+        raw, err = self._mcp.call_tool(
+            "cql_search",
+            {"cql": cql, "limit": limit, "expand": "body.view"},
+        )
+        if err:
+            return [], err
+
+        results = self._parse_cql_results(raw)
+        if not results:
+            return [], None
+
+        pages = []
+        for r in results:
+            page = self._cql_result_to_page_dict(
+                r, "", fetch_full=True
+            )
+            pages.append(page)
+
+        logger.info(
+            f"[wiki][MCP본문검색] {len(pages)}건 발견 "
+            f"(titles={[p['title'] for p in pages]})"
+        )
+        return pages, None
 
     def search_pages(self, query: str, space_key: str = None):
         """

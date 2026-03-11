@@ -241,25 +241,17 @@ def _wiki_get_page(client, page_part: str, respond):
     respond(text=msg)
 
 
-def _wiki_ask_claude(page_title: str, page_text: str, page_url: str, question: str, respond):
+def _wiki_call_claude(page_title: str, page_text: str, question: str):
     """
-    Claude API 를 사용해 페이지 내용 기반으로 질문에 답변.
-    환경변수 ANTHROPIC_API_KEY 필요.
+    Claude API 호출만 수행하고 답변 텍스트를 반환합니다.
+    오류 시 None 반환.
     """
     import anthropic
 
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
-        respond(
-            text=(
-                "❌ `ANTHROPIC_API_KEY` 환경변수가 설정되지 않았습니다.\n"
-                "Railway 환경변수에 Anthropic API 키를 추가하세요."
-            )
-        )
-        return
+        return None
 
-    # 페이지 내용이 너무 길면 앞부분만 사용 (토큰 절약)
-    # 47K+ 페이지에서 2026년 데이터가 잘리지 않도록 40K로 확장
     MAX_PAGE_CHARS = 40000
     truncated = len(page_text) > MAX_PAGE_CHARS
     content   = page_text[:MAX_PAGE_CHARS] if truncated else page_text
@@ -281,22 +273,95 @@ def _wiki_ask_claude(page_title: str, page_text: str, page_url: str, question: s
     try:
         client_ai = anthropic.Anthropic(api_key=api_key)
         message   = client_ai.messages.create(
-            model      = "claude-haiku-4-5-20251001",  # 빠르고 저렴한 모델
+            model      = "claude-haiku-4-5-20251001",
             max_tokens = 1024,
             messages   = [{"role": "user", "content": prompt}],
         )
-        answer = message.content[0].text
+        return message.content[0].text
     except Exception as e:
         logger.error(f"[wiki] Claude API 오류: {e}")
-        respond(text=f"❌ Claude API 오류\n```\n{e}\n```")
+        return None
+
+
+# "찾을 수 없습니다" 패턴 — fallback 트리거
+_NOT_FOUND_PATTERN = "찾을 수 없습니다"
+
+
+# ── 답변 실패(answer miss) 전용 로거 ─────────────────────────────────────
+_answer_miss_logger: "logging.Logger | None" = None
+
+def _get_answer_miss_logger() -> logging.Logger:
+    global _answer_miss_logger
+    if _answer_miss_logger is not None:
+        return _answer_miss_logger
+    _answer_miss_logger = logging.getLogger("answer_miss")
+    _answer_miss_logger.setLevel(logging.WARNING)
+    _answer_miss_logger.propagate = False
+    bot_dir  = os.path.dirname(os.path.abspath(__file__))
+    logs_dir = os.path.join(os.path.dirname(bot_dir), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    fh = logging.FileHandler(
+        os.path.join(logs_dir, "answer_miss.log"), encoding="utf-8"
+    )
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    _answer_miss_logger.addHandler(fh)
+    return _answer_miss_logger
+
+
+def _log_answer_miss(*, user_id: str, user_name: str,
+                     page_title: str, page_id: str,
+                     question: str, fallback_stages: str):
+    """모든 fallback 단계를 거쳐도 답변을 못 찾은 케이스를 기록."""
+    ml = _get_answer_miss_logger()
+    user = f"{user_name}({user_id})" if user_id else (user_name or "unknown")
+    ml.warning(
+        f"MISS | user={user} | page={page_title} (id={page_id}) | "
+        f"question={question} | stages={fallback_stages}"
+    )
+    logger.warning(
+        f"[wiki][answer_miss] 모든 fallback 실패 | page={page_title} | "
+        f"question={question}"
+    )
+
+
+def _wiki_ask_claude(page_title: str, page_text: str, page_url: str,
+                     question: str, respond, wiki_client=None):
+    """
+    Claude API 를 사용해 페이지 내용 기반으로 질문에 답변.
+
+    wiki_client 가 전달되면 '찾을 수 없습니다' 응답 시 하위 페이지를
+    자동 검색하여 재질의합니다 (MCP fallback).
+    """
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        respond(text=(
+            "❌ `ANTHROPIC_API_KEY` 환경변수가 설정되지 않았습니다.\n"
+            "Railway 환경변수에 Anthropic API 키를 추가하세요."
+        ))
         return
+
+    answer = _wiki_call_claude(page_title, page_text, question)
+    if answer is None:
+        respond(text="❌ Claude API 호출에 실패했습니다.")
+        return
+
+    source_label = page_title
+    source_url   = page_url
+
+    # ── MCP Fallback: "찾을 수 없습니다" 감지 → 하위 페이지 자동 검색 ──
+    if _NOT_FOUND_PATTERN in answer and wiki_client:
+        # page_text에서 page_id를 직접 알 수 없으므로 외부에서 전달
+        # → _wiki_ask_claude_with_fallback 에서 처리
+        pass  # fallback은 handler에서 처리
 
     respond(text=format_ai_response(
         question=question,
         raw_answer=answer,
         source_type="wiki",
-        source_label=page_title,
-        source_url=page_url,
+        source_label=source_label,
+        source_url=source_url,
     ))
 
 
@@ -1267,11 +1332,177 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     )
                     respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
                     return
-                _wiki_ask_claude(page["title"], page["text"], page["url"], question, respond)
+
+                # ── Claude 1차 답변 (적재 데이터) ────────────────
+                answer = _wiki_call_claude(
+                    page["title"], page["text"], question
+                )
+                if answer is None:
+                    respond(text="❌ Claude API 호출에 실패했습니다.")
+                    return
+
+                source_label = page["title"]
+                source_url   = page["url"]
+                fallback_stage = "cache"  # 어느 단계에서 답변 성공했는지
+
+                # ── Fallback 파이프라인 ──────────────────────────
+                # Stage 1(적재) 실패 → Stage 2(하위) → Stage 3(MCP 실시간)
+                if _NOT_FOUND_PATTERN in answer:
+                    logger.info(
+                        f"[wiki][fallback] Stage 1 미발견 → "
+                        f"하위 페이지 검색 (parent={page['title']}, "
+                        f"id={page.get('id', 'N/A')})"
+                    )
+
+                    # ── Stage 2: 하위 페이지 검색 ────────────────
+                    if page.get("id"):
+                        children, _ = wiki_client.get_descendant_pages(
+                            page["id"], limit=5
+                        )
+                        if children:
+                            combined_parts = []
+                            char_budget = 35000
+                            for child in children:
+                                child_text = child.get("text", "")
+                                if not child_text:
+                                    continue
+                                combined_parts.append(
+                                    f"=== {child['title']} ===\n"
+                                    f"{child_text}"
+                                )
+                                char_budget -= len(child_text)
+                                if char_budget <= 0:
+                                    break
+
+                            if combined_parts:
+                                fallback_title = (
+                                    f"{page['title']} "
+                                    f"(하위 페이지 {len(combined_parts)}건)"
+                                )
+                                combined_text = "\n\n".join(combined_parts)
+                                logger.info(
+                                    f"[wiki][fallback] Stage 2: 하위 "
+                                    f"{len(combined_parts)}건 "
+                                    f"{len(combined_text)}자 → Claude 재질의"
+                                )
+                                answer2 = _wiki_call_claude(
+                                    fallback_title, combined_text, question
+                                )
+                                if answer2 and _NOT_FOUND_PATTERN not in answer2:
+                                    answer = answer2
+                                    source_label = fallback_title
+                                    fallback_stage = "descendant"
+                                    logger.info(
+                                        "[wiki][fallback] Stage 2 성공"
+                                    )
+
+                    # ── Stage 3: MCP 실시간 조회 ─────────────────
+                    if _NOT_FOUND_PATTERN in answer:
+                        logger.info(
+                            "[wiki][fallback] Stage 2 실패 → "
+                            "Stage 3: MCP 실시간 조회"
+                        )
+
+                        # 3-A: 원본 페이지 MCP 실시간 재조회
+                        if page.get("id"):
+                            live_text, live_err = (
+                                wiki_client.fetch_page_live(page["id"])
+                            )
+                            if live_text and live_text != page["text"]:
+                                logger.info(
+                                    f"[wiki][fallback] Stage 3-A: "
+                                    f"실시간 본문 {len(live_text)}자 "
+                                    f"(캐시와 차이 있음)"
+                                )
+                                answer3 = _wiki_call_claude(
+                                    page["title"], live_text, question
+                                )
+                                if (answer3 and
+                                        _NOT_FOUND_PATTERN not in answer3):
+                                    answer = answer3
+                                    source_label = page["title"]
+                                    fallback_stage = "mcp_live"
+                                    logger.info(
+                                        "[wiki][fallback] Stage 3-A 성공"
+                                    )
+
+                        # 3-B: MCP 본문 검색 (질문 키워드로 전문 검색)
+                        if _NOT_FOUND_PATTERN in answer:
+                            search_q = question[:50]
+                            live_pages, _ = (
+                                wiki_client.search_content_live(
+                                    search_q, limit=3
+                                )
+                            )
+                            if live_pages:
+                                combined_parts = []
+                                char_budget = 35000
+                                for lp in live_pages:
+                                    lp_text = lp.get("text", "")
+                                    if not lp_text:
+                                        continue
+                                    combined_parts.append(
+                                        f"=== {lp['title']} ===\n"
+                                        f"{lp_text}"
+                                    )
+                                    char_budget -= len(lp_text)
+                                    if char_budget <= 0:
+                                        break
+
+                                if combined_parts:
+                                    live_title = (
+                                        f"MCP 검색 결과 "
+                                        f"({len(combined_parts)}건)"
+                                    )
+                                    live_combined = "\n\n".join(
+                                        combined_parts
+                                    )
+                                    logger.info(
+                                        f"[wiki][fallback] Stage 3-B: "
+                                        f"MCP 본문 검색 {len(combined_parts)}"
+                                        f"건 → Claude 재질의"
+                                    )
+                                    answer4 = _wiki_call_claude(
+                                        live_title, live_combined, question
+                                    )
+                                    if (answer4 and _NOT_FOUND_PATTERN
+                                            not in answer4):
+                                        answer = answer4
+                                        source_label = live_title
+                                        source_url = (
+                                            live_pages[0].get("url", "")
+                                        )
+                                        fallback_stage = "mcp_search"
+                                        logger.info(
+                                            "[wiki][fallback] Stage 3-B 성공"
+                                        )
+
+                    # ── 최종 실패 로깅 ────────────────────────────
+                    if _NOT_FOUND_PATTERN in answer:
+                        fallback_stage = "all_failed"
+                        _log_answer_miss(
+                            user_id=user_id,
+                            user_name=user_name,
+                            page_title=page["title"],
+                            page_id=page.get("id", ""),
+                            question=question,
+                            fallback_stages="cache→descendant→mcp_live→mcp_search",
+                        )
+
+                respond(text=format_ai_response(
+                    question=question,
+                    raw_answer=answer,
+                    source_type="wiki",
+                    source_label=source_label,
+                    source_url=source_url,
+                ))
                 wc.log_wiki_query(
                     user_id=user_id, user_name=user_name,
                     action="ask_claude", query=f"{page_part} \\ {question}",
-                    result=f"페이지: {page['title']}",
+                    result=(
+                        f"페이지: {source_label} "
+                        f"(fallback={fallback_stage})"
+                    ),
                     elapsed_ms=int((time.time() - t0) * 1000),
                 )
                 return
