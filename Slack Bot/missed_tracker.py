@@ -397,3 +397,84 @@ def get_missed_items(slack_client, date_str: str = None) -> list:
         missed_groups.append({"label": label, "items": remapped})
 
     return missed_groups
+
+
+# ── 로컬 상태 기반 누락 조회 (conversations.history 불필요) ──────────────
+
+def get_missed_items_from_local_state() -> list:
+    """
+    로컬 checklist_state.json 에서 전일 미체크 항목을 조회합니다.
+
+    conversations.history 스코프 없이, interaction_handler 가 기록한
+    체크 상태만으로 누락 항목을 계산합니다.
+
+    로컬 봇(--commands-only) 전용. 로컬 봇이 체크박스 인터랙션을 처리하면서
+    checklist_state.json 에 checked 리스트를 갱신하므로 데이터가 정확합니다.
+
+    Returns
+    -------
+    list[dict]:  get_missed_items 와 동일 형식
+        [{"label": "[일일] 03/10(월)", "items": [...]}, ...]
+        누락 없으면 빈 리스트.
+    """
+    import interaction_handler as ih
+
+    all_state = ih.get_all()
+    if not all_state:
+        logger.info("[missed-local] checklist_state.json 비어있음 → 건너뜀")
+        return []
+
+    prev_dates = set(_prev_weekday_dates(max_days=3))
+    missed_groups: list = []
+
+    for key, entry in all_state.items():
+        # sent_at 형식: "2026-03-10 10:00"
+        sent_at   = entry.get("sent_at", "")
+        sent_date = sent_at[:10] if len(sent_at) >= 10 else ""
+
+        if sent_date not in prev_dates:
+            continue
+
+        # daily 체크리스트만 대상
+        if entry.get("schedule_type") != "daily":
+            continue
+
+        items   = entry.get("items", [])
+        checked = set(entry.get("checked", []))
+
+        flat_items = extract_flat_items(items)
+        if not flat_items:
+            continue
+
+        unchecked = [
+            item for item in flat_items
+            if item["value"] not in checked
+        ]
+        if not unchecked:
+            logger.info(f"[missed-local] {sent_date} 누락 없음 ✅")
+            continue
+
+        # 라벨 생성
+        try:
+            sent_dt = datetime.strptime(sent_date, "%Y-%m-%d")
+            day_kr  = _DAY_KR[sent_dt.weekday()]
+            label   = f"[일일] {sent_dt.strftime('%m/%d')}({day_kr})"
+        except ValueError:
+            label = f"[일일] {sent_date}"
+
+        remapped = [
+            {
+                "value":    f"missed_local_{item['value']}",
+                "text":     item["text"],
+                "mentions": item.get("mentions", []),
+            }
+            for item in unchecked
+        ]
+
+        logger.info(
+            f"[missed-local] {sent_date} 누락 {len(remapped)}개: "
+            f"{[r['value'] for r in remapped]}"
+        )
+        missed_groups.append({"label": label, "items": remapped})
+
+    return missed_groups

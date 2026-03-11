@@ -1,0 +1,25 @@
+{
+  "version": "1.0",
+  "description": "질문 키워드 → Wiki 페이지 제목 직접 매핑.\nsearch_with_context() Stage 0으로 적용되어 기존 4단계 검색보다 먼저 실행됩니다.\nhot reload 지원 — 봇 재시작 없이 파일 수정 즉시 반영.",
+  "rules": [
+    {
+      "id": "wkr-001",
+      "keywords": ["핫픽스", "핫픽", "hotfix", "hot fix"],
+      "game_page_map": {
+        "에픽세븐": "2026_Hot Fix",
+        "카제나": "CZ | Hotfix 이슈"
+      },
+      "description": "게임별 핫픽스 페이지 직접 매핑",
+      "enabled": true
+    }
+  ],
+  "how_to_add_rule": [
+    "1. rules 배열에 새 항목 추가",
+    "2. id: 고유 ID (wkr-NNN)",
+    "3. keywords: 질문에 포함되면 매칭되는 키워드 목록 (소문자 비교)",
+    "4. game_page_map: 게임 canonical명 → Wiki 페이지 제목 매핑",
+    "5. 게임명이 감지되지 않거나 game_page_map에 없는 게임이면 규칙 스킵",
+    "6. enabled: false로 비활성화 가능",
+    "7. 봇 재시작 없이 다음 /wiki 호출 시 자동 반영 (hot reload)"
+  ]
+}

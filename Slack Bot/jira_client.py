@@ -27,6 +27,7 @@ import logging
 import time
 
 from mcp_session import McpSession
+from game_aliases import resolve_game, detect_game_in_text
 
 logger = logging.getLogger(__name__)
 
@@ -202,54 +203,184 @@ def _extract_keywords(text: str) -> list:
     return keywords if keywords else words[:3]
 
 
-def question_to_jql(question: str) -> str:
+def _inject_before_order(jql: str, clause: str) -> str:
+    """ORDER BY 앞에 AND 절을 삽입합니다.
+
+    예: _inject_before_order(
+        'text ~ "foo" ORDER BY updated DESC',
+        'AND priority IN (Critical)'
+    ) → 'text ~ "foo" AND priority IN (Critical) ORDER BY updated DESC'
+    """
+    upper = jql.upper()
+    if " ORDER BY " in upper:
+        idx = upper.index(" ORDER BY ")
+        return f"{jql[:idx]} {clause}{jql[idx:]}"
+    return f"{jql} {clause}"
+
+
+def question_to_jql(question: str, project_key: str = "") -> str:
     """자연어 질문에서 검색 키워드를 추출하여 JQL로 변환합니다.
 
     '/jira 카제나 \\ 접속 불가 이슈 알려줘' 같은 파이프 질문에서
     핵심 키워드만 추출 → text ~ "키워드" (전체 텍스트 필드 검색).
 
     to_jql()과 달리 summary가 아닌 text 필드를 사용하여 더 넓은 범위 검색.
+
+    Parameters
+    ----------
+    question    : 자연어 질문
+    project_key : Jira 프로젝트 키 (있으면 project = KEY 조건 추가)
     """
     if is_jql(question):
         return question
+
+    # ── 키워드 규칙 매칭 ─────────────────────────────────────────
+    from keyword_rules import match_jira_keyword_rule
+    kw_rule = match_jira_keyword_rule(question, project_key=project_key)
+
+    # ── 상태 의도 감지 → 상태 필터 JQL 생성 ──────────────────────
+    intent_jql = _detect_status_intent(question)
+    if intent_jql:
+        if project_key:
+            jql = f"project = {project_key} AND {intent_jql}"
+        else:
+            jql = intent_jql
+        # 규칙 조건 합성
+        if kw_rule:
+            jql = _inject_before_order(jql, kw_rule["jql_append"])
+        return jql
+
     keywords = _extract_keywords(question)
     keyword_text = " ".join(keywords)
     safe = keyword_text.replace('"', '\\"')
-    return f'text ~ "{safe}" ORDER BY updated DESC'
+    jql = f'text ~ "{safe}" ORDER BY updated DESC'
+    if project_key:
+        if " ORDER BY " in jql.upper():
+            idx = jql.upper().index(" ORDER BY ")
+            jql = f"project = {project_key} AND {jql[:idx]}{jql[idx:]}"
+        else:
+            jql = f"project = {project_key} AND {jql}"
+    # 규칙 조건 합성
+    if kw_rule:
+        jql = _inject_before_order(jql, kw_rule["jql_append"])
+    return jql
 
 
-def question_to_jql_variants(question: str) -> list:
+# ── 상태 의도 감지 패턴 ──────────────────────────────────────────
+# "액티브 이슈 몇개", "열린 이슈", "활성 이슈", "미완료 이슈" 등
+
+_ACTIVE_PATTERNS = re.compile(
+    r'(액티브|활성|열린|오픈|진행\s*중|미완료|미해결|open|active|in\s*progress)',
+    re.IGNORECASE,
+)
+
+_CLOSED_PATTERNS = re.compile(
+    r'(완료|종료|닫힌|해결|closed|done|resolved)',
+    re.IGNORECASE,
+)
+
+# "이슈 수", "이슈 몇개", "이슈가 몇개", "이슈 개수", "이슈 카운트" 등
+_COUNT_PATTERNS = re.compile(
+    r'(몇\s*개|몇\s*건|개수|수|총|전체|카운트|count|total|how\s*many)',
+    re.IGNORECASE,
+)
+
+# 완료/종료 상태값 (Jira 표준 + 국문)
+_DONE_STATUSES = '("Closed", "Done", "완료", "종료", "해결됨", "닫힘")'
+
+
+def _detect_status_intent(question: str) -> "str | None":
+    """자연어 질문에서 상태 기반 의도를 감지하여 JQL 조건을 반환.
+
+    예:
+      "현재 액티브 이슈가 몇개야?" → status NOT IN ("Closed", ...) ORDER BY updated DESC
+      "완료된 이슈 알려줘"         → status IN ("Closed", ...) ORDER BY updated DESC
+
+    Returns
+    -------
+    str | None : JQL 조건문 (project 조건 제외), 의도 미감지 시 None
+    """
+    # 활성(액티브) 이슈 의도
+    if _ACTIVE_PATTERNS.search(question):
+        return f"status NOT IN {_DONE_STATUSES} ORDER BY updated DESC"
+
+    # 완료/종료 이슈 의도
+    if _CLOSED_PATTERNS.search(question):
+        return f"status IN {_DONE_STATUSES} ORDER BY updated DESC"
+
+    return None
+
+
+def question_to_jql_variants(question: str, project_key: str = "") -> list:
     """자연어 질문에서 점진적으로 넓어지는 JQL 변환 목록 반환.
 
     첫 번째가 가장 구체적이고, 뒤로 갈수록 넓은 범위 검색.
     첫 번째 JQL로 0건이면 다음 것을 시도하는 broadening 패턴에 사용.
 
+    상태 의도가 감지되면 해당 JQL을 단일 항목으로 반환 (broadening 불필요).
+
     예: "접속 불가 현상 관련 이슈" →
       1. text ~ "접속 불가 현상" (전체 키워드)
       2. text ~ "접속 불가"      (앞 2개 키워드)
       3. text ~ "접속"           (첫 키워드만)
+
+    예: "현재 액티브 이슈가 몇개야?" →
+      1. status NOT IN ("Closed", ...) ORDER BY updated DESC
     """
     if is_jql(question):
         return [question]
 
+    # ── 키워드 규칙 매칭 ─────────────────────────────────────────
+    from keyword_rules import match_jira_keyword_rule
+    kw_rule = match_jira_keyword_rule(question, project_key=project_key)
+
+    # 상태 의도 감지 시 단일 JQL 반환
+    intent_jql = _detect_status_intent(question)
+    if intent_jql:
+        if project_key:
+            jql = f"project = {project_key} AND {intent_jql}"
+        else:
+            jql = intent_jql
+        if kw_rule:
+            jql = _inject_before_order(jql, kw_rule["jql_append"])
+        return [jql]
+
     keywords = _extract_keywords(question)
     if not keywords:
-        return [f'text ~ "{question}" ORDER BY updated DESC']
+        jql = f'text ~ "{question}" ORDER BY updated DESC'
+        if project_key:
+            jql = f'project = {project_key} AND {jql}'
+        if kw_rule:
+            jql = _inject_before_order(jql, kw_rule["jql_append"])
+        return [jql]
+
+    def _with_project(j: str) -> str:
+        if not project_key:
+            return j
+        if " ORDER BY " in j.upper():
+            idx = j.upper().index(" ORDER BY ")
+            return f"project = {project_key} AND {j[:idx]}{j[idx:]}"
+        return f"project = {project_key} AND {j}"
+
+    def _with_rule(j: str) -> str:
+        if kw_rule:
+            return _inject_before_order(j, kw_rule["jql_append"])
+        return j
 
     variants = []
     # 전체 키워드
     full = " ".join(keywords).replace('"', '\\"')
-    variants.append(f'text ~ "{full}" ORDER BY updated DESC')
+    variants.append(_with_rule(_with_project(f'text ~ "{full}" ORDER BY updated DESC')))
 
     # 키워드가 2개 이상이면 앞 2개만
     if len(keywords) >= 3:
         partial = " ".join(keywords[:2]).replace('"', '\\"')
-        variants.append(f'text ~ "{partial}" ORDER BY updated DESC')
+        variants.append(_with_rule(_with_project(f'text ~ "{partial}" ORDER BY updated DESC')))
 
     # 첫 키워드만 (2자 이상일 때)
     if len(keywords) >= 2 and len(keywords[0]) >= 2:
         single = keywords[0].replace('"', '\\"')
-        variants.append(f'text ~ "{single}" ORDER BY updated DESC')
+        variants.append(_with_rule(_with_project(f'text ~ "{single}" ORDER BY updated DESC')))
 
     return variants
 

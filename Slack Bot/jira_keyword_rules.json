@@ -1,0 +1,29 @@
+{
+  "version": "1.0",
+  "description": "질문 키워드 → JQL 조건 매핑.\nquestion_to_jql() 내에서 기존 상태 의도 감지와 합성 적용됩니다.\nhot reload 지원 — 봇 재시작 없이 파일 수정 즉시 반영.",
+  "rules": [
+    {
+      "id": "jkr-001",
+      "keywords": ["긴급", "크리티컬", "critical", "blocker"],
+      "jql_append": "AND priority IN (Critical, Blocker, Highest)",
+      "description": "긴급/크리티컬 → 우선순위 필터 추가",
+      "enabled": true
+    },
+    {
+      "id": "jkr-002",
+      "keywords": ["이번주", "this week", "금주"],
+      "jql_append": "AND created >= startOfWeek()",
+      "description": "이번주/금주 → 금주 생성 이슈 필터",
+      "enabled": true
+    }
+  ],
+  "how_to_add_rule": [
+    "1. rules 배열에 새 항목 추가",
+    "2. id: 고유 ID (jkr-NNN)",
+    "3. keywords: 질문에 포함되면 매칭되는 키워드 목록 (소문자 비교)",
+    "4. jql_append: 기존 JQL에 AND 조건으로 추가될 구문",
+    "5. project_key: (선택) 특정 프로젝트에서만 적용. 생략 시 전체 프로젝트 적용",
+    "6. enabled: false로 비활성화 가능",
+    "7. 봇 재시작 없이 다음 /jira 호출 시 자동 반영 (hot reload)"
+  ]
+}

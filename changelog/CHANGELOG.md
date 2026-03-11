@@ -18,7 +18,111 @@
 
 ---
 
-## [1.4.1] - 2026-03-10 <- 현재
+## [1.5.3] - 2026-03-11 <- 현재
+
+### 추가
+- **통합 응답 포맷 (`response_formatter.py`)**
+  - `/wiki`, `/gdi`, `/jira` AI 답변을 일관된 3단 구조로 통일
+  - 📋 질문 → 💬 답변 → 📎 근거 → 🔗 출처 (근거 없으면 자동 생략)
+  - Claude 프롬프트에 `[답변]`/`[근거]` 분리 지시문 추가 (파싱 실패 시 안전 폴백)
+  - Wiki: 원본 페이지 링크 포함, Jira: 이슈 URL 포함, GDI: 텍스트 출처만
+
+### 수정
+- **Wiki HTML 파서 인라인 태그 경계 공백 버그** (`wiki_client.py`)
+  - `_ConfluenceHTMLExtractor.handle_endtag`에서 인라인 태그 종료 시 공백 삽입
+  - 기존 regex 파서의 `re.sub(r'<[^>]+>', ' ', text)` 동작과 동일하게 보정
+  - 수정 전: new_better 33.4%, old_better 53.3% → 수정 후: new_better 69.7%, old_better 15.8%
+  - regression 10건 분석: 순수 텍스트 100% 동일(9/10), 나머지 1건은 200K 절단 아티팩트
+- **v1.5.2a 메시지 만료 핫픽스**
+  - `replace_original`이 동작하지 않던 버그 수정
+  - 원인: `ack()` 에 body가 없어 "original" 메시지 부재
+  - 수정: `ack(text="⏳ 처리 중...")` → 교체 가능한 원본 생성
+  - ExpiringResponder: 항상 `replace_original=True` (단일 메시지 패턴 보장)
+
+---
+
+## [1.5.2] - 2026-03-10
+
+### 추가
+- **답변 메시지 자동 만료 (`message_expiry.py`)**
+  - `/wiki`, `/gdi`, `/jira` 답변이 10분 후 자동으로 만료 텍스트로 교체
+  - 보안 목적: 퇴근 후/외부에서 민감 답변 무기한 열람 방지
+  - `ExpiringResponder` 래퍼: 단일 메시지 패턴 (progress → 답변이 같은 메시지 내에서 갱신)
+  - `response_url` + `replace_original`로 구현 (추가 Slack 권한 불필요)
+  - 환경변수로 즉시 비활성화 가능: `MESSAGE_EXPIRY_ENABLED=false`
+  - 비적용 대상: `/claim`, `/wiki-sync`, 스케줄러 알림
+
+---
+
+## [1.5.1] - 2026-03-10
+
+### 추가
+- **규칙 기반 키워드→페이지/쿼리 매핑 (`keyword_rules.py`)**
+  - Wiki/Jira/GDI 각각 별도 JSON 규칙 파일로 키워드 매핑 관리
+  - `wiki_keyword_rules.json`: 게임별 핫픽스 등 키워드 → Wiki 페이지 직접 매핑
+  - `jira_keyword_rules.json`: 긴급/이번주 등 키워드 → JQL 조건 자동 추가
+  - `gdi_keyword_rules.json`: 밸런스 등 키워드 → 파일명 검색으로 전환
+  - Hot reload 지원 (mtime 비교, 봇 재시작 없이 규칙 변경 즉시 반영)
+  - 공용 로더 + 3개 매칭 함수: `match_wiki_keyword_rule()`, `match_jira_keyword_rule()`, `match_gdi_keyword_rule()`
+
+### 개선
+- **Wiki 검색 Stage 0 추가**: 키워드 규칙 매칭을 기존 4단계 검색 앞에 삽입
+  - 규칙 매칭 성공 시 페이지 직접 조회, 실패 시 기존 검색 로직 폴스루
+- **Jira JQL 규칙 합성**: `question_to_jql()` + `question_to_jql_variants()`에 규칙 매칭 통합
+  - `_inject_before_order()` 헬퍼: ORDER BY 앞에 AND 조건 삽입
+  - 상태 의도 + 규칙 조건 동시 적용 가능
+- **GDI 2파트 파이프 검색 규칙 적용**: 키워드에 따라 `unified_search` → `search_by_filename` 자동 전환
+
+---
+
+## [1.5.0] - 2026-03-10
+
+### 추가
+- **`/claim` 슬래시 커맨드**: 개선/건의/이슈/기타 사용자 제보 접수 시스템
+  - `claim_handler.py` 신규 모듈: 카테고리 파싱, JSON 저장, 일별 조회, 통계
+  - 커맨드: `/claim [카테고리] [내용]`, `/claim list`, `/claim stats`
+  - 저장소: `data/claims.json` (날짜별 분류, CLM-YYYYMMDD-NNN ID 체계)
+- **읽기 전용 안전 가드 (`safety_guard.py`)**: 봇의 원본 수정/삭제 요청 차단
+  - 2계층 방어: 사전 필터 (정규식) + Claude 프롬프트 (READ_ONLY_INSTRUCTION)
+  - 한국어/영어 쓰기 의도 패턴 감지 (삭제해, 변경해, delete, modify 등)
+  - 과거형/이력 조회 예외 처리 (삭제된, 변경 이력 등은 읽기로 판정)
+
+### 수정
+- **Wiki ancestor CQL 버그 수정**: 텍스트 기반 → 페이지 ID 기반으로 전환
+  - `ancestor = "에픽세븐"` (파싱 에러) → `ancestor = 58043932` (정상)
+  - `game_aliases.py`에 `wiki_ancestor_id` 필드 추가
+  - 에픽세븐(58043932), 카제나(650589593) ID 매핑
+- **Jira 활성 이슈 정의 수정**: `_DONE_STATUSES`에 "닫힘" 추가
+  - 사용자 정의: 활성 이슈 = 닫힘 상태를 제외한 모든 이슈
+
+---
+
+## [1.4.2] - 2026-03-10
+
+### 추가
+- **게임명 별칭 매핑 모듈 (`game_aliases.py`)**: Wiki/Jira 공용 게임명 정규화
+  - 에픽세븐: 에픽, Epic, Epicseven, EP7 등 8개 별칭
+  - 카제나: 카오스제로, ChaosZero, CZ, GCZ 등 11개 별칭
+  - 리젝, 로드나인, 로드나인 아시아 포함
+  - `resolve_game()`, `detect_game_in_text()`, `get_jira_project_key()`, `get_wiki_path_keywords()`
+
+### 개선
+- **Wiki 게임명 필터링 검색 (`search_with_context`)**: 질문에서 게임명을 감지하여 ancestor CQL 조건 추가
+  - 예: `/wiki HotFix 내역 \ 에픽세븐 2026년 핫픽스` → `ancestor="에픽세븐" AND title~"2026" AND title~"Hot"`
+  - 4단계 검색: 게임+연도 → 게임만 → 연도만 → 일반 검색
+  - `_try_smart_cql()` 내부 헬퍼로 중복 제거
+- **Jira 상태 의도 감지**: 자연어 질문에서 액티브/완료 이슈 의도 자동 인식
+  - "액티브 이슈 몇개야?" → `status NOT IN ("Closed", "Done", "Resolved", ...)`
+  - "완료된 이슈" → `status IN ("Closed", "Done", "Resolved", ...)`
+  - `_detect_status_intent()` 함수 추가, `question_to_jql()`·`question_to_jql_variants()`에 통합
+- **Jira project_key 자동 주입**: `question_to_jql_variants(project_key=)` 파라미터 추가
+  - slack_bot.py 핸들러에서 수동 JQL prefix 조합 로직 제거 → 함수 내부에서 처리
+- **Jira 프로젝트 매핑 통합**: `slack_bot.py`의 하드코딩 매핑 → `game_aliases.py` 기반으로 교체
+  - `_resolve_jira_project()` 내부에서 `get_jira_project_key()` 호출
+
+---
+
+## [1.4.1] - 2026-03-10
 
 ### 개선
 - **Wiki 질문 맥락 인식 검색 (`search_with_context`)**: 질문에서 연도·키워드를 추출하여 맥락에 맞는 페이지 우선 검색

@@ -539,6 +539,50 @@ class SlackSender:
             return False
 
     # ──────────────────────────────────────────────────────────
+    # 전일 누락 항목 별도 메시지 전송 (로컬 봇 전용)
+    # ──────────────────────────────────────────────────────────
+
+    def send_missed_items_standalone(
+        self, channel: str, missed_items: list
+    ) -> str | None:
+        """
+        전일 누락 항목을 별도 메시지로 채널에 전송합니다.
+
+        로컬 봇이 checklist_state.json 기반으로 계산한 누락 항목을
+        일일 체크리스트와 분리된 독립 메시지로 보냅니다.
+
+        Parameters
+        ----------
+        channel      : 대상 채널 ID
+        missed_items : missed_tracker.get_missed_items_from_local_state() 반환값
+            [{"label": "[일일] 03/10(월)", "items": [{"text":..., "mentions":...}]}, ...]
+
+        Returns
+        -------
+        str | None : 전송된 메시지 ts (실패 시 None)
+        """
+        blocks = self._build_missed_section_blocks(missed_items)
+
+        # _build_missed_section_blocks 의 첫 블록은 divider → 별도 메시지에서는 제거
+        if blocks and blocks[0].get("block_id") == "missed_divider":
+            blocks = blocks[1:]
+
+        total = sum(len(g["items"]) for g in missed_items)
+
+        try:
+            result = self.client.chat_postMessage(
+                channel = channel,
+                text    = f"⚠️ 전일 누락 항목 ({total}건)",
+                blocks  = blocks,
+            )
+            ts = result.get("ts")
+            logger.info(f"⚠️ 전일 누락 메시지 전송 완료 | ch={channel} ts={ts} 누락={total}건")
+            return ts
+        except SlackApiError as e:
+            logger.error(f"❌ 전일 누락 메시지 전송 실패: {e.response['error']}")
+            return None
+
+    # ──────────────────────────────────────────────────────────
     # 미션 진행 현황 리마인더
     # ──────────────────────────────────────────────────────────
 

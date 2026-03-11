@@ -1,0 +1,27 @@
+{
+  "version": "1.0",
+  "description": "질문 키워드 → GDI 검색 파라미터 매핑.\nunified_search() 호출 전에 적용되어 검색 방식을 전환합니다.\nhot reload 지원 — 봇 재시작 없이 파일 수정 즉시 반영.",
+  "rules": [
+    {
+      "id": "gkr-001",
+      "keywords": ["밸런스", "밸패", "balance"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "balance",
+        "game_name": null
+      },
+      "description": "밸런스 키워드 → 파일명 검색으로 전환",
+      "enabled": true
+    }
+  ],
+  "how_to_add_rule": [
+    "1. rules 배열에 새 항목 추가",
+    "2. id: 고유 ID (gkr-NNN)",
+    "3. keywords: 질문에 포함되면 매칭되는 키워드 목록 (소문자 비교)",
+    "4. search_override.type: 'unified_search' 또는 'search_by_filename'",
+    "5. search_override.filename_pattern: 파일명 검색 시 사용할 패턴",
+    "6. search_override.game_name: 게임 필터 (null이면 전체)",
+    "7. enabled: false로 비활성화 가능",
+    "8. 봇 재시작 없이 다음 /gdi 호출 시 자동 반영 (hot reload)"
+  ]
+}

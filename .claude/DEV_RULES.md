@@ -1,5 +1,5 @@
 # Slack Bot 개발 규칙
-> **Version**: 1.2.0
+> **Version**: 1.5.0
 > **Last Updated**: 2026-03-10
 > **Author**: Claude (AI Assistant)
 
@@ -31,6 +31,9 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트 (Git 레포)
 │   ├── wiki_client.py             ← Confluence Wiki MCP 클라이언트
 │   ├── gdi_client.py              ← GDI(Game Doc Insight) MCP 클라이언트
 │   ├── jira_client.py             ← Jira MCP 클라이언트
+│   ├── game_aliases.py            ← 게임명 별칭 매핑 (Wiki/Jira 공용)
+│   ├── safety_guard.py            ← 읽기 전용 안전 가드 (쓰기 의도 차단)
+│   ├── claim_handler.py           ← /claim 슬래시 커맨드 비즈니스 로직
 │   ├── missed_tracker.py          ← 전일 미체크 항목 추적
 │   ├── schedule_monitor.py        ← 스케줄 모니터링
 │   ├── config.json                ← 스케줄 정의 + 사용자 매핑
@@ -82,7 +85,7 @@ D:\Vibe Dev\QA Ops\mcp-cache-layer\ ← MCP 캐시 레이어 (별도 레포)
   - MAJOR: 아키텍처 변경, 호환성 깨짐
   - MINOR: 새 기능 추가
   - PATCH: 버그 수정, 작은 개선
-- 현재 버전: **v1.4.1** (changelog/CHANGELOG.md 참조)
+- 현재 버전: **v1.4.2** (changelog/CHANGELOG.md 참조)
 - 버전 변경 시 CHANGELOG.md 반드시 업데이트
 
 ## 4. 배포 규칙

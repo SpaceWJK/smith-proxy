@@ -27,11 +27,16 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 import interaction_handler as ih
+import message_expiry
+from message_expiry import ExpiringResponder
+from response_formatter import format_ai_response, ANSWER_FORMAT_INSTRUCTION
 from slack_sender import SlackSender
 from scheduler    import NotificationScheduler
 import wiki_client as wc
 import gdi_client as gc
 import jira_client as jc
+import claim_handler as ch
+from safety_guard import detect_write_intent, format_block_message, READ_ONLY_INSTRUCTION
 
 # ── 로그 설정 ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -267,7 +272,9 @@ def _wiki_ask_claude(page_title: str, page_text: str, page_url: str, question: s
         f"[답변 지침]\n"
         f"1. 질문에 특정 연도·기간이 명시된 경우, 해당 범위의 데이터만 사용하세요. 다른 연도 데이터와 혼용하지 마세요.\n"
         f"2. 페이지에 합계가 명시되어 있으면 그 값을 인용하고, 없으면 해당 범위의 항목을 직접 세어 답하세요. '[검색 관련 섹션]'이 있으면 우선 참고하세요.\n"
-        f"3. 페이지에 관련 내용이 없으면 '해당 내용을 페이지에서 찾을 수 없습니다'라고 답하세요.\n\n"
+        f"3. 페이지에 관련 내용이 없으면 '해당 내용을 페이지에서 찾을 수 없습니다'라고 답하세요.\n"
+        f"{READ_ONLY_INSTRUCTION}"
+        f"{ANSWER_FORMAT_INSTRUCTION}\n\n"
         f"질문: {question}"
     )
 
@@ -284,11 +291,12 @@ def _wiki_ask_claude(page_title: str, page_text: str, page_url: str, question: s
         respond(text=f"❌ Claude API 오류\n```\n{e}\n```")
         return
 
-    respond(text=(
-        f"*📄 {page_title}* — AI 답변\n"
-        f"🔗 <{page_url}|원본 페이지>\n\n"
-        f"*Q: {question}*\n\n"
-        f"{answer}"
+    respond(text=format_ai_response(
+        question=question,
+        raw_answer=answer,
+        source_type="wiki",
+        source_label=page_title,
+        source_url=page_url,
     ))
 
 
@@ -384,7 +392,6 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
     t0 = time.time()
 
     # 1단계: 폴더 내 파일 목록 조회 (하위 폴더 포함 — 프리픽스 매칭)
-    respond(text=f"📁 `{folder_path}` 폴더 조회 중...")
     data, err = client.list_files_in_folder(folder_path, page_size=100)
     if err:
         gc.log_gdi_query(user_id=user_id, user_name=user_name,
@@ -407,7 +414,7 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
                     folder_path = alt_path
                     data = alt_data
                     files = alt_data["files"]
-                    respond(text=f"📁 `{folder_path}` 경로로 보정하여 조회했습니다.")
+                    logger.info(f"[gdi] 경로 보정: {folder_path}")
                     break
 
     if not files:
@@ -520,9 +527,6 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
         target_name = target_file.get("file_name", "?")
         target_path = target_file.get("file_path", "")
 
-        path_info = f"\n📁 `{target_path}`" if target_path else ""
-        respond(text=f"📄 `{target_name}` 파일 내용 가져오는 중...{path_info}")
-
         context = _fetch_file_content(client, target_name)
 
         if not context:
@@ -534,7 +538,6 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
             return
 
         source_label = f"{folder_path}{target_name}"
-        respond(text=f"🤖 *{target_name}* — Claude 답변 생성 중...")
         _gdi_ask_claude_content(context, source_label, question, respond)
         gc.log_gdi_query(user_id=user_id, user_name=user_name,
                          action="folder_ai", query=raw_text,
@@ -542,7 +545,6 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
                          elapsed_ms=int((time.time() - t0) * 1000))
     else:
         # ── 5단계: 목록/종류 질문 → 파일 리스트를 Claude에게 전달 ──
-        respond(text=f"📋 `{file_keyword}` 매칭 파일 {len(matched)}건 — Claude 답변 생성 중...")
 
         file_list_lines = []
         for i, f in enumerate(matched[:30], 1):
@@ -644,8 +646,8 @@ def _gdi_folder_list(client, path: str, respond):
 
 
 def _gdi_claude_call(prompt: str, source_label: str, question: str,
-                     respond):
-    """Claude API 공통 호출 + 응답 전송."""
+                     respond, source_url: str = ""):
+    """Claude API 공통 호출 + 통합 포맷 응답 전송."""
     import anthropic
 
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -669,10 +671,12 @@ def _gdi_claude_call(prompt: str, source_label: str, question: str,
         respond(text=f"❌ Claude API 오류\n```\n{e}\n```")
         return
 
-    respond(text=(
-        f"*📦 {source_label}* — AI 답변\n\n"
-        f"*Q: {question}*\n\n"
-        f"{answer}"
+    respond(text=format_ai_response(
+        question=question,
+        raw_answer=answer,
+        source_type="gdi",
+        source_label=source_label,
+        source_url=source_url,
     ))
 
 
@@ -688,7 +692,9 @@ def _gdi_ask_claude(context_text: str, source_label: str,
         f"다음은 GDI 문서 저장소에서 검색한 '{source_label}' 관련 내용입니다:\n\n"
         f"{content}{trunc_note}\n\n"
         f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n"
-        f"질문에만 집중하세요. 질문에서 요청하지 않은 정보(통계, 메타데이터 등)는 포함하지 마세요.\n\n"
+        f"질문에만 집중하세요. 질문에서 요청하지 않은 정보(통계, 메타데이터 등)는 포함하지 마세요.\n"
+        f"{READ_ONLY_INSTRUCTION}"
+        f"{ANSWER_FORMAT_INSTRUCTION}\n\n"
         f"질문: {question}"
     )
     _gdi_claude_call(prompt, source_label, question, respond)
@@ -710,7 +716,9 @@ def _gdi_ask_claude_content(context_text: str, source_label: str,
         f"- 질문이 요약이면 핵심 내용을 간결하게 요약하세요.\n"
         f"- 질문이 분석이면 주요 포인트를 정리하세요.\n"
         f"- 파일 내용에만 집중하세요. 검색 통계, 파일 개수, 형식 정보 등 메타데이터는 포함하지 마세요.\n"
-        f"- 문서에 해당 내용이 없으면 '해당 내용을 문서에서 찾을 수 없습니다'라고 답하세요.\n\n"
+        f"- 문서에 해당 내용이 없으면 '해당 내용을 문서에서 찾을 수 없습니다'라고 답하세요.\n"
+        f"{READ_ONLY_INSTRUCTION}"
+        f"{ANSWER_FORMAT_INSTRUCTION}\n\n"
         f"질문: {question}"
     )
     _gdi_claude_call(prompt, source_label, question, respond)
@@ -727,7 +735,8 @@ def _gdi_ask_claude_list(file_list_text: str, source_label: str,
         f"- 각 파일의 이름과 경로를 중심으로 깔끔하게 정리해서 답변하세요.\n"
         f"- 비슷한 파일끼리 그룹핑하거나 카테고리로 분류하면 좋습니다.\n"
         f"- 불필요한 분석, 통계, 추측은 하지 마세요.\n"
-        f"- 질문에서 요청한 것만 답변하세요.\n\n"
+        f"- 질문에서 요청한 것만 답변하세요.\n"
+        f"{ANSWER_FORMAT_INSTRUCTION}\n\n"
         f"질문: {question}"
     )
     _gdi_claude_call(prompt, source_label, question, respond)
@@ -828,8 +837,8 @@ def _jira_projects(client, user_id: str, user_name: str, respond):
 
 
 def _jira_claude_call(prompt: str, source_label: str, question: str,
-                      respond):
-    """Jira 컨텍스트 기반 Claude API 호출 + 응답 전송."""
+                      respond, source_url: str = ""):
+    """Jira 컨텍스트 기반 Claude API 호출 + 통합 포맷 응답 전송."""
     import anthropic
 
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -853,15 +862,17 @@ def _jira_claude_call(prompt: str, source_label: str, question: str,
         respond(text=f":x: Claude API 오류\n```\n{e}\n```")
         return
 
-    respond(text=(
-        f"*:ticket: {source_label}* — AI 답변\n\n"
-        f"*Q: {question}*\n\n"
-        f"{answer}"
+    respond(text=format_ai_response(
+        question=question,
+        raw_answer=answer,
+        source_type="jira",
+        source_label=source_label,
+        source_url=source_url,
     ))
 
 
 def _jira_ask_claude(context_text: str, source_label: str,
-                     question: str, respond):
+                     question: str, respond, source_url: str = ""):
     """Jira 이슈/검색 결과를 컨텍스트로 Claude AI에 질문."""
     MAX_CHARS = 20000
     truncated = len(context_text) > MAX_CHARS
@@ -872,10 +883,13 @@ def _jira_ask_claude(context_text: str, source_label: str,
         f"다음은 Jira에서 조회한 '{source_label}' 관련 이슈 정보입니다:\n\n"
         f"{content}{trunc_note}\n\n"
         f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n"
-        f"질문에만 집중하세요. 질문에서 요청하지 않은 정보(메타데이터, 통계 등)는 포함하지 마세요.\n\n"
+        f"질문에만 집중하세요. 질문에서 요청하지 않은 정보(메타데이터, 통계 등)는 포함하지 마세요.\n"
+        f"{READ_ONLY_INSTRUCTION}"
+        f"{ANSWER_FORMAT_INSTRUCTION}\n\n"
         f"질문: {question}"
     )
-    _jira_claude_call(prompt, source_label, question, respond)
+    _jira_claude_call(prompt, source_label, question, respond,
+                      source_url=source_url)
 
 
 # ── 단일 인스턴스 보장 ────────────────────────────────────────
@@ -1167,17 +1181,22 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         )
 
     @app.command("/wiki")
-    def handle_wiki_command(ack, respond, command):
+    def handle_wiki_command(ack, respond, command, client):
         """
         /wiki help              → 도움말
         /wiki search [검색어]   → 페이지 목록 검색
         /wiki [페이지 제목]     → 페이지 내용 조회
         """
         ack()
+        if message_expiry.MESSAGE_EXPIRY_ENABLED:
+            respond = ExpiringResponder(
+                respond, client, command.get("channel_id", "")
+            )
+            respond.send_initial()
         text      = (command.get("text") or "").strip()
         user_id   = command.get("user_id", "")
         user_name = command.get("user_name", "")
-        client    = wc.ConfluenceWikiClient()
+        wiki_client = wc.ConfluenceWikiClient()
 
         if not text or text.lower() == "help":
             _wiki_help(respond)
@@ -1188,8 +1207,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             query = parts[1].strip() if len(parts) == 2 else ""
             if query:
                 t0 = time.time()
-                respond(text=f"🔍 `{query}` 검색 중...")
-                _wiki_search_pages(client, query, respond)
+                _wiki_search_pages(wiki_client, query, respond)
                 wc.log_wiki_query(
                     user_id=user_id, user_name=user_name,
                     action="search", query=query,
@@ -1206,6 +1224,12 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             page_part = page_part.strip()
             question  = question.strip()
             if page_part and question:
+                # ── 쓰기 의도 차단 ─────────────────────────────────────
+                write_kw = detect_write_intent(question)
+                if write_kw:
+                    respond(text=format_block_message(write_kw))
+                    return
+
                 t0 = time.time()
                 # ── 페이지별 예외처리 규칙 확인 ──────────────────────────────
                 matched_rule = _find_matching_rule(page_part, question)
@@ -1220,8 +1244,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     else:
                         leaf = page_part.strip()
 
-                    respond(text=f"🔍 *{leaf}* — 최신 하위 페이지 조회 중...")
-                    page, err = client.get_latest_descendant(leaf)
+                    page, err = wiki_client.get_latest_descendant(leaf)
 
                     # 하위 페이지가 없으면 원래 페이지 직접 조회로 폴백
                     if err:
@@ -1229,12 +1252,10 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                             f"[wiki][규칙폴백] get_latest_descendant 실패 → "
                             f"페이지 직접 조회 폴백: {err}"
                         )
-                        respond(text=f"⚠️ 하위 페이지 조회 실패, 원래 페이지 조회로 전환 중...")
-                        page, err = _wiki_fetch_page(client, page_part)
+                        page, err = _wiki_fetch_page(wiki_client, page_part)
                 else:
                     # 기본 동작: 질문 맥락 인식 페이지 조회
-                    respond(text=f"🔍 *{page_part}* 페이지 조회 중...")
-                    page, err = _wiki_fetch_page(client, page_part,
+                    page, err = _wiki_fetch_page(wiki_client, page_part,
                                                  question=question)
 
                 if err:
@@ -1246,7 +1267,6 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     )
                     respond(text=f"❌ 페이지 조회 실패\n```\n{err}\n```")
                     return
-                respond(text=f"🤖 *{page['title']}* — Claude 답변 생성 중...")
                 _wiki_ask_claude(page["title"], page["text"], page["url"], question, respond)
                 wc.log_wiki_query(
                     user_id=user_id, user_name=user_name,
@@ -1258,8 +1278,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
         # 나머지는 모두 경로/페이지 제목으로 처리 (내용 전체 표시)
         t0 = time.time()
-        respond(text=f"🔍 *{text}* 페이지 조회 중...")
-        _wiki_get_page(client, text, respond)
+        _wiki_get_page(wiki_client, text, respond)
         wc.log_wiki_query(
             user_id=user_id, user_name=user_name,
             action="get_page", query=text,
@@ -1331,7 +1350,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             ))
 
     @app.command("/gdi")
-    def handle_gdi_command(ack, respond, command):
+    def handle_gdi_command(ack, respond, command, client):
         r"""
         /gdi help                              → 도움말
         /gdi search [검색어]                   → 통합 검색
@@ -1342,10 +1361,15 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         /gdi [폴더명] \ [파일명] \ [질문]      → 폴더+파일 지정 + AI 답변
         """
         ack()
+        if message_expiry.MESSAGE_EXPIRY_ENABLED:
+            respond = ExpiringResponder(
+                respond, client, command.get("channel_id", "")
+            )
+            respond.send_initial()
         text      = (command.get("text") or "").strip()
         user_id   = command.get("user_id", "")
         user_name = command.get("user_name", "")
-        client    = gc.GdiClient()
+        gdi_client = gc.GdiClient()
 
         if not text or text.lower() == "help":
             _gdi_help(respond)
@@ -1358,8 +1382,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             query = parts_cmd[1].strip() if len(parts_cmd) == 2 else ""
             if query:
                 t0 = time.time()
-                respond(text=f"🔍 `{query}` 검색 중...")
-                _gdi_search(client, query, respond)
+                _gdi_search(gdi_client, query, respond)
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
                     action="search", query=query,
@@ -1375,8 +1398,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             filename = parts_cmd[1].strip() if len(parts_cmd) == 2 else ""
             if filename:
                 t0 = time.time()
-                respond(text=f"🔍 `{filename}` 파일 검색 중...")
-                _gdi_file_search(client, filename, respond)
+                _gdi_file_search(gdi_client, filename, respond)
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
                     action="file_search", query=filename,
@@ -1392,8 +1414,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             path = parts_cmd[1].strip() if len(parts_cmd) == 2 else ""
             if path:
                 t0 = time.time()
-                respond(text=f"📁 `{path}` 폴더 조회 중...")
-                _gdi_folder_list(client, path, respond)
+                _gdi_folder_list(gdi_client, path, respond)
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
                     action="folder_list", query=path,
@@ -1406,6 +1427,14 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
         # "\" 구분자 처리
         pipe_parts = [p.strip() for p in text.split("\\")]
+
+        # ── 쓰기 의도 차단 (GDI 파이프 공통) ──────────────────────
+        if len(pipe_parts) >= 2:
+            _gdi_question = pipe_parts[-1]
+            write_kw = detect_write_intent(_gdi_question)
+            if write_kw:
+                respond(text=format_block_message(write_kw))
+                return
 
         # ── 폴더 경로 모드: 첫 파트에 ">" 가 있으면 폴더 경로로 판단 ──
         if len(pipe_parts) >= 2 and _has_breadcrumb(pipe_parts[0]):
@@ -1422,7 +1451,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 question     = pipe_parts[1]
 
             if folder_path and question:
-                _gdi_folder_ai(client, folder_path, file_keyword,
+                _gdi_folder_ai(gdi_client, folder_path, file_keyword,
                                question, respond, user_id, user_name, text)
                 return
 
@@ -1434,9 +1463,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
             if search_kw and file_name and question:
                 t0 = time.time()
-                respond(text=f"🔍 `{search_kw}` 에서 `{file_name}` 파일 검색 중...")
-
-                data, err = client.search_by_filename(file_name)
+                data, err = gdi_client.search_by_filename(file_name)
                 if err:
                     gc.log_gdi_query(
                         user_id=user_id, user_name=user_name,
@@ -1449,8 +1476,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 context = gc.get_file_content_text(data)
 
                 if not context:
-                    respond(text=f"⚠️ 파일 내용 없음, `{search_kw} {file_name}` 통합 검색으로 전환...")
-                    search_data, serr = client.unified_search(
+                    logger.info(f"[gdi] 파일 내용 없음, 통합 검색 전환: {search_kw} {file_name}")
+                    search_data, serr = gdi_client.unified_search(
                         f"{search_kw} {file_name}"
                     )
                     if serr:
@@ -1474,7 +1501,6 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     return
 
                 source_label = f"{search_kw}/{file_name}"
-                respond(text=f"🤖 *{source_label}* — Claude 답변 생성 중...")
                 _gdi_ask_claude(context, source_label, question, respond)
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
@@ -1492,9 +1518,16 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
             if search_query and question:
                 t0 = time.time()
-                respond(text=f"🔍 `{search_query}` 검색 중...")
-
-                data, err = client.unified_search(search_query)
+                # ── GDI 키워드 규칙 매칭 ─────────────────────
+                from keyword_rules import match_gdi_keyword_rule
+                gdi_rule = match_gdi_keyword_rule(search_query)
+                if gdi_rule and gdi_rule.get("type") == "search_by_filename":
+                    data, err, _cs = gdi_client.search_by_filename(
+                        gdi_rule["filename_pattern"],
+                        game_name=gdi_rule.get("game_name"),
+                    )
+                else:
+                    data, err = gdi_client.unified_search(search_query)
                 if err:
                     gc.log_gdi_query(
                         user_id=user_id, user_name=user_name,
@@ -1515,7 +1548,6 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     respond(text=f"ℹ️ `{search_query}` 관련 문서를 찾을 수 없습니다.")
                     return
 
-                respond(text=f"🤖 *{search_query}* — Claude 답변 생성 중...")
                 _gdi_ask_claude(context, search_query, question, respond)
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
@@ -1527,8 +1559,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
         # 나머지: 통합 검색
         t0 = time.time()
-        respond(text=f"🔍 `{text}` 검색 중...")
-        _gdi_search(client, text, respond)
+        _gdi_search(gdi_client, text, respond)
         gc.log_gdi_query(
             user_id=user_id, user_name=user_name,
             action="search", query=text,
@@ -1538,28 +1569,27 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
     # ── /jira 커맨드 ─────────────────────────────────────────────
 
-    _JIRA_PROJECT_NAMES = {
-        "리젝": "PRH",
-        "에픽세븐": "EP7",
-        "에픽 세븐": "EP7",
-        "카제나": "GCZ",
-        "qa팀": "SMQA",
-        "로드나인": "LDN",
-        "로드나인아시아": "LNA",
-        "로드나인 아시아": "LNA",
-    }
+    # game_aliases.py 에서 게임명→프로젝트 키 매핑 (qa팀은 게임 아닌 별도 추가)
+    from game_aliases import get_jira_project_key as _ga_jira_key
+    _JIRA_EXTRA_NAMES = {"qa팀": "SMQA"}  # 게임 아닌 프로젝트 (game_aliases에 없음)
     _JIRA_VALID_KEYS = {"PRH", "EP7", "GCZ", "SMQA", "LDN", "LNA"}
 
     def _resolve_jira_project(text: str):
         """프로젝트명 또는 키 → 프로젝트 키. 매핑 없으면 None."""
-        if text.lower() in _JIRA_PROJECT_NAMES:
-            return _JIRA_PROJECT_NAMES[text.lower()]
+        # 1. game_aliases 통합 매핑
+        jira_key = _ga_jira_key(text)
+        if jira_key:
+            return jira_key
+        # 2. 비게임 프로젝트 (qa팀 등)
+        if text.lower() in _JIRA_EXTRA_NAMES:
+            return _JIRA_EXTRA_NAMES[text.lower()]
+        # 3. 직접 프로젝트 키 입력
         if text.upper() in _JIRA_VALID_KEYS:
             return text.upper()
         return None
 
     @app.command("/jira")
-    def handle_jira_command(ack, respond, command):
+    def handle_jira_command(ack, respond, command, client):
         r"""
         /jira help              → 도움말
         /jira [검색어]          → 이슈 검색
@@ -1568,10 +1598,15 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
         /jira [이슈키] \ [질문] → 이슈 + AI 답변
         """
         ack()
+        if message_expiry.MESSAGE_EXPIRY_ENABLED:
+            respond = ExpiringResponder(
+                respond, client, command.get("channel_id", "")
+            )
+            respond.send_initial()
         text      = (command.get("text") or "").strip()
         user_id   = command.get("user_id", "")
         user_name = command.get("user_name", "")
-        client    = jc.JiraClient()
+        jira_cli  = jc.JiraClient()
 
         # ── help ──
         if not text or text.lower() == "help":
@@ -1585,8 +1620,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 _jira_help(respond)
                 return
             jql = jc.to_jql(query)
-            respond(text=f":mag: `{query}` 검색 중...")
-            _jira_search(client, jql, user_id, user_name, respond)
+            _jira_search(jira_cli, jql, user_id, user_name, respond)
             return
 
         # ── issue [이슈키] ──
@@ -1595,14 +1629,12 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             if not key:
                 _jira_help(respond)
                 return
-            respond(text=f":ticket: `{key}` 조회 중...")
-            _jira_issue(client, key, user_id, user_name, respond)
+            _jira_issue(jira_cli, key, user_id, user_name, respond)
             return
 
         # ── projects (목록) ──
         if text.lower() == "projects":
-            respond(text=":file_folder: 프로젝트 목록 조회 중...")
-            _jira_projects(client, user_id, user_name, respond)
+            _jira_projects(jira_cli, user_id, user_name, respond)
             return
 
         # ── project [KEY] ──
@@ -1611,8 +1643,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             if not key:
                 _jira_help(respond)
                 return
-            respond(text=f":file_folder: 프로젝트 `{key}` 조회 중...")
-            _jira_project(client, key, user_id, user_name, respond)
+            _jira_project(jira_cli, key, user_id, user_name, respond)
             return
 
         # ── 파이프(\) 구분: [프로젝트명/이슈키/검색어] \ [질문] ──
@@ -1622,24 +1653,25 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 target   = pipe_parts[0]
                 question = pipe_parts[-1]
 
+                # ── 쓰기 의도 차단 ────────────────────────────────
+                write_kw = detect_write_intent(question)
+                if write_kw:
+                    respond(text=format_block_message(write_kw))
+                    return
+
                 if target and question:
                     t0 = time.time()
 
                     # 프로젝트명 or 프로젝트 키 → 스코프 검색
                     project_key = _resolve_jira_project(target)
                     if project_key:
-                        # broadening 패턴: 키워드 축소하며 재시도
-                        jql_variants = jc.question_to_jql_variants(question)
-                        respond(text=f":robot_face: *{target}* 프로젝트 — 검색 + Claude 답변 생성 중...")
-
+                        # broadening 패턴 (상태 의도 감지 포함)
+                        jql_variants = jc.question_to_jql_variants(
+                            question, project_key=project_key
+                        )
                         data, err, used_jql = None, None, ""
-                        for base_jql in jql_variants:
-                            if " ORDER BY " in base_jql.upper():
-                                idx = base_jql.upper().index(" ORDER BY ")
-                                jql = f"project = {project_key} AND {base_jql[:idx]}{base_jql[idx:]}"
-                            else:
-                                jql = f"project = {project_key} AND {base_jql}"
-                            data, err = client.search_issues(jql)
+                        for jql in jql_variants:
+                            data, err = jira_cli.search_issues(jql)
                             used_jql = jql
                             if err:
                                 break  # MCP 오류 시 더 시도해봐야 의미 없음
@@ -1667,8 +1699,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
                     elif jc.looks_like_issue_key(target):
                         # 이슈키 → 이슈 조회 → AI 답변
-                        respond(text=f":robot_face: *{target.upper()}* — Claude 답변 생성 중...")
-                        data, err = client.get_issue(target.upper())
+                        data, err = jira_cli.get_issue(target.upper())
                         elapsed = int((time.time() - t0) * 1000)
                         if err:
                             respond(text=f":x: 이슈 조회 실패: `{target}`\n```\n{err}\n```")
@@ -1680,7 +1711,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                         if not context:
                             respond(text=f":information_source: `{target}` 이슈 내용을 가져올 수 없습니다.")
                             return
-                        _jira_ask_claude(context, target.upper(), question, respond)
+                        _jira_ask_claude(context, target.upper(), question, respond,
+                                         source_url=jc._issue_url(target.upper()))
                         jc.log_jira_query(user_id=user_id, user_name=user_name,
                                           action="ask_claude_issue", query=text,
                                           result=f"이슈: {target.upper()}",
@@ -1688,8 +1720,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     else:
                         # 텍스트 → JQL 검색 → AI 답변
                         jql = jc.to_jql(target)
-                        respond(text=f":robot_face: *{target}* — 검색 + Claude 답변 생성 중...")
-                        data, err = client.search_issues(jql)
+                        data, err = jira_cli.search_issues(jql)
                         elapsed = int((time.time() - t0) * 1000)
                         if err:
                             respond(text=f":x: 검색 실패\n```\n{err}\n```")
@@ -1710,14 +1741,72 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
         # ── 이슈 키 단독 입력 → 이슈 조회 ──
         if jc.looks_like_issue_key(text):
-            respond(text=f":ticket: `{text.upper()}` 조회 중...")
-            _jira_issue(client, text.upper(), user_id, user_name, respond)
+            _jira_issue(jira_cli, text.upper(), user_id, user_name, respond)
             return
 
         # ── 나머지: 텍스트 → JQL 검색 ──
         jql = jc.to_jql(text)
-        respond(text=f":mag: `{text}` 검색 중...")
-        _jira_search(client, jql, user_id, user_name, respond)
+        _jira_search(jira_cli, jql, user_id, user_name, respond)
+
+    # ── /claim 핸들러 ──────────────────────────────────────────
+    def _claim_help(respond):
+        respond(text=(
+            ":clipboard: */claim 사용법*\n\n"
+            "`/claim [카테고리] [내용]` — 클레임 접수\n"
+            "`/claim list` — 오늘 접수 목록\n"
+            "`/claim list [날짜]` — 해당 날짜 접수 목록 (예: 2026-03-10)\n"
+            "`/claim stats` — 오늘 카테고리별 통계\n\n"
+            "*카테고리:*\n"
+            ":bulb: `개선` — 기능 개선 요청\n"
+            ":speech_balloon: `건의` — 건의·제안·요청\n"
+            ":warning: `이슈` — 버그·오류·결함 신고\n"
+            ":label: `기타` — 분류 외 (카테고리 생략 시 기본값)\n\n"
+            "*예시:*\n"
+            "`/claim 이슈 로그인 페이지에서 500 에러 발생`\n"
+            "`/claim 개선 대시보드에 필터 기능 추가 요청`\n"
+            "`/claim 건의 주간 리포트 자동 발송 기능`"
+        ))
+
+    @app.command("/claim")
+    def handle_claim_command(ack, respond, command):
+        ack()
+        text    = (command.get("text") or "").strip()
+        user_id   = command.get("user_id", "")
+        user_name = command.get("user_name", "")
+
+        if not text or text.lower() == "help":
+            return _claim_help(respond)
+
+        # ── list [날짜] ──
+        if text.lower() == "list":
+            claims = ch.get_claims_by_date()
+            respond(text=ch.format_claim_list(claims, "오늘"))
+            return
+
+        if text.lower().startswith("list "):
+            date_str = text[5:].strip()
+            claims = ch.get_claims_by_date(date_str)
+            respond(text=ch.format_claim_list(claims, date_str))
+            return
+
+        # ── stats ──
+        if text.lower() == "stats":
+            claims = ch.get_claims_by_date()
+            respond(text=ch.format_claim_stats(claims))
+            return
+
+        # ── 클레임 접수 ──
+        category, content = ch.parse_claim_input(text)
+        if not content:
+            respond(text=":x: 내용을 입력하세요. 예: `/claim 이슈 로그인 에러 발생`")
+            return
+        result = ch.submit_claim(user_id, user_name, category, content)
+        respond(text=(
+            f":white_check_mark: *클레임 접수 완료*\n\n"
+            f"ID: `{result['id']}`\n"
+            f"카테고리: {category}\n"
+            f"내용: {content}"
+        ))
 
     return app
 
@@ -1845,19 +1934,98 @@ def cmd_scheduler_only(sender: SlackSender):
         scheduler.shutdown()
 
 
+def _start_missed_items_timer(sender: SlackSender):
+    """
+    로컬 봇 전용 — 전일 누락 항목 전송 타이머 설정.
+
+    config.json 에서 daily-qa-checklist 의 time 을 읽어
+    1분 후에 누락 항목을 별도 메시지로 전송하는 일일 스케줄을 등록합니다.
+
+    예: 체크리스트 10:00 → 누락 메시지 10:01
+    """
+    import json as _json
+    import missed_tracker as mt
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    import pytz
+
+    _KST = pytz.timezone("Asia/Seoul")
+
+    # config.json 에서 대상 스케줄 조회
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = _json.load(f)
+    except Exception as e:
+        logger.warning(f"[missed-timer] config.json 로드 실패: {e}")
+        return None
+
+    target_schedule = None
+    for s in cfg.get("schedules", []):
+        if s.get("check_missed") and s.get("enabled", True):
+            target_schedule = s
+            break
+
+    if not target_schedule:
+        logger.info("[missed-timer] check_missed 스케줄 없음 → 타이머 미등록")
+        return None
+
+    channel     = target_schedule["channel"]
+    checklist_time = target_schedule.get("time", "10:00")
+
+    # 체크리스트 전송 시각 + 1분
+    h, m = map(int, checklist_time.split(":"))
+    m += 1
+    if m >= 60:
+        m -= 60
+        h += 1
+
+    def _send_missed():
+        """전일 누락 항목을 별도 메시지로 전송"""
+        try:
+            missed = mt.get_missed_items_from_local_state()
+            if not missed:
+                logger.info("[missed-timer] 전일 누락 없음 → 메시지 미전송")
+                return
+            total = sum(len(g["items"]) for g in missed)
+            logger.info(f"[missed-timer] 전일 누락 {total}건 발견 → 전송 시작")
+            sender.send_missed_items_standalone(channel, missed)
+        except Exception as e:
+            logger.error(f"[missed-timer] 누락 메시지 전송 실패: {e}")
+
+    sched = BackgroundScheduler(timezone=_KST)
+    sched.add_job(
+        _send_missed,
+        trigger  = CronTrigger(hour=h, minute=m, day_of_week="mon-fri", timezone=_KST),
+        id       = "local_missed_items",
+        name     = "전일 누락 항목 전송",
+    )
+    sched.start()
+    logger.info(f"[missed-timer] 전일 누락 타이머 등록 완료: 평일 {h:02d}:{m:02d} (체크리스트 +1분)")
+    return sched
+
+
 def cmd_commands_only(sender: SlackSender, bolt_app: App, app_token: str):
     """
     Socket Mode 핸들러만 실행합니다 — 스케줄러 없음 (로컬 PC 전용 모드).
     /wiki, /gdi 등 슬래시 커맨드를 사내망 PC에서 처리합니다.
     Railway 스케줄러와 충돌하지 않습니다.
+
+    추가: 전일 누락 항목 전송 타이머 (체크리스트 시각 +1분, 평일만)
     """
     _ensure_single_instance()
+
+    # 전일 누락 항목 타이머 등록
+    missed_sched = _start_missed_items_timer(sender)
+
     logger.info("💬 커맨드 전용 모드 실행 중 — 스케줄러 없음 (로컬 PC)")
     logger.info("🔌 Socket Mode 연결 중... (종료: Ctrl+C)")
     handler = SocketModeHandler(bolt_app, app_token)
     try:
         handler.start()
     except (KeyboardInterrupt, SystemExit):
+        if missed_sched:
+            missed_sched.shutdown(wait=False)
         logger.info("봇이 정상 종료되었습니다.")
 
 
@@ -1865,6 +2033,14 @@ def cmd_commands_only(sender: SlackSender, bolt_app: App, app_token: str):
 
 def main():
     load_dotenv(override=True)
+
+    # ── 메시지 만료 설정 ──
+    message_expiry.MESSAGE_EXPIRY_SECONDS = int(
+        os.getenv("MESSAGE_EXPIRY_SECONDS", "600")
+    )
+    message_expiry.MESSAGE_EXPIRY_ENABLED = (
+        os.getenv("MESSAGE_EXPIRY_ENABLED", "true").lower() == "true"
+    )
 
     # ── 토큰 확인 ──
     bot_token = os.getenv("SLACK_BOT_TOKEN", "").strip()

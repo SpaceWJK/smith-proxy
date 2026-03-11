@@ -26,6 +26,7 @@ import time
 import requests
 
 from mcp_session import McpSession
+from game_aliases import detect_game_in_text
 
 # ── MCP 캐시 레이어 (optional — import 실패 시 캐시 없이 동작) ──────────────
 try:
@@ -118,39 +119,172 @@ _PAGE_CACHE_TTL   = 300  # 5분 (초)
 
 # ── HTML 처리 헬퍼 ─────────────────────────────────────────────────────────
 
+from html.parser import HTMLParser as _HTMLParser
+
+
+class _ConfluenceHTMLExtractor(_HTMLParser):
+    """Confluence storage 형식 HTML → 일반 텍스트 변환.
+
+    html.parser 기반으로 구조적 파싱하여 데이터 손실을 최소화.
+    - ac:parameter, ac:emoticon, script, style → 건너뜀 (노이즈)
+    - Confluence 매크로 UI (차트 컨트롤, 필터 메뉴, 폼 요소) → 건너뜀
+    - display:none 숨겨진 요소 → 건너뜀
+    - ac:structured-macro, ac:rich-text-body 등 → 태그만 무시, 내부 텍스트 보존
+    - 테이블: 셀 경계 ' | ', 행 경계 '\\n'
+    - 리스트: li 항목마다 줄바꿈 + '- ' 접두사
+    - 블록 요소(p, div, h1-h6, br): 줄바꿈
+    """
+
+    # 내용을 통째로 건너뛸 태그 (자식 포함)
+    _SKIP_TAGS = frozenset([
+        "script", "style", "ac:parameter", "ac:emoticon",
+        "select", "option", "input", "button", "form", "canvas",
+    ])
+    # 이 CSS 클래스가 포함되면 해당 요소 전체를 건너뜀 (Confluence 매크로 UI)
+    _SKIP_CLASSES = frozenset([
+        # 차트 매크로 UI
+        "chart-controls", "chart-menu-buttons", "aui-dropdown2",
+        "aui-toolbar2", "tf-chart-message", "chart-settings",
+        "tfac-menu",
+        # 테이블 필터 매크로 UI
+        "table-filter-menu", "table-filter-controls",
+        "tableFilterCbStyle", "lockEnabled", "lockDisabled",
+        "no-table-message", "waiting-for-table",
+        "empty-message", "show-n-rows-only-message",
+        "tf-hider-wrapper", "tf-shower-wrapper",
+        "tf-body-storage",
+    ])
+    # 블록 요소 (앞뒤로 줄바꿈 삽입)
+    _BLOCK_TAGS = frozenset([
+        "p", "div", "br", "hr",
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "blockquote", "pre",
+        "table", "thead", "tbody",
+    ])
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._skip_stack: list[str] = []  # 스킵 중인 태그 스택
+
+    @property
+    def _skipping(self) -> bool:
+        return len(self._skip_stack) > 0
+
+    def _should_skip(self, tag_lower: str, attrs: list) -> bool:
+        """태그+속성 기반으로 건너뛸지 판단."""
+        # 태그 자체가 스킵 대상
+        if tag_lower in self._SKIP_TAGS:
+            return True
+        # display:none 숨겨진 요소
+        attr_dict = dict(attrs)
+        style = attr_dict.get("style", "")
+        if "display:" in style and "none" in style:
+            return True
+        # Confluence 매크로 UI 클래스
+        classes = set(attr_dict.get("class", "").split())
+        if classes & self._SKIP_CLASSES:
+            return True
+        return False
+
+    def handle_starttag(self, tag, attrs):
+        tag_lower = tag.lower()
+        # 이미 스킵 중이면 깊이만 추적
+        if self._skipping:
+            self._skip_stack.append(tag_lower)
+            return
+        # 새로 스킵 진입 판단
+        if self._should_skip(tag_lower, attrs):
+            self._skip_stack.append(tag_lower)
+            return
+
+        if tag_lower in self._BLOCK_TAGS:
+            self._parts.append("\n")
+        elif tag_lower == "tr":
+            self._parts.append("\n")
+        elif tag_lower in ("td", "th"):
+            if self._parts and not self._parts[-1].endswith("\n"):
+                self._parts.append(" | ")
+        elif tag_lower == "li":
+            self._parts.append("\n- ")
+
+    def handle_endtag(self, tag):
+        tag_lower = tag.lower()
+        if self._skipping:
+            if self._skip_stack and self._skip_stack[-1] == tag_lower:
+                self._skip_stack.pop()
+            elif self._skip_stack:
+                # 불일치 태그 — 가장 가까운 매칭 태그를 찾아 제거
+                for i in range(len(self._skip_stack) - 1, -1, -1):
+                    if self._skip_stack[i] == tag_lower:
+                        self._skip_stack.pop(i)
+                        break
+            return
+
+        if tag_lower in self._BLOCK_TAGS or tag_lower == "tr":
+            self._parts.append("\n")
+        else:
+            # 인라인 태그 종료 시 공백 삽입 — 단어 병합 방지
+            # (기존 regex 파서의 re.sub(r'<[^>]+>', ' ', text) 동작과 동일)
+            self._parts.append(" ")
+
+    def handle_data(self, data):
+        if self._skipping:
+            return
+        self._parts.append(data)
+
+    def unknown_decl(self, data):
+        """<![CDATA[...]]> 등 비표준 선언 처리.
+
+        Confluence storage HTML은 ac:plain-text-body, ac:plain-text-link-body
+        안에 CDATA 섹션으로 코드 블록·매크로 본문·링크 텍스트를 저장한다.
+        HTMLParser는 이를 unknown_decl로 전달하므로 여기서 추출.
+        """
+        if self._skipping:
+            return
+        # CDATA[ ... ] 형태에서 콘텐츠 추출
+        if data.startswith("CDATA[") and data.endswith("]"):
+            content = data[6:-1]  # "CDATA[" 접두사와 "]" 접미사 제거
+            if content.strip():
+                self._parts.append(content)
+        elif data.startswith("CDATA["):
+            # 닫히지 않은 CDATA (드문 경우)
+            content = data[6:]
+            if content.strip():
+                self._parts.append(content)
+
+    def get_text(self) -> str:
+        raw = "".join(self._parts)
+        # CDATA 잔여 추출 (unknown_decl 미처리 케이스 대비)
+        raw = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', raw, flags=re.DOTALL)
+        # &nbsp; 등 non-breaking space 정규화
+        raw = raw.replace('\xa0', ' ')
+        # 공백 정규화
+        raw = re.sub(r'[ \t]+', ' ', raw)
+        raw = re.sub(r'\n[ \t]+', '\n', raw)
+        raw = re.sub(r'\n{3,}', '\n\n', raw)
+        return raw.strip()
+
+
 def _strip_html(html_text: str) -> str:
     """Confluence 저장 형식 HTML → 일반 텍스트.
 
-    ac:parameter, ac:emoticon 등 Confluence 매크로 메타데이터를 제거하고
-    CDATA, 링크 텍스트 등 실제 콘텐츠만 추출합니다.
+    html.parser 기반 구조적 파싱으로 매크로 내부 본문·테이블·리스트 데이터를 보존.
     """
-    text = html_text or ''
-    # 1. script / style 전체 제거
-    text = re.sub(
-        r'<(script|style)[^>]*>.*?</\1>', '',
-        text, flags=re.DOTALL | re.IGNORECASE,
-    )
-    # 2. Confluence 매크로 파라미터 전체 제거 (매크로 설정값 노이즈)
-    text = re.sub(
-        r'<ac:parameter[^>]*>.*?</ac:parameter>', '',
-        text, flags=re.DOTALL,
-    )
-    # 3. CDATA 내용 추출: <![CDATA[텍스트]]> → 텍스트
-    text = re.sub(r'<!\[CDATA\[(.*?)\]\]>', r'\1', text, flags=re.DOTALL)
-    # 4. ac:emoticon 제거
-    text = re.sub(r'<ac:emoticon[^/]*/>', '', text)
-    # 5. 테이블 구조 보존: 셀 경계 → ' | ', 행 경계 → '\n'
-    text = re.sub(r'</t[dh]>\s*<t[dh][^>]*>', ' | ', text, flags=re.IGNORECASE)
-    text = re.sub(r'</?tr[^>]*>', '\n', text, flags=re.IGNORECASE)
-    # 6. 나머지 HTML/XML 태그 제거
-    text = re.sub(r'<[^>]+>', ' ', text)
-    # 7. HTML 엔티티 디코딩
-    text = _html.unescape(text)
-    # 8. 공백 정규화
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\n[ \t]+', '\n', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+    if not html_text:
+        return ''
+    parser = _ConfluenceHTMLExtractor()
+    try:
+        parser.feed(html_text)
+        return parser.get_text()
+    except Exception as e:
+        logger.warning(f"[wiki] HTML 파서 실패, 정규식 폴백: {e}")
+        # 폴백: 최소한의 정규식 처리
+        text = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html_text,
+                      flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = _html.unescape(text)
+        return re.sub(r'\s+', ' ', text).strip()
 
 
 def _clean_title(title: str) -> str:
@@ -197,12 +331,18 @@ class ConfluenceWikiClient:
         """
         질문 맥락을 활용한 스마트 페이지 검색.
 
-        질문에서 연도·핵심 키워드를 추출하여, 해당 맥락에 맞는 페이지를
+        질문에서 게임명·연도·핵심 키워드를 추출하여, 해당 맥락에 맞는 페이지를
         우선 검색합니다. 실패 시 일반 get_page_by_title 로 폴백.
 
-        예: title="HotFix 내역", question="2026년 핫픽스 알려줘"
-          → CQL: title ~ "2026" AND title ~ "Hot" → "2026_Hot Fix" 발견
-          → 이 페이지에 2026 데이터가 있어 정확한 답변 가능
+        검색 우선순위:
+          1. 게임명 + 연도 → ancestor(게임) AND title ~ 연도 AND title ~ 키워드
+          2. 게임명만      → ancestor(게임) AND title ~ 키워드
+          3. 연도만        → title ~ 연도 AND title ~ 키워드
+          4. 일반 검색     → get_page_by_title (제목 부분 일치)
+
+        예: title="HotFix 내역", question="에픽세븐 2026년 핫픽스 알려줘"
+          → ancestor="에픽세븐" AND title ~ "2026" AND title ~ "Hot"
+          → "에픽세븐/EP | Live Service/HotFix 내역" 하위의 연도별 페이지 발견
 
         Parameters
         ----------
@@ -213,6 +353,16 @@ class ConfluenceWikiClient:
         """
         sk = space_key or self._space_key
 
+        # ── 질문에서 게임명 감지 ──────────────────────────────────
+        game = detect_game_in_text(question) if question else None
+        game_ancestor_id = None
+        if game:
+            game_ancestor_id = game.get("wiki_ancestor_id")
+            logger.info(
+                f"[wiki][스마트검색] 게임명 감지: {game['canonical']} "
+                f"(ancestor_id={game_ancestor_id})"
+            )
+
         # ── 질문에서 연도 추출 ────────────────────────────────────
         year = None
         if question:
@@ -220,24 +370,70 @@ class ConfluenceWikiClient:
             if m:
                 year = m.group(1)
 
-        if year:
-            # 제목 키워드 분리 (CamelCase, _, 공백, - 분리)
-            raw_words = re.split(r'[\s_\-]+', title)
-            keywords = []
-            for w in raw_words:
-                # CamelCase 분리: "HotFix" → ["Hot", "Fix"]
-                parts = re.findall(r'[A-Z][a-z]+|[a-z]+|[가-힣]+|\d+', w)
-                keywords.extend(parts if parts else [w])
-            keywords = [w for w in keywords if len(w) >= 2]
+        # ── 제목 키워드 분리 ──────────────────────────────────────
+        raw_words = re.split(r'[\s_\-]+', title)
+        keywords = []
+        for w in raw_words:
+            parts = re.findall(r'[A-Z][a-z]+|[a-z]+|[가-힣]+|\d+', w)
+            keywords.extend(parts if parts else [w])
+        keywords = [w for w in keywords if len(w) >= 2]
 
-            # 각 키워드와 연도 조합으로 CQL 시도 (최대 3개)
+        # ── Stage 0: 키워드 규칙 직접 매핑 ───────────────────────
+        from keyword_rules import match_wiki_keyword_rule
+        game_name = game["canonical"] if game else None
+        kw_rule = match_wiki_keyword_rule(question, game_canonical=game_name)
+        if kw_rule:
+            rule_page = kw_rule["page_title"]
+            rule_cql = (
+                f'title = "{rule_page}" AND space = "{sk}" AND type=page'
+            )
+            page = self._try_smart_cql(
+                rule_cql, year or "", title, fetch_full
+            )
+            if page:
+                return page, None
+            logger.info(
+                f"[wiki][규칙매칭] 규칙 페이지 '{rule_page}' CQL 미발견 "
+                f"→ 기존 검색 로직 폴스루"
+            )
+
+        # ── 1차: 게임명 + 연도 + 키워드 조합 CQL ─────────────────
+        if game_ancestor_id and year:
             for kw in keywords[:3]:
                 cql = (
+                    f'ancestor = {game_ancestor_id} AND '
                     f'title ~ "{year}" AND title ~ "{kw}" '
                     f'AND space = "{sk}" AND type=page '
                     f'ORDER BY lastmodified DESC'
                 )
-                logger.info(f"[wiki][스마트검색] CQL: {cql}")
+                page = self._try_smart_cql(cql, year, title, fetch_full)
+                if page:
+                    return page, None
+
+            # 연도만으로 ancestor 내 검색
+            cql = (
+                f'ancestor = {game_ancestor_id} AND '
+                f'title ~ "{year}" AND space = "{sk}" AND type=page '
+                f'ORDER BY lastmodified DESC'
+            )
+            page = self._try_smart_cql(cql, year, title, fetch_full)
+            if page:
+                return page, None
+
+            logger.info(
+                f"[wiki][스마트검색] 게임+연도 조합 미발견 → 게임 ancestor 검색"
+            )
+
+        # ── 2차: 게임명 + 키워드 (연도 없이) ─────────────────────
+        if game_ancestor_id:
+            for kw in keywords[:3]:
+                cql = (
+                    f'ancestor = {game_ancestor_id} AND '
+                    f'title ~ "{kw}" '
+                    f'AND space = "{sk}" AND type=page '
+                    f'ORDER BY lastmodified DESC'
+                )
+                logger.info(f"[wiki][스마트검색] 게임+키워드 CQL: {cql}")
                 raw, err = self._mcp.call_tool(
                     "cql_search",
                     {"cql": cql, "limit": 5, "expand": "body.view"},
@@ -245,28 +441,30 @@ class ConfluenceWikiClient:
                 if err:
                     continue
                 results = self._parse_cql_results(raw)
-                if not results:
-                    continue
-
-                # 연도가 제목에 명시적으로 포함된 결과를 우선 선택
-                best = None
-                for r in results:
-                    r_title = _clean_title(
-                        r.get("title") or
-                        (r.get("content") or {}).get("title") or ""
-                    )
-                    if year in r_title:
-                        best = r
-                        break
-
-                if best:
+                if results:
                     page = self._cql_result_to_page_dict(
-                        best, title, fetch_full=fetch_full
+                        results[0], title, fetch_full=fetch_full
                     )
                     logger.info(
-                        f"[wiki][스마트검색] 연도 특정 페이지 발견: "
-                        f"{page['title']} (연도={year}, 키워드={kw})"
+                        f"[wiki][스마트검색] 게임+키워드 발견: {page['title']} "
+                        f"(game={game['canonical']}, kw={kw})"
                     )
+                    return page, None
+
+            logger.info(
+                f"[wiki][스마트검색] 게임 ancestor 내 미발견 → 연도 검색 폴백"
+            )
+
+        # ── 3차: 연도 + 키워드 (게임명 없이, 기존 로직) ──────────
+        if year:
+            for kw in keywords[:3]:
+                cql = (
+                    f'title ~ "{year}" AND title ~ "{kw}" '
+                    f'AND space = "{sk}" AND type=page '
+                    f'ORDER BY lastmodified DESC'
+                )
+                page = self._try_smart_cql(cql, year, title, fetch_full)
+                if page:
                     return page, None
 
             logger.info(
@@ -274,10 +472,50 @@ class ConfluenceWikiClient:
                 f"(연도={year}, 키워드={keywords})"
             )
 
-        # 폴백: 일반 제목 검색
+        # ── 4차 폴백: 일반 제목 검색 ─────────────────────────────
         return self.get_page_by_title(
             title, space_key=space_key, fetch_full=fetch_full
         )
+
+    def _try_smart_cql(self, cql: str, year: str, title: str,
+                       fetch_full: bool) -> "dict | None":
+        """스마트 CQL을 실행하여 연도가 제목에 포함된 최적 결과를 반환.
+
+        결과 중 연도가 제목에 포함된 것을 우선 선택합니다.
+        결과가 있지만 연도 매치가 없으면 첫 번째 결과를 반환.
+        결과가 없으면 None.
+        """
+        logger.info(f"[wiki][스마트검색] CQL: {cql}")
+        raw, err = self._mcp.call_tool(
+            "cql_search",
+            {"cql": cql, "limit": 5, "expand": "body.view"},
+        )
+        if err:
+            return None
+        results = self._parse_cql_results(raw)
+        if not results:
+            return None
+
+        # 연도가 제목에 명시적으로 포함된 결과 우선
+        best = None
+        for r in results:
+            r_title = _clean_title(
+                r.get("title") or
+                (r.get("content") or {}).get("title") or ""
+            )
+            if year in r_title:
+                best = r
+                break
+
+        chosen = best or results[0]
+        page = self._cql_result_to_page_dict(
+            chosen, title, fetch_full=fetch_full
+        )
+        logger.info(
+            f"[wiki][스마트검색] 발견: {page['title']} "
+            f"(연도={year}, year_in_title={'yes' if best else 'no'})"
+        )
+        return page
 
     def get_page_by_title(self, title: str, space_key: str = None,
                           fetch_full: bool = True):

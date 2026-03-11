@@ -5,6 +5,121 @@
 
 ---
 
+## 2026-03-10 (화) — 세션 16
+
+### 완료
+- **v1.5.3 통합 응답 포맷 (3단 구조)**
+  - `response_formatter.py` 신규: `parse_answer_sections()` + `format_ai_response()` + `ANSWER_FORMAT_INSTRUCTION`
+  - `slack_bot.py`: 3개 claude_call 함수 포맷 교체 + 5개 프롬프트 지시문 추가
+  - Jira: `source_url=jc._issue_url(key)` 전달 (이슈 링크 포함)
+  - GDI: URL 없음 (텍스트 출처만)
+
+- **v1.5.2a 메시지 만료 핫픽스**
+  - 버그: `ack()` body 없음 → `replace_original=True`가 새 메시지 생성
+  - 수정: `ack(text="⏳ 처리 중...")` + ExpiringResponder 항상 `replace_original=True`
+  - `_call_count`/`is_first` 로직 제거
+
+---
+
+## 2026-03-10 (화) — 세션 15
+
+### 완료
+- **v1.5.2 답변 메시지 자동 만료**
+  - `message_expiry.py` 신규: ExpiringResponder 래퍼 (threading.Timer + response_url POST)
+  - `slack_bot.py`: import + main() 환경변수 + /wiki, /gdi, /jira 핸들러 래핑 (5개소)
+  - `.env`: MESSAGE_EXPIRY_SECONDS=600, MESSAGE_EXPIRY_ENABLED=true 추가
+  - 비적용: /claim, /wiki-sync, 스케줄러 알림
+  - py_compile 통과 + 봇 재시작 완료
+
+- **v1.5.1 규칙 기반 키워드→페이지/쿼리 매핑**
+  - `keyword_rules.py` 신규: 공용 로더 + 3개 매칭 함수 (hot reload)
+  - `wiki_keyword_rules.json` / `jira_keyword_rules.json` / `gdi_keyword_rules.json` 신규
+  - `wiki_client.py`: Stage 0 키워드 규칙 매칭 추가 (기존 4단계 검색 앞)
+  - `jira_client.py`: `_inject_before_order()` + 규칙 매칭 (question_to_jql, question_to_jql_variants)
+  - `slack_bot.py`: GDI 2파트 파이프 핸들러 규칙 매칭 추가
+  - py_compile 통과 + 봇 재시작 완료
+
+### 논의
+- 메시지 만료 기능: response_url 30분 제한 내에서 ephemeral 답변 교체 가능
+- 10분 만료 → response_url replace_original 방식으로 구현 가능 (v1.5.2 예정)
+
+---
+
+## 2026-03-10 (화) — 세션 14
+
+### 완료
+- **v1.5.0: /claim 커맨드 + 안전 가드 + Wiki/Jira 버그 수정**
+  - **Wiki ancestor CQL 버그 수정** (critical)
+    - `game_aliases.py`: `wiki_ancestor_id` 필드 추가 (에픽세븐=58043932, 카제나=650589593)
+    - `wiki_client.py`: ancestor CQL을 텍스트 → 정수 ID 기반으로 수정
+    - 문제: `ancestor = "에픽세븐"` → 항상 파싱 에러 → Stage 3 폴백으로 카제나 질문에도 에픽세븐 페이지 반환
+  - **Jira 활성 이슈 정의 수정**
+    - `jira_client.py`: `_DONE_STATUSES`에 "닫힘" 추가
+  - **읽기 전용 안전 가드** (신규)
+    - `safety_guard.py`: 쓰기 의도 감지 정규식 + READ_ONLY_INSTRUCTION 상수
+    - 2계층 방어: 파이프 핸들러 사전 필터 + Claude 프롬프트 삽입
+    - 적용 대상: /wiki, /gdi, /jira 전체
+  - **`/claim` 슬래시 커맨드** (신규)
+    - `claim_handler.py`: 카테고리 파싱, JSON 저장, 조회, 통계, 로깅
+    - 카테고리: 개선, 건의, 이슈, 기타 (한/영 별칭)
+    - 저장소: `data/claims.json`, 로그: `logs/claim.log`
+  - 전체 6파일 py_compile 통과 + 봇 재시작 정상 (PID 19500)
+- **문서 업데이트**
+  - `changelog/CHANGELOG.md`: v1.5.0 섹션 추가
+  - `.claude/DEV_RULES.md`: 버전 1.5.0, 프로젝트 구조에 safety_guard.py + claim_handler.py 추가
+
+### 버전
+- v1.4.2 → **v1.5.0**
+
+### 수정 파일
+- `Slack Bot/game_aliases.py` (수정 — wiki_ancestor_id 필드 + get_wiki_ancestor_id())
+- `Slack Bot/wiki_client.py` (수정 — ancestor CQL ID 기반 수정)
+- `Slack Bot/jira_client.py` (수정 — _DONE_STATUSES "닫힘" 추가)
+- `Slack Bot/safety_guard.py` (신규 — 쓰기 의도 감지 + 차단)
+- `Slack Bot/claim_handler.py` (신규 — /claim 비즈니스 로직)
+- `Slack Bot/slack_bot.py` (수정 — /claim 핸들러 + 안전 가드 적용)
+- `changelog/CHANGELOG.md` (수정 — v1.5.0 기록)
+- `.claude/DEV_RULES.md` (수정 — 버전 + 구조)
+
+---
+
+## 2026-03-10 (화) — 세션 13
+
+### 완료
+- **v1.4.2: 게임명 별칭 매핑 + 검색 고도화**
+  - `game_aliases.py` 신규 생성 — 게임명 별칭 중앙 관리 모듈
+    - 5개 게임 정의: 에픽세븐(EP7), 카제나(GCZ), 리젝(PRH), 로드나인(LDN), 로드나인 아시아(LNA)
+    - `resolve_game()`, `detect_game_in_text()`, `get_jira_project_key()` 등 API 제공
+  - `wiki_client.py`: `search_with_context()` → 4단계 계단식 검색
+    - Stage 1: 게임 ancestor + 연도 + 키워드 CQL
+    - Stage 2: 게임 ancestor + 키워드만
+    - Stage 3: 연도 + 키워드 (기존 로직)
+    - Stage 4: get_page_by_title 폴백
+    - `_try_smart_cql()` 헬퍼 추가
+  - `jira_client.py`: 자연어 상태 의도 감지
+    - `_detect_status_intent()`: "액티브/활성/열린" → `status NOT IN (Closed, Done, ...)`
+    - `question_to_jql()`, `question_to_jql_variants()`에 `project_key` 파라미터 추가
+  - `slack_bot.py`: 하드코딩 `_JIRA_PROJECT_NAMES` → `game_aliases` 통합
+    - `_resolve_jira_project()` game_aliases 우선 조회
+    - 파이프 핸들러 JQL 구성 간소화 (project_key 내부 주입)
+  - 전체 4파일 py_compile 통과 + 로직 테스트 정상
+- **문서 업데이트**
+  - `changelog/CHANGELOG.md`: v1.4.2 섹션 추가
+  - `.claude/DEV_RULES.md`: 버전 1.4.2, 프로젝트 구조에 game_aliases.py 추가
+
+### 버전
+- v1.4.1 → **v1.4.2**
+
+### 수정 파일
+- `Slack Bot/game_aliases.py` (신규 — 게임명 별칭 매핑)
+- `Slack Bot/wiki_client.py` (수정 — 4단계 계단식 검색)
+- `Slack Bot/jira_client.py` (수정 — 상태 의도 감지, project_key 주입)
+- `Slack Bot/slack_bot.py` (수정 — game_aliases 통합)
+- `changelog/CHANGELOG.md` (수정 — v1.4.2 기록)
+- `.claude/DEV_RULES.md` (수정 — 버전 + 구조)
+
+---
+
 ## 2026-03-10 (화) — 세션 12
 
 ### 완료
