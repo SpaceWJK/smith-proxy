@@ -18,7 +18,29 @@
 
 ---
 
-## [1.5.4] - 2026-03-11 <- 현재
+## [1.5.5] - 2026-03-11 <- 현재
+
+### 추가
+- **Wiki answer_miss 로깅 확장** (`slack_bot.py`, `analyze_answer_miss.py`)
+  - `_log_answer_miss()` — `level` 파라미터 추가 (CACHE_MISS / ALL_MISS)
+  - Stage 1(캐시 적재 데이터) 실패 시 `CACHE_MISS` 레벨로 별도 기록
+  - 분석 스크립트: 레벨 구분 파싱 + `--level` 필터 + 후속 단계 해결율 분석
+- **GDI 일괄 적재 시스템** (`scripts/load_gdi.py` 신규)
+  - GDI MCP의 list_files_in_folder → search_by_filename 전체 청크 수집 → SQLite 저장
+  - Delta 적재: DB에 없는 신규 파일만 적재 (불변 데이터 특성 활용)
+  - CLI: `--delta`, `--folder`, `--all`, `--stats`, 폴더 단위 분할 적재
+- **GDI 캐시 우선 조회** (`gdi_client.py`)
+  - `get_file_content_full()`: SQLite 적재 데이터 우선 → MCP 폴백
+  - `/gdi` 슬래시 커맨드 MAX_CHARS 20,000 → 50,000 확대
+- **자동 동기화 GDI 연동** (`auto_sync.py`)
+  - `sync_gdi()`: 2시간 주기 auto_sync에 GDI delta 적재 추가
+- **시스템 헬스체크 도구** (`scripts/system_healthcheck.py` 신규)
+  - 7가지 검수: 모듈 임포트, 환경변수, MCP 연결, 캐시 DB, 설정 파일, 레거시 탐지, 로그 분석
+  - `--quick` (MCP 제외), `--module [name]` (특정 카테고리), `--fix` (수정 제안)
+
+---
+
+## [1.5.4] - 2026-03-11
 
 ### 추가
 - **Wiki 4단계 Fallback 파이프라인** (`slack_bot.py`)

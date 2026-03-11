@@ -312,16 +312,22 @@ def _get_answer_miss_logger() -> logging.Logger:
 
 def _log_answer_miss(*, user_id: str, user_name: str,
                      page_title: str, page_id: str,
-                     question: str, fallback_stages: str):
-    """모든 fallback 단계를 거쳐도 답변을 못 찾은 케이스를 기록."""
+                     question: str, fallback_stages: str,
+                     level: str = "ALL_MISS"):
+    """답변 실패 케이스를 기록.
+
+    level:
+        CACHE_MISS — Stage 1(캐시 적재 데이터) 실패 시점
+        ALL_MISS   — 모든 fallback 단계 실패 (기본값)
+    """
     ml = _get_answer_miss_logger()
     user = f"{user_name}({user_id})" if user_id else (user_name or "unknown")
     ml.warning(
-        f"MISS | user={user} | page={page_title} (id={page_id}) | "
+        f"{level} | user={user} | page={page_title} (id={page_id}) | "
         f"question={question} | stages={fallback_stages}"
     )
     logger.warning(
-        f"[wiki][answer_miss] 모든 fallback 실패 | page={page_title} | "
+        f"[wiki][answer_miss] {level} | page={page_title} | "
         f"question={question}"
     )
 
@@ -404,10 +410,15 @@ def _has_breadcrumb(text: str) -> bool:
 def _fetch_file_content(client, file_name: str) -> str:
     """
     파일명으로 내용(청크 텍스트)을 가져옵니다.
-    4단계 폴백: exact_match → text_match → #접두사 제거 → unified_search
+    5단계 폴백: 캐시전체 → exact_match → text_match → #접두사 제거 → unified_search
     Returns: 내용 텍스트 (없으면 빈 문자열)
     """
     import re as _re
+
+    # 0) SQLite 캐시 전체 텍스트 우선 (일괄 적재 데이터)
+    full_text = gc.get_file_content_full(file_name)
+    if full_text:
+        return full_text
 
     # 1) exact match
     data, err = client.search_by_filename(file_name, exact_match=True)
@@ -768,7 +779,7 @@ def _gdi_ask_claude(context_text: str, source_label: str,
 def _gdi_ask_claude_content(context_text: str, source_label: str,
                             question: str, respond):
     """파일 내용 기반 Claude 답변 — 요약/분석/내용 질문용."""
-    MAX_CHARS = 20000
+    MAX_CHARS = 50000
     truncated = len(context_text) > MAX_CHARS
     content   = context_text[:MAX_CHARS] if truncated else context_text
     trunc_note = "\n*(내용이 길어 일부만 포함됨)*\n" if truncated else ""
@@ -1348,6 +1359,15 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 # ── Fallback 파이프라인 ──────────────────────────
                 # Stage 1(적재) 실패 → Stage 2(하위) → Stage 3(MCP 실시간)
                 if _NOT_FOUND_PATTERN in answer:
+                    # ── CACHE_MISS 로깅: 적재 데이터만으로 답변 불가 ──
+                    _log_answer_miss(
+                        user_id=user_id, user_name=user_name,
+                        page_title=page["title"],
+                        page_id=page.get("id", ""),
+                        question=question,
+                        fallback_stages="cache",
+                        level="CACHE_MISS",
+                    )
                     logger.info(
                         f"[wiki][fallback] Stage 1 미발견 → "
                         f"하위 페이지 검색 (parent={page['title']}, "
@@ -1487,6 +1507,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                             page_id=page.get("id", ""),
                             question=question,
                             fallback_stages="cache→descendant→mcp_live→mcp_search",
+                            level="ALL_MISS",
                         )
 
                 respond(text=format_ai_response(

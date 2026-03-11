@@ -494,6 +494,71 @@ def get_file_content_text(data: dict) -> str:
     return "\n".join(parts)
 
 
+def get_file_content_full(file_name: str, game_name: str = "",
+                          mcp: "McpSession | None" = None) -> str:
+    """파일 전체 텍스트 반환 (캐시 우선 → MCP 폴백).
+
+    1) SQLite doc_content.body_text 조회 (일괄 적재 데이터)
+    2) 없으면 MCP search_by_filename 전체 페이지 수집
+
+    Returns: 파일 전체 텍스트 (없으면 빈 문자열)
+    """
+    # ── 1단계: 캐시 조회 (일괄 적재 데이터) ──
+    if _GDI_CACHE_ENABLED and _gdi_cache:
+        try:
+            node = _gdi_cache.get_node_by_title(file_name, source_type="gdi")
+            if node:
+                content = _gdi_cache.get_content(node["id"])
+                if content and content.get("body_text"):
+                    logger.debug("[gdi] get_file_content_full: 캐시 HIT (%s)", file_name)
+                    return content["body_text"]
+        except Exception as e:
+            logger.debug("[gdi] 캐시 조회 오류: %s", e)
+
+    # ── 2단계: MCP 전체 청크 수집 (폴백) ──
+    if mcp is None:
+        mcp = McpSession(url=GDI_MCP_URL, label="gdi")
+
+    all_text = []
+    page = 1
+    while True:
+        args = {
+            "file_name_query": file_name,
+            "exact_match": True,
+            "page": page,
+            "page_size": 20,
+        }
+        if game_name:
+            args["game_name"] = game_name
+
+        raw, err = mcp.call_tool("search_by_filename", args)
+        if err:
+            break
+
+        data = raw
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except Exception:
+                break
+        if not isinstance(data, dict):
+            break
+
+        chunks = data.get("chunks", [])
+        for c in chunks:
+            text = c.get("chunk_content", "")
+            if text:
+                all_text.append(text)
+
+        pagination = data.get("pagination", {})
+        if not pagination.get("has_next"):
+            break
+        page += 1
+        time.sleep(0.2)
+
+    return "\n".join(all_text)
+
+
 def get_search_context_text(data: dict) -> str:
     """
     unified_search 결과에서 컨텍스트 텍스트를 추출합니다.
