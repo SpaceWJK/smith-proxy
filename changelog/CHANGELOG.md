@@ -18,7 +18,28 @@
 
 ---
 
-## [1.5.5] - 2026-03-11 <- 현재
+## [1.5.6] - 2026-03-11 <- 현재
+
+### 개선
+- **GDI 청크 메타데이터 정제** (`gdi_client.py`, `load_gdi.py`)
+  - GDI MCP 청크의 반복 메타데이터 접두사(index_mode/file_type/content_type) 자동 제거
+  - `_clean_chunk_text()`: 정규식 기반 정제 함수 — 적재·조회 양쪽 적용
+  - `load_gdi.py`: 적재 시 청크 정제 (신규 적재 데이터 깨끗하게)
+  - `gdi_client.py`: 4개 조회 경로 정제 (캐시 반환, MCP 폴백, 검색 컨텍스트)
+  - 기존 DB 5건 일괄 정제 완료 (총 2,933자 / 10~23% 토큰 절감)
+
+### 변경
+- **스케줄 발송 시각 분산** (`config.json`)
+  - weekly-qa-report: 10:05 → 09:50
+  - epic7/cazena-update-checklist: 10:00 → 09:55
+  - monthly-qa-checklist: 10:10 → 09:45
+  - quarterly-qa-checklist: 10:00 → 09:40
+- **README 현행화** (`README.md`)
+  - 버전 v1.4.1 → v1.5.5, 일일 체크리스트 7→9항목, 스케줄 시각 반영
+
+---
+
+## [1.5.5] - 2026-03-11
 
 ### 추가
 - **Wiki answer_miss 로깅 확장** (`slack_bot.py`, `analyze_answer_miss.py`)

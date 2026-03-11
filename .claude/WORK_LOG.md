@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-03-11 (화) — 세션 18
+
+### 완료
+- **v1.5.6 GDI 청크 메타데이터 정제**
+  - `_clean_chunk_text()` 정규식 정제 함수: `load_gdi.py` + `gdi_client.py` 양쪽 적용
+  - 적재 시(load_gdi.py): 청크 수집 단계에서 메타데이터 제거
+  - 조회 시(gdi_client.py): `get_file_content_text()`, `get_file_content_full()`, `get_search_context_text()` 4개 경로
+  - 기존 DB 5건 일괄 정제 (2,933자 절감, 10~23%)
+- **v1.5.5 스케줄 발송 시각 분산 + README 현행화** (세션 17 후반)
+  - config.json 5건 시각 변경 + README 버전/항목수/시각 업데이트 + Railway push
+
+---
+
 ## 2026-03-11 (화) — 세션 17
 
 ### 완료
