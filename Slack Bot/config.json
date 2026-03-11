@@ -267,6 +267,14 @@
             {"value": "g7_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
             {"value": "g7_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
           ]
+        },
+        {
+          "type": "group",
+          "group_name": "[각 프로젝트] <https://jira.smilegate.net/secure/PortfolioPlanView.jspa?id=242&sid=254&vid=988#plan/backlog|QA Task Management>",
+          "sub_items": [
+            {"value": "g8_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
+            {"value": "g8_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
+          ]
         }
       ],
       "bot_name": "퍼블리싱QA 알림봇",
