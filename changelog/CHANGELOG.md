@@ -18,7 +18,26 @@
 
 ---
 
-## [1.5.7] - 2026-03-12 <- 현재
+## [1.5.8] - 2026-03-12 <- 현재
+
+### 개선
+- **택소노미 질의 해석 고도화** (`gdi_client.py`, `slack_bot.py`)
+  - `taxonomy_search()`: `question` 파라미터 추가 — 키워드+질문 결합 파싱
+  - 2-part 모드(`키워드 \ 질문`)에서 질문의 카테고리 힌트도 택소노미에 반영
+  - e2e 시뮬레이션 테스트 16/16 PASS
+
+### 변경
+- **일일 체크리스트 링크 추가** (`config.json`)
+  - 서비스 장애, 커뮤니티 이슈: 제목에 Wiki/Jira 하이퍼링크
+  - 핫픽스 내역, Next Checklist, TEST INFO, Release INFO: `(EP7 / CZN)` 게임별 링크
+
+### 의존 (mcp-cache-layer, 비 Git)
+- `folder_taxonomy.py`: `_FOLDER_DATE_RE` 정규식 수정 — "YYMMDD 타겟" 폴더명 지원
+- Test Result 134개 파일 적재 (Chaoszero 2,934파일 총 95.2MB)
+
+---
+
+## [1.5.7] - 2026-03-12
 
 ### 추가
 - **GDI 폴더 택소노미 인덱스** (`gdi_client.py`, `slack_bot.py`)

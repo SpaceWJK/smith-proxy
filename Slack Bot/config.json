@@ -209,7 +209,7 @@
       "items": [
         {
           "type": "group",
-          "group_name": "[각 프로젝트] 서비스 장애",
+          "group_name": "[각 프로젝트] <https://wiki.smilegate.net/pages/viewpage.action?pageId=552936235|서비스 장애>",
           "sub_items": [
             {"value": "g0_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
             {"value": "g0_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
@@ -217,7 +217,7 @@
         },
         {
           "type": "group",
-          "group_name": "[각 프로젝트] 핫픽스 내역",
+          "group_name": "[각 프로젝트] 핫픽스 내역 (<https://wiki.smilegate.net/pages/viewpage.action?pageId=462596667|EP7> / <https://wiki.smilegate.net/pages/viewpage.action?pageId=650589593|CZN>)",
           "sub_items": [
             {"value": "g1_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
             {"value": "g1_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
@@ -230,7 +230,7 @@
         },
         {
           "type": "group",
-          "group_name": "[각 프로젝트] Next Checklist",
+          "group_name": "[각 프로젝트] Next Checklist (<https://wiki.smilegate.net/pages/viewpage.action?pageId=119414270|EP7> / <https://wiki.smilegate.net/pages/viewpage.action?pageId=213149273|CZN>)",
           "sub_items": [
             {"value": "g3_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
             {"value": "g3_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
@@ -238,7 +238,7 @@
         },
         {
           "type": "group",
-          "group_name": "[각 프로젝트] 커뮤니티 이슈",
+          "group_name": "[각 프로젝트] <https://jira.smilegate.net/projects/SMQA/issues|커뮤니티 이슈>",
           "sub_items": [
             {"value": "g4_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
             {"value": "g4_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
@@ -246,7 +246,7 @@
         },
         {
           "type": "group",
-          "group_name": "[각 프로젝트] TEST INFO",
+          "group_name": "[각 프로젝트] TEST INFO (<https://wiki.smilegate.net/display/QASGP/INFO+%7C+Test+Result|EP7> / <https://wiki.smilegate.net/display/QASGP/CZ+%7C+TEST+INFO|CZN>)",
           "sub_items": [
             {"value": "g5_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
             {"value": "g5_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
@@ -254,7 +254,7 @@
         },
         {
           "type": "group",
-          "group_name": "[각 프로젝트] Release INFO",
+          "group_name": "[각 프로젝트] Release INFO (<https://wiki.smilegate.net/display/QASGP/INFO+%7C+Release+Version|EP7> / <https://wiki.smilegate.net/display/QASGP/CZ+%7C+Release+INFO|CZN>)",
           "sub_items": [
             {"value": "g6_epic7",  "text": "[에픽세븐]", "mentions": ["U07H17HB4MD"]},
             {"value": "g6_cazena", "text": "[카제나]",   "mentions": ["U07HFLMSYKV"]}
