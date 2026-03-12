@@ -5,6 +5,74 @@
 
 ---
 
+## 2026-03-12 (수) — 세션 20
+
+### 완료
+- **Phase 3: 폴더 택소노미 인덱스 — 핵심 모듈 + 통합**
+  - `folder_taxonomy.py` 신규 (~690줄, `mcp-cache-layer/scripts/`)
+    - 한영 별칭 사전: 게임명(카제나↔Chaoszero) + 카테고리(테스트결과↔Test Result)
+    - 날짜 정규화: "2/4", "2월4일", "0204" → MMDD "0204" → YYMMDD/YYYYMMDD 매칭
+    - 빌드 분류: 정규/핫픽스/범위/납품/클라이언트 등 10+ 실전 패턴
+    - `FolderIndex`: gdi-repo 스캔 → SQLite folder_index 테이블 빌드 (79폴더)
+    - `QueryParser`: 자연어 → {game, category, date_mmdd, build_type, build_num, source_type}
+  - `models.py` v3 마이그레이션: folder_index 테이블 + 인덱스 3개
+  - `load_gdi_local.py`: 적재 완료 후 `FolderIndex.build()` 자동 호출
+  - `gdi_client.py`: 택소노미 옵셔널 임포트 + 3개 공개 함수
+    - `taxonomy_search()`: 질의→폴더/파일 직접 해석 (MCP 호출 불필요)
+    - `format_taxonomy_results()`: Slack 포맷
+    - `get_taxonomy_context_text()`: Claude AI용 컨텍스트 추출
+  - `slack_bot.py`: 택소노미 우선 → MCP 폴백 (통합검색 + 2-part 모드)
+  - 통합 테스트 3건: 폴더/파일 해석 정상 확인
+
+- **Phase 2: 로컬 원본 파싱 + 적재** (이전 세션에서 완료)
+  - `file_parsers.py`: XLSX/TSV/PPTX/PNG 4형식 파서 (전수 배치 0에러)
+  - `load_gdi_local.py`: Chaoszero 2,660파일 적재 완료
+  - GDI MCP 서버 7,046줄 분석 → 다운로드 불가 확인
+
+### 미완료 / 후속
+- **택소노미 질의 해석 고도화**: 키워드+질문 결합 해석 필요
+  - 현재: `검색어` 부분만 택소노미 전달
+  - 개선: `질문`에서도 카테고리 힌트("테스트 결과"→Test Result) 추출하여 합산
+- **e2e 시뮬레이션 테스트**: Slack 실사용 환경에서 Claude 응답까지 미검증
+- **Epicseven/Lordnine 적재**: Chaoszero만 완료, 나머지 게임 미적재
+
+### 로드맵
+
+| # | 작업 | 상태 | 비고 |
+|---|------|------|------|
+| **Phase 1** | MCP 청크 재조합 고도화 | 🔜 진행 예정 | `load_gdi.py` `_reconstruct_*()` |
+| **Phase 2** | 로컬 원본 파싱 | ✅ 완료 | 2,660파일 0에러 |
+| **Phase 3** | 폴더 택소노미 인덱스 | ✅ 핵심 완료 | 질의해석 고도화 남음 |
+
+---
+
+## 2026-03-12 (수) — 세션 19
+
+### 완료
+- **GDI 파일 파서 완성** (`mcp-cache-layer/scripts/file_parsers.py`)
+  - TSV `csv.field_size_limit` 오류 수정 (10MB로 확장) — 대용량 스토리 TSV 파싱 성공
+  - 전체 배치 테스트 통과: XLSX 89건, TSV 727건(91,769행), PPTX 95건 — **0 에러**
+  - Q&A 시뮬레이션 5건 검증: QA BVT Summary, 기획서, actor TSV, PPTX 기획서, 대용량 스토리
+- **`load_gdi_local.py` 신규** (`mcp-cache-layer/scripts/`)
+  - 로컬 `gdi-repo/` 디렉토리 순회 → `file_parsers.py`로 파싱 → SQLite 저장
+  - `--delta` (신규만), `--test` (10건), `--all`, `--stats` CLI 지원
+  - GDI 원본 파일 다운로드 가능 시 즉시 사용 가능한 상태
+- **GDI MCP 원본 파일 다운로드 가능 여부 조사**
+  - GDI MCP 서버 소스코드 7,046줄 전수 분석 → **다운로드 불가 확인**
+  - 9개 도구 모두 텍스트 청크만 반환, 바이너리 파일 스트리밍/다운로드 기능 없음
+
+### 의사결정
+- **로컬 원본 파싱 방식 → Phase 2로 진행** (이전 보류에서 변경)
+- **폴더 택소노미 인덱스 → Phase 3로 구현 완료**
+
+### GDI 폴더 구조 분석 (택소노미 설계용)
+- **날짜 형식 혼재**: Chaoszero Test Result=YYMMDD(260204), Update Review=YYYYMMDD(20260204)
+- **빌드 명명 패턴**: `3-1차`~`3-9차`, `Hotfix 2차`, `정규 3차`, `1차빌드`
+- **카테고리**: Test Result, TSV, Update Review, Live Issue (게임별 상이)
+- 폴더 트리 데이터: `mcp-cache-layer/cache/exports/gdi_folder_tree.json`
+
+---
+
 ## 2026-03-11 (화) — 세션 18
 
 ### 완료

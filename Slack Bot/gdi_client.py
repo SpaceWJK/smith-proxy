@@ -42,6 +42,10 @@ try:
     _cache_path = "D:/Vibe Dev/QA Ops/mcp-cache-layer"
     if _cache_path not in _sys.path:
         _sys.path.insert(0, _cache_path)
+    # scripts/ 경로도 추가 (folder_taxonomy 임포트용)
+    _scripts_path = _cache_path + "/scripts"
+    if _scripts_path not in _sys.path:
+        _sys.path.insert(0, _scripts_path)
     from src.cache_manager import CacheManager as _CacheManager
     from src.cache_logger import ops_log as _ops_log_mod, perf as _perf_mod
     from src import config as _cache_config
@@ -56,6 +60,18 @@ try:
                 _GDI_FOLDER_TTL, _GDI_FILE_TTL, _GDI_MEM_TTL)
 except Exception as _e:
     logger.info("[gdi] 캐시 레이어 미사용: %s", _e)
+
+# ── 폴더 택소노미 인덱스 (옵셔널) ─────────────────────────────────────────
+_TAXONOMY_ENABLED = False
+_folder_index = None
+
+try:
+    from folder_taxonomy import FolderIndex as _FolderIndex, QueryParser as _QueryParser
+    _folder_index = _FolderIndex()
+    _TAXONOMY_ENABLED = True
+    logger.info("[gdi] 폴더 택소노미 로드 완료")
+except Exception as _te:
+    logger.info("[gdi] 폴더 택소노미 미사용: %s", _te)
 
 # ── L1 인메모리 캐시 ─────────────────────────────────────────────────────
 _GDI_MEM_CACHE: dict = {}  # {key: (data, timestamp)}
@@ -88,12 +104,207 @@ _CHUNK_META_RE = re.compile(
     re.MULTILINE,
 )
 
+# PPTX/XLSX 메타데이터 접두사 패턴
+_PPTX_PREFIX_RE = re.compile(
+    r"^Mode: generic_pptx > FileType: .+? > ContentType: generic_pptx > Slide: (\d+) > "
+)
+_PPTX_EMPTY_NOTES_RE = re.compile(r"\n?### Notes:\s*$")
+_XLSX_PREFIX = "Mode: generic_xlsx"
+
+# 시트/테이블당 최대 행 수
+MAX_TABLE_ROWS = 500
+
 
 def _clean_chunk_text(text: str) -> str:
     """GDI 청크의 메타데이터 접두사(index_mode/file_type/content_type)를 제거한다."""
     if not text:
         return text
     return _CHUNK_META_RE.sub("", text).strip()
+
+
+def _clean_any_chunk(text: str) -> str:
+    """모든 GDI 청크 형식의 메타데이터를 제거한다 (단일 청크용)."""
+    if not text:
+        return text
+    # TSV 메타데이터
+    text = _CHUNK_META_RE.sub("", text)
+    # PPTX 접두사 → 슬라이드 번호만 유지
+    m = _PPTX_PREFIX_RE.match(text)
+    if m:
+        text = f"[Slide {m.group(1)}] {text[m.end():]}"
+        text = _PPTX_EMPTY_NOTES_RE.sub("", text)
+    # XLSX 접두사 → 시트+행 정보만 유지
+    elif text.startswith(_XLSX_PREFIX):
+        parts = text.split(" > ")
+        sheet = ""
+        data_start = 0
+        for i, part in enumerate(parts):
+            if part.startswith("Sheet: "):
+                sheet = part[7:]
+            elif part.startswith("Row: "):
+                data_start = i + 1
+                break
+        if data_start > 0:
+            data_fields = " > ".join(parts[data_start:])
+            text = f"[{sheet}] {data_fields}"
+    return text.strip()
+
+
+# ── 파서: 파일 형식별 재구성 (사람이 보는 형태) ──────────────────────────
+
+def _parse_xlsx_chunk(text: str):
+    """XLSX 청크 → (sheet, row_num, {col: val})"""
+    lines = text.split("\n")
+    first_line = lines[0]
+
+    if not first_line.startswith(_XLSX_PREFIX):
+        return None, -1, {}
+
+    parts = first_line.split(" > ")
+    sheet = ""
+    row_num = -1
+    data_start = 0
+
+    for i, part in enumerate(parts):
+        if part.startswith("Sheet: "):
+            sheet = part[7:]
+        elif part.startswith("Row: "):
+            try:
+                row_num = int(part[5:])
+            except ValueError:
+                pass
+            data_start = i + 1
+            break
+
+    cols = {}
+    data_parts = parts[data_start:]
+    for j, part in enumerate(data_parts):
+        idx = part.find(": ")
+        if idx > 0:
+            key = part[:idx].strip()
+            val = part[idx + 2:].strip()
+            if j == len(data_parts) - 1 and len(lines) > 1:
+                extra = " ".join(l.strip() for l in lines[1:] if l.strip())
+                if extra:
+                    val += " " + extra
+            cols[key] = val
+
+    return sheet, row_num, cols
+
+
+def _reconstruct_xlsx(chunks: list[str]) -> str:
+    """XLSX 청크 → 시트별 마크다운 테이블."""
+    from collections import OrderedDict
+
+    sheets = OrderedDict()
+    sheet_headers = OrderedDict()
+
+    for chunk in chunks:
+        sheet, row_num, cols = _parse_xlsx_chunk(chunk)
+        if sheet is None or not cols:
+            continue
+        if sheet not in sheets:
+            sheets[sheet] = []
+            sheet_headers[sheet] = list(cols.keys())
+        else:
+            for k in cols.keys():
+                if k not in sheet_headers[sheet]:
+                    sheet_headers[sheet].append(k)
+        sheets[sheet].append(cols)
+
+    if not sheets:
+        return "\n".join(chunks)
+
+    result = []
+    for sheet_name, rows in sheets.items():
+        headers = sheet_headers[sheet_name]
+        result.append(f"## Sheet: {sheet_name}\n")
+        result.append("| " + " | ".join(headers) + " |")
+        result.append("|" + "|".join("---" for _ in headers) + "|")
+        for i, row in enumerate(rows):
+            if i >= MAX_TABLE_ROWS:
+                result.append(f"\n_(... 외 {len(rows) - MAX_TABLE_ROWS}행 생략)_")
+                break
+            vals = [row.get(h, "").replace("|", "\\|").replace("\n", " ")
+                    for h in headers]
+            result.append("| " + " | ".join(vals) + " |")
+        result.append("")
+
+    return "\n".join(result)
+
+
+def _reconstruct_pptx(chunks: list[str]) -> str:
+    """PPTX 청크 → 슬라이드별 정제 문서."""
+    parts = []
+    for chunk in chunks:
+        m = _PPTX_PREFIX_RE.match(chunk)
+        if m:
+            slide_num = m.group(1)
+            content = chunk[m.end():]
+        else:
+            content = chunk
+            slide_num = None
+        content = _PPTX_EMPTY_NOTES_RE.sub("", content).strip()
+        if not content:
+            continue
+        if slide_num:
+            parts.append(f"## Slide {slide_num}\n{content}")
+        else:
+            parts.append(content)
+    return "\n\n".join(parts)
+
+
+def _reconstruct_tsv(chunks: list[str]) -> str:
+    """TSV 청크 → 마크다운 테이블."""
+    all_rows = []
+    all_headers = []
+
+    for chunk in chunks:
+        cleaned = _CHUNK_META_RE.sub("", chunk).strip()
+        if not cleaned:
+            continue
+        cols = {}
+        for line in cleaned.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            idx = line.find(": ")
+            if idx > 0:
+                key = line[:idx]
+                val = line[idx + 2:]
+                cols[key] = val
+                if key not in all_headers:
+                    all_headers.append(key)
+        if cols:
+            all_rows.append(cols)
+
+    if not all_rows or not all_headers:
+        return "\n".join(chunks)
+
+    result = []
+    result.append("| " + " | ".join(all_headers) + " |")
+    result.append("|" + "|".join("---" for _ in all_headers) + "|")
+    for i, row in enumerate(all_rows):
+        if i >= MAX_TABLE_ROWS:
+            result.append(f"\n_(... 외 {len(all_rows) - MAX_TABLE_ROWS}행 생략)_")
+            break
+        vals = [row.get(h, "").replace("|", "\\|").replace("\n", " ")
+                for h in all_headers]
+        result.append("| " + " | ".join(vals) + " |")
+    return "\n".join(result)
+
+
+def _reconstruct_body(chunks: list[str], source_type: str) -> str:
+    """파일 형식에 맞게 청크를 사람이 보는 형태로 재구성."""
+    if not chunks:
+        return ""
+    if source_type == "generic_xlsx":
+        return _reconstruct_xlsx(chunks)
+    elif source_type == "generic_pptx":
+        return _reconstruct_pptx(chunks)
+    elif source_type == "generic_tsv":
+        return _reconstruct_tsv(chunks)
+    return "\n".join(_clean_chunk_text(c) for c in chunks if c.strip())
 
 # ── GDI 조회 전용 로거 (logs/gdi_query.log) ──────────────────────────────
 _gdi_query_logger: "logging.Logger | None" = None
@@ -382,8 +593,8 @@ def format_search_results(data: dict, query: str) -> str:
         coll  = r.get("_collection", "")
         score = r.get("_score", 0)
 
-        # 청크 내용 요약 (첫 150자)
-        chunk = r.get("chunk_content", "")
+        # 청크 내용 요약 (메타데이터 정제 + 첫 150자)
+        chunk = _clean_any_chunk(r.get("chunk_content", ""))
         if len(chunk) > 150:
             chunk = chunk[:150] + "..."
 
@@ -423,11 +634,11 @@ def format_file_search(data: dict, query: str) -> str:
     if fpath:
         lines.append(f"📁 `{fpath}`")
 
-    # 청크 내용 표시 (최대 5개)
+    # 청크 내용 표시 (최대 5개, 메타데이터 정제)
     if chunks:
         lines.append(f"\n*내용 ({len(chunks)}개 청크 중 최대 5개):*")
         for c in chunks[:5]:
-            content = c.get("chunk_content", c.get("content", ""))
+            content = _clean_any_chunk(c.get("chunk_content", c.get("content", "")))
             if len(content) > 200:
                 content = content[:200] + "..."
             lines.append(f"```\n{content}\n```")
@@ -494,6 +705,7 @@ def get_file_content_text(data: dict) -> str:
     """
     search_by_filename 결과에서 파일 내용 텍스트를 추출합니다.
     Claude AI 답변 생성에 사용됩니다.
+    파일 형식(xlsx/pptx/tsv)에 따라 마크다운 테이블/슬라이드 문서로 재구성합니다.
 
     Returns: 파일 내용 텍스트 (없으면 빈 문자열)
     """
@@ -504,25 +716,43 @@ def get_file_content_text(data: dict) -> str:
     if not chunks:
         return ""
 
-    parts = []
-    for c in chunks:
-        content = _clean_chunk_text(c.get("chunk_content", c.get("content", "")))
-        if content:
-            parts.append(content)
+    # source_type 감지 (file 메타데이터 또는 첫 청크 내용에서)
+    source_type = ""
+    file_info = data.get("file", {})
+    if file_info:
+        source_type = file_info.get("source_type", "")
+    if not source_type and chunks:
+        first = chunks[0].get("chunk_content", chunks[0].get("content", ""))
+        if first.startswith(_XLSX_PREFIX):
+            source_type = "generic_xlsx"
+        elif _PPTX_PREFIX_RE.match(first):
+            source_type = "generic_pptx"
 
-    return "\n".join(parts)
+    # raw 청크 텍스트 수집
+    raw_chunks = []
+    for c in chunks:
+        text = c.get("chunk_content", c.get("content", ""))
+        if text and text.strip():
+            raw_chunks.append(text)
+
+    # 형식별 재구성
+    if source_type and raw_chunks:
+        return _reconstruct_body(raw_chunks, source_type)
+
+    # 폴백: 단순 정제
+    return "\n".join(_clean_chunk_text(t) for t in raw_chunks if t.strip())
 
 
 def get_file_content_full(file_name: str, game_name: str = "",
                           mcp: "McpSession | None" = None) -> str:
     """파일 전체 텍스트 반환 (캐시 우선 → MCP 폴백).
 
-    1) SQLite doc_content.body_text 조회 (일괄 적재 데이터)
-    2) 없으면 MCP search_by_filename 전체 페이지 수집
+    1) SQLite doc_content.body_text 조회 (일괄 적재 데이터 — 이미 재구성됨)
+    2) 없으면 MCP search_by_filename 전체 페이지 수집 → 형식별 재구성
 
     Returns: 파일 전체 텍스트 (없으면 빈 문자열)
     """
-    # ── 1단계: 캐시 조회 (일괄 적재 데이터) ──
+    # ── 1단계: 캐시 조회 (일괄 적재 데이터 — load_gdi.py에서 이미 재구성됨) ──
     if _GDI_CACHE_ENABLED and _gdi_cache:
         try:
             node = _gdi_cache.get_node_by_title(file_name, source_type="gdi")
@@ -530,15 +760,16 @@ def get_file_content_full(file_name: str, game_name: str = "",
                 content = _gdi_cache.get_content(node["id"])
                 if content and content.get("body_text"):
                     logger.debug("[gdi] get_file_content_full: 캐시 HIT (%s)", file_name)
-                    return _clean_chunk_text(content["body_text"])
+                    return content["body_text"]  # 이미 재구성된 데이터
         except Exception as e:
             logger.debug("[gdi] 캐시 조회 오류: %s", e)
 
-    # ── 2단계: MCP 전체 청크 수집 (폴백) ──
+    # ── 2단계: MCP 전체 청크 수집 (폴백) → 형식별 재구성 ──
     if mcp is None:
         mcp = McpSession(url=GDI_MCP_URL, label="gdi")
 
-    all_text = []
+    raw_chunks = []
+    source_type = ""
     page = 1
     while True:
         args = {
@@ -563,11 +794,17 @@ def get_file_content_full(file_name: str, game_name: str = "",
         if not isinstance(data, dict):
             break
 
+        # source_type 감지 (첫 페이지에서만)
+        if not source_type:
+            file_info = data.get("file", {})
+            if file_info:
+                source_type = file_info.get("source_type", "")
+
         chunks = data.get("chunks", [])
         for c in chunks:
-            text = _clean_chunk_text(c.get("chunk_content", ""))
-            if text:
-                all_text.append(text)
+            text = c.get("chunk_content", "")
+            if text and text.strip():
+                raw_chunks.append(text)
 
         pagination = data.get("pagination", {})
         if not pagination.get("has_next"):
@@ -575,13 +812,146 @@ def get_file_content_full(file_name: str, game_name: str = "",
         page += 1
         time.sleep(0.2)
 
-    return "\n".join(all_text)
+    if not raw_chunks:
+        return ""
+
+    # source_type 자동 감지 (메타데이터 없을 때 첫 청크로 추론)
+    if not source_type and raw_chunks:
+        first = raw_chunks[0]
+        if first.startswith(_XLSX_PREFIX):
+            source_type = "generic_xlsx"
+        elif _PPTX_PREFIX_RE.match(first):
+            source_type = "generic_pptx"
+
+    # 형식별 재구성
+    return _reconstruct_body(raw_chunks, source_type)
+
+
+# ── 폴더 택소노미 검색 ──────────────────────────────────────────────────
+
+def taxonomy_search(query: str, max_files: int = 20) -> dict | None:
+    """자연어 질의를 폴더 택소노미로 해석하여 캐시 DB에서 직접 결과를 반환한다.
+
+    택소노미가 비활성이거나, 게임명이 파싱되지 않으면 None 반환 (MCP 폴백).
+
+    Returns:
+        {"folders": list[dict], "files": list[dict], "parsed": dict}
+        또는 None (해석 실패)
+    """
+    if not _TAXONOMY_ENABLED or not _folder_index:
+        return None
+
+    try:
+        parsed = _QueryParser.parse(query)
+        # 최소 게임명이 있어야 택소노미 적용
+        if not parsed.get("game"):
+            return None
+
+        folders = _folder_index.resolve_query(query)
+        if not folders:
+            return None
+
+        files = _folder_index.get_files_with_content(query, max_files=max_files)
+
+        logger.info(
+            "[gdi] 택소노미 해석 성공: game=%s, cat=%s, date=%s, "
+            "build=%s → folders=%d, files=%d",
+            parsed.get("game"), parsed.get("category"),
+            parsed.get("date_mmdd"), parsed.get("build"),
+            len(folders), len(files),
+        )
+
+        return {
+            "folders": folders,
+            "files": files,
+            "parsed": parsed,
+        }
+    except Exception as e:
+        logger.warning("[gdi] 택소노미 검색 오류: %s", e)
+        return None
+
+
+def format_taxonomy_results(tax_data: dict, query: str) -> str:
+    """taxonomy_search() 결과 → Slack 포맷 텍스트."""
+    if not tax_data:
+        return ""
+
+    folders = tax_data.get("folders", [])
+    files = tax_data.get("files", [])
+    parsed = tax_data.get("parsed", {})
+
+    lines = [f"*🗂️ '{query}' 택소노미 검색 결과*\n"]
+
+    # 파싱 정보
+    info_parts = []
+    if parsed.get("game"):
+        info_parts.append(f"게임: {parsed['game']}")
+    if parsed.get("category"):
+        info_parts.append(f"카테고리: {parsed['category']}")
+    if parsed.get("date_mmdd"):
+        mmdd = parsed["date_mmdd"]
+        info_parts.append(f"날짜: {mmdd[:2]}/{mmdd[2:]}")
+    if parsed.get("build"):
+        b = parsed["build"]
+        info_parts.append(f"빌드: {b.get('type', '')} {b.get('numbers', [])}")
+    if info_parts:
+        lines.append(f"📌 {' | '.join(info_parts)}\n")
+
+    # 폴더 목록 (최대 10개)
+    lines.append(f"*📁 매칭 폴더 ({len(folders)}개):*")
+    for f in folders[:10]:
+        fc = f.get("file_count", 0)
+        lines.append(f"• `{f['full_path']}` ({fc}파일)")
+    if len(folders) > 10:
+        lines.append(f"  _... 외 {len(folders) - 10}개_")
+
+    # 파일 목록 (최대 15개)
+    if files:
+        lines.append(f"\n*📄 파일 ({len(files)}개):*")
+        for i, f in enumerate(files[:15], 1):
+            title = f.get("title", "?")
+            cc = f.get("char_count", 0)
+            lines.append(f"{i}. *{title}* ({cc:,}자)")
+        if len(files) > 15:
+            lines.append(f"  _... 외 {len(files) - 15}개_")
+
+    return "\n".join(lines)
+
+
+def get_taxonomy_context_text(tax_data: dict, max_chars: int = 50000) -> str:
+    """taxonomy_search() 결과에서 Claude AI용 컨텍스트 텍스트를 추출한다."""
+    if not tax_data:
+        return ""
+
+    files = tax_data.get("files", [])
+    if not files:
+        return ""
+
+    parts = []
+    total_chars = 0
+    for f in files:
+        title = f.get("title", "?")
+        body = f.get("body_text", "")
+        source_id = f.get("source_id", "")
+        if not body:
+            continue
+        section = f"[파일: {title}]\n경로: {source_id}\n내용:\n{body}"
+        if total_chars + len(section) > max_chars:
+            remaining = max_chars - total_chars
+            if remaining > 200:
+                parts.append(section[:remaining] + "\n\n_(본문 잘림)_")
+            break
+        parts.append(section)
+        total_chars += len(section)
+
+    return "\n\n---\n\n".join(parts)
 
 
 def get_search_context_text(data: dict) -> str:
     """
     unified_search 결과에서 컨텍스트 텍스트를 추출합니다.
     Claude AI 답변 생성에 사용됩니다.
+    각 청크의 형식(xlsx/pptx/tsv)에 맞게 메타데이터를 정제합니다.
 
     Returns: 검색 결과 컨텍스트 텍스트 (없으면 빈 문자열)
     """
@@ -596,7 +966,7 @@ def get_search_context_text(data: dict) -> str:
     for r in results[:5]:
         fname   = r.get("file_name", "?")
         fpath   = r.get("file_path", "")
-        chunk   = _clean_chunk_text(r.get("chunk_content", ""))
+        chunk   = _clean_any_chunk(r.get("chunk_content", ""))
         parts.append(f"[파일: {fname}]\n경로: {fpath}\n내용: {chunk}")
 
     return "\n\n---\n\n".join(parts)

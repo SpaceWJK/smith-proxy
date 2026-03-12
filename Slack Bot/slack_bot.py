@@ -670,7 +670,14 @@ def _gdi_help(respond):
 
 
 def _gdi_search(client, query: str, respond):
-    """통합 검색 결과 표시"""
+    """통합 검색 결과 표시 (택소노미 우선 → MCP 폴백)"""
+    # 1. 택소노미 해석 시도
+    tax_data = gc.taxonomy_search(query)
+    if tax_data and tax_data.get("folders"):
+        respond(text=gc.format_taxonomy_results(tax_data, query))
+        return
+
+    # 2. MCP 폴백
     data, err = client.unified_search(query)
     if err:
         respond(text=f"❌ 검색 실패\n```\n{err}\n```")
@@ -1770,6 +1777,22 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
 
             if search_query and question:
                 t0 = time.time()
+
+                # ── 택소노미 우선 해석 ─────────────────────────
+                tax_data = gc.taxonomy_search(search_query)
+                if tax_data and tax_data.get("files"):
+                    context = gc.get_taxonomy_context_text(tax_data)
+                    if context:
+                        _gdi_ask_claude(context, search_query, question, respond)
+                        gc.log_gdi_query(
+                            user_id=user_id, user_name=user_name,
+                            action="ask_claude", query=text,
+                            result=f"택소노미: {search_query}",
+                            elapsed_ms=int((time.time() - t0) * 1000),
+                            cache_status="TAXONOMY",
+                        )
+                        return
+
                 # ── GDI 키워드 규칙 매칭 ─────────────────────
                 from keyword_rules import match_gdi_keyword_rule
                 gdi_rule = match_gdi_keyword_rule(search_query)

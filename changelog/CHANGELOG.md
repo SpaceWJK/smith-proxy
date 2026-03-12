@@ -18,7 +18,23 @@
 
 ---
 
-## [1.5.6] - 2026-03-11 <- 현재
+## [1.5.7] - 2026-03-12 <- 현재
+
+### 추가
+- **GDI 폴더 택소노미 인덱스** (`gdi_client.py`, `slack_bot.py`)
+  - 자연어 질의 → 폴더/파일 자동 해석 (MCP 호출 없이 로컬 DB 직접 조회)
+  - 한영 별칭(카제나↔Chaoszero), 날짜(2/4→0204), 빌드(3차/핫픽스) 정규화
+  - `gdi_client.py`: `taxonomy_search()`, `format_taxonomy_results()`, `get_taxonomy_context_text()` 3개 함수
+  - `slack_bot.py`: 택소노미 우선 검색 → MCP 폴백 구조 적용 (통합검색 + AI 질의 모드)
+  - `gdi_client.py`: XLSX/PPTX/TSV 청크 메타데이터 정제 함수 (`_clean_any_chunk`, `_parse_xlsx_chunk` 등)
+
+### 의존
+- `mcp-cache-layer/scripts/folder_taxonomy.py` (핵심 모듈, ~690줄)
+- `mcp-cache-layer/src/models.py` v3 마이그레이션 (folder_index 테이블)
+
+---
+
+## [1.5.6] - 2026-03-11
 
 ### 개선
 - **GDI 청크 메타데이터 정제** (`gdi_client.py`, `load_gdi.py`)
