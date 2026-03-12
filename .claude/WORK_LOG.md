@@ -5,6 +5,34 @@
 
 ---
 
+## 2026-03-12 (수) — 세션 23
+
+### 완료
+- **GDI 출처(source label) 표시 개선** (`slack_bot.py`)
+  - 2-part/택소노미/통합검색 3개 경로 모두 실제 파일 경로 기반으로 변경
+  - `search_data = None` 초기화 누락 버그 수정
+
+- **키워드 규칙 대폭 확장** (hot reload)
+  - `gdi_keyword_rules.json` v1.1: 1→17 규칙 (밸런스/스킬/장비/가챠/상점 등)
+  - `jira_keyword_rules.json` v1.1: 2→10 규칙 (시간필터/미배정/버그/우선순위)
+  - `wiki_keyword_rules.json` v1.1: 문서 보강
+
+- **GDI MCP/S3 장애 분석** (코드 변경 없음)
+  - S3 파일 업로드 정상 확인 (14,584건, 한글 인코딩 정상)
+  - curl 한글 깨짐 → Windows CP949 터미널 표시 이슈 (S3 데이터 이상 아님)
+  - **OpenSearch 인덱스 3개 전체 소실** 확인 (gdi_generic_xlsx/tsv/pptx 모두 404)
+  - → LLMOps 팀에 인덱스 복구 + 리인덱싱 요청 필요
+
+- **v1.6.1 릴리즈** + 문서 현행화 (CHANGELOG, WORK_LOG, DEV_RULES, README)
+
+- **S3 업로드/다운로드 경량 페이지** 생성 (`tools/s3_manager.html`)
+
+### 미완료 / 후속
+- OpenSearch 인덱스 복구 요청 (LLMOps 팀)
+- `GDI_MODE=cloud` 전환 (OpenSearch 복구 후)
+
+---
+
 ## 2026-03-12 (수) — 세션 22
 
 ### 완료

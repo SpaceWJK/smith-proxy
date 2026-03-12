@@ -1,6 +1,6 @@
 # Slack Bot 개발 규칙
-> **Version**: 1.5.0
-> **Last Updated**: 2026-03-10
+> **Version**: 1.6.1
+> **Last Updated**: 2026-03-12
 > **Author**: Claude (AI Assistant)
 
 ---
@@ -37,7 +37,10 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트 (Git 레포)
 │   ├── missed_tracker.py          ← 전일 미체크 항목 추적
 │   ├── schedule_monitor.py        ← 스케줄 모니터링
 │   ├── config.json                ← 스케줄 정의 + 사용자 매핑
-│   └── wiki_search_rules.json     ← 페이지별 검색 전략 예외
+│   ├── wiki_search_rules.json     ← 페이지별 검색 전략 예외
+│   ├── gdi_keyword_rules.json     ← GDI 키워드→검색 매핑 (hot reload)
+│   ├── jira_keyword_rules.json    ← Jira 키워드→JQL 매핑 (hot reload)
+│   └── wiki_keyword_rules.json    ← Wiki 키워드→페이지 매핑 (hot reload)
 ├── _legacy/                        ← 레거시 파일 대기소 (만료 후 삭제)
 │   └── EXPIRY.md                  ← 이동일, 삭제 예정일, 파일 목록
 ├── venv/                           ← Python 가상환경
@@ -85,7 +88,7 @@ D:\Vibe Dev\QA Ops\mcp-cache-layer\ ← MCP 캐시 레이어 (별도 레포)
   - MAJOR: 아키텍처 변경, 호환성 깨짐
   - MINOR: 새 기능 추가
   - PATCH: 버그 수정, 작은 개선
-- 현재 버전: **v1.4.2** (changelog/CHANGELOG.md 참조)
+- 현재 버전: **v1.6.1** (changelog/CHANGELOG.md 참조)
 - 버전 변경 시 CHANGELOG.md 반드시 업데이트
 
 ## 4. 배포 규칙
@@ -93,13 +96,13 @@ D:\Vibe Dev\QA Ops\mcp-cache-layer\ ← MCP 캐시 레이어 (별도 레포)
 ### 로컬 PC (커맨드 핸들러)
 - 모드: `python slack_bot.py --commands-only`
 - 역할: 슬래시 커맨드(/wiki, /gdi, /jira), 체크리스트 토글 핸들러
-- 시작: `start_bot.bat` (venv 활성화 포함)
-- 백그라운드 실행: WMI 방식 (Start-Process는 타임아웃 이슈)
+- 시작: `pythonw.exe` 직접 실행 (콘솔 창 없음)
   ```powershell
   $wmi = [wmiclass]"Win32_Process"
-  $r = $wmi.Create("cmd.exe /c `"D:\Vibe Dev\Slack Bot\start_bot.bat`"", "D:\Vibe Dev\Slack Bot")
+  $r = $wmi.Create('"D:\Vibe Dev\Slack Bot\venv\Scripts\pythonw.exe" "D:\Vibe Dev\Slack Bot\Slack Bot\slack_bot.py" --commands-only', "D:\Vibe Dev\Slack Bot\Slack Bot")
   ```
-- 자동 시작: Windows 작업 스케줄러 `SlackQABot` (로그인 1분 후)
+- 자동 시작: Windows 작업 스케줄러 `SlackQABot` (로그인 시 pythonw.exe 직접 실행)
+- **python.exe + start_bot.bat 방식은 사용 금지** (CMD 창 뜨는 원인)
 
 ### Railway (스케줄러)
 - 모드: `python slack_bot.py --scheduler-only`
