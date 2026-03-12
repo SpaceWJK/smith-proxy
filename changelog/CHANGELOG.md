@@ -18,7 +18,23 @@
 
 ---
 
-## [1.5.8] - 2026-03-12 <- 현재
+## [1.5.9] - 2026-03-12 <- 현재
+
+### 추가
+- **GDI 로컬/클라우드 모드 스위치** (`gdi_client.py`)
+  - `GDI_MODE` 환경변수 (`local` | `cloud`) 기반 전환 시스템
+  - local 모드: 캐시(SQLite) 전용, MCP 폴백 완전 차단
+  - cloud 모드: 기존 동작 유지 (캐시 → MCP 폴백)
+  - `_local_unified_search()`: SQLite LIKE 검색으로 MCP 대체
+  - `.env` 변경만으로 모드 전환 가능 (재시작 필요)
+
+### 의존 (mcp-cache-layer, 비 Git)
+- `auto_sync.py`: `GDI_MODE`에 따라 `load_gdi_local` / `load_gdi` 자동 선택
+- auto_sync 주기 변경: 4시간 → 8시간 (08:00, 16:00, 00:00)
+
+---
+
+## [1.5.8] - 2026-03-12
 
 ### 개선
 - **택소노미 질의 해석 고도화** (`gdi_client.py`, `slack_bot.py`)

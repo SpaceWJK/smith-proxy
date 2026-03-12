@@ -5,6 +5,41 @@
 
 ---
 
+## 2026-03-12 (수) — 세션 22
+
+### 완료
+- **GDI 로컬/클라우드 모드 스위치** (`gdi_client.py`)
+  - `GDI_MODE` 환경변수 (`local` | `cloud`) 기반 전환 시스템
+  - local 모드: 캐시(SQLite) 전용, MCP 폴백 완전 차단
+  - cloud 모드: 기존 동작 유지 (캐시 → MCP 폴백)
+  - MCP 호출 4개 지점 모드 분기:
+    - `unified_search()`: local → SQLite LIKE 검색 대체
+    - `search_by_filename()`: local → 캐시 전용
+    - `list_files_in_folder()`: local → 캐시 전용
+    - `get_file_content_full()`: local → 캐시 전용
+  - 검증: unified_search 10건 반환, get_file_content_full 19,735자 반환
+
+- **auto_sync.py 모드 스위치** (`mcp-cache-layer`)
+  - `GDI_MODE`에 따라 `load_gdi_local` / `load_gdi` 자동 선택
+  - 드라이런 검증: 2,794건 스캔, 오류 0
+
+- **auto_sync 주기 변경**: 4시간→8시간 (08:00, 16:00, 00:00)
+- **`.env` 설정 추가**: `GDI_MODE=local`
+
+### 미완료 / 후속
+- **Epicseven/Lordnine 적재**: Chaoszero만 완료
+- **GDI MCP 서버 동기화 이슈 해결 시**: `GDI_MODE=cloud` 전환
+
+### 로드맵
+
+| # | 작업 | 상태 | 비고 |
+|---|------|------|------|
+| **Phase 1** | GDI 로컬/클라우드 모드 스위치 | ✅ 완료 | `GDI_MODE` 환경변수 기반 전환 |
+| **Phase 2** | 로컬 원본 파싱 | ✅ 완료 | 2,934파일 0에러 (Test Result 포함) |
+| **Phase 3** | 폴더 택소노미 인덱스 | ✅ 완료 | 질의해석 고도화 + 날짜 정규식 수정 완료 |
+
+---
+
 ## 2026-03-12 (수) — 세션 21
 
 ### 완료

@@ -56,8 +56,8 @@ try:
     _GDI_FILE_TTL = getattr(_cache_config, "GDI_FILE_TTL_HOURS", 24)
     _GDI_MEM_TTL = getattr(_cache_config, "GDI_MEM_TTL_SEC", 300)
     _GDI_CACHE_ENABLED = True
-    logger.info("[gdi] 캐시 레이어 로드 완료 (folder TTL=%dh, file TTL=%dh, mem TTL=%ds)",
-                _GDI_FOLDER_TTL, _GDI_FILE_TTL, _GDI_MEM_TTL)
+    logger.info("[gdi] 캐시 레이어 로드 완료 (folder TTL=%dh, file TTL=%dh, mem TTL=%ds, mode=%s)",
+                _GDI_FOLDER_TTL, _GDI_FILE_TTL, _GDI_MEM_TTL, GDI_MODE)
 except Exception as _e:
     logger.info("[gdi] 캐시 레이어 미사용: %s", _e)
 
@@ -92,6 +92,11 @@ def _mem_set(key: str, data):
 GDI_MCP_URL = os.getenv(
     "GDI_MCP_URL", "http://mcp-dev.sginfra.net/game-doc-insight-mcp"
 )
+
+# ── GDI 모드 스위치 ──────────────────────────────────────────────────────
+# "local"  : 캐시(SQLite) 전용, MCP 폴백 차단 (gdi-repo/ 로컬 파일 기반)
+# "cloud"  : 기존 동작 유지 (캐시 → MCP 폴백)
+GDI_MODE = os.getenv("GDI_MODE", "local")
 
 # ── GDI 청크 메타데이터 정제 ──────────────────────────────────────────────
 # GDI MCP가 반환하는 각 청크에는 인덱싱용 메타데이터 접두사가 붙는다:
@@ -472,10 +477,16 @@ class GdiClient:
                        top_k: int = 10) -> tuple:
         """
         크로스 컬렉션 통합 검색.
-        (캐시 미적용 — 검색 결과는 매번 달라질 수 있음)
+        - local 모드: SQLite 캐시 DB에서 LIKE 검색
+        - cloud 모드: MCP unified_search 호출
 
         Returns: (parsed_data, error_str)
         """
+        # ── local 모드: SQLite 캐시에서 직접 검색 ──
+        if GDI_MODE == "local":
+            return self._local_unified_search(query_text, game_name, top_k)
+
+        # ── cloud 모드: MCP 호출 ──
         args = {"query_text": query_text, "top_k": top_k}
         if game_name:
             args["game_name"] = game_name
@@ -484,6 +495,77 @@ class GdiClient:
         if err:
             return None, err
         return self._parse_raw(raw), None
+
+    def _local_unified_search(self, query_text: str, game_name: str = None,
+                              top_k: int = 10) -> tuple:
+        """SQLite 캐시 DB에서 키워드 LIKE 검색 (local 모드 전용).
+
+        nodes + doc_content JOIN으로 body_text 검색 후
+        MCP unified_search와 동일한 dict 포맷으로 반환.
+        """
+        if not _GDI_CACHE_ENABLED or not _gdi_cache:
+            return None, "캐시 레이어 미사용 (local 모드에서는 캐시 필수)"
+
+        try:
+            conn = _gdi_cache._conn()
+            # 키워드 분리 (공백 구분)
+            keywords = [kw.strip() for kw in query_text.split() if kw.strip()]
+            if not keywords:
+                return {"success": True, "results": [], "total_count": 0}, None
+
+            # WHERE 절: 모든 키워드가 body_text에 포함
+            where_clauses = []
+            params = []
+            for kw in keywords:
+                where_clauses.append("dc.body_text LIKE ?")
+                params.append(f"%{kw}%")
+
+            # game_name 필터 (path 예: "Chaoszero/TSV/20260225b/file.tsv")
+            if game_name:
+                where_clauses.append("LOWER(n.path) LIKE ?")
+                params.append(f"%{game_name.lower()}%")
+
+            where_sql = " AND ".join(where_clauses)
+            params.append(top_k)
+
+            sql = f"""
+                SELECT n.title, n.path, n.node_type,
+                       SUBSTR(dc.body_text, 1, 500) AS snippet
+                FROM nodes n
+                JOIN doc_content dc ON dc.node_id = n.id
+                WHERE n.source_type = 'gdi'
+                  AND {where_sql}
+                ORDER BY n.updated_at DESC
+                LIMIT ?
+            """
+            rows = conn.execute(sql, params).fetchall()
+            conn.close()
+
+            results = []
+            for row in rows:
+                title, path, node_type, snippet = row
+                # 스니펫에서 첫 매칭 키워드 주변 텍스트 추출
+                preview = snippet[:200] if snippet else ""
+                results.append({
+                    "file_name": title or "",
+                    "file_path": path or "",
+                    "source_type": node_type or "gdi",
+                    "content_preview": preview,
+                    "_collection": "gdi_local_cache",
+                })
+
+            data = {
+                "success": True,
+                "results": results,
+                "total_count": len(results),
+                "breakdown": {"gdi_local_cache": len(results)},
+                "_mode": "local",
+            }
+            return data, None
+
+        except Exception as e:
+            logger.error("[gdi] local unified_search 오류: %s", e)
+            return None, f"local 검색 오류: {e}"
 
     def search_by_filename(self, filename_query: str, page: int = 1,
                            game_name: str = None,
@@ -505,7 +587,12 @@ class GdiClient:
             if cached is not None:
                 return cached, None
 
-        # MCP 호출
+        # local 모드: 캐시 미스 시 MCP 폴백 없이 None 반환
+        if GDI_MODE == "local":
+            logger.debug("[gdi] search_by_filename: local 모드 — 캐시 미스 (%s)", filename_query)
+            return None, None
+
+        # cloud 모드: MCP 호출
         args = {"file_name_query": filename_query, "page": page,
                 "page_size": page_size}
         if game_name:
@@ -550,7 +637,12 @@ class GdiClient:
             if cached is not None:
                 return cached, None
 
-        # MCP 호출
+        # local 모드: 캐시 미스 시 MCP 폴백 없이 None 반환
+        if GDI_MODE == "local":
+            logger.debug("[gdi] list_files_in_folder: local 모드 — 캐시 미스 (%s)", folder_path)
+            return None, None
+
+        # cloud 모드: MCP 호출
         raw, err = self._mcp.call_tool("list_files_in_folder", {
             "folder_path": folder_path,
             "page": page,
@@ -764,7 +856,12 @@ def get_file_content_full(file_name: str, game_name: str = "",
         except Exception as e:
             logger.debug("[gdi] 캐시 조회 오류: %s", e)
 
-    # ── 2단계: MCP 전체 청크 수집 (폴백) → 형식별 재구성 ──
+    # ── 2단계: local 모드에서는 MCP 폴백 없이 빈 문자열 반환 ──
+    if GDI_MODE == "local":
+        logger.debug("[gdi] get_file_content_full: local 모드 — 캐시 미스 (%s)", file_name)
+        return ""
+
+    # ── 3단계: cloud 모드 — MCP 전체 청크 수집 (폴백) → 형식별 재구성 ──
     if mcp is None:
         mcp = McpSession(url=GDI_MCP_URL, label="gdi")
 
