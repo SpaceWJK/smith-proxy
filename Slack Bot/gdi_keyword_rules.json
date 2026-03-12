@@ -1,27 +1,208 @@
 {
-  "version": "1.0",
-  "description": "질문 키워드 → GDI 검색 파라미터 매핑.\nunified_search() 호출 전에 적용되어 검색 방식을 전환합니다.\nhot reload 지원 — 봇 재시작 없이 파일 수정 즉시 반영.",
+  "version": "1.1",
+  "updated": "2026-03-12",
+  "description": "질문 키워드 → GDI 검색 파라미터 매핑.\nunified_search() 호출 전에 적용되어 검색 방식을 전환합니다.\nhot reload 지원 — 봇 재시작 없이 파일 수정 즉시 반영.\n\n우선순위: taxonomy_search() → keyword_rules → unified_search()\n택소노미가 게임+카테고리+날짜+빌드를 자연어로 파싱하므로,\n키워드 규칙은 택소노미로 해석이 안 되는 특수 패턴에 사용.",
   "rules": [
     {
       "id": "gkr-001",
-      "keywords": ["밸런스", "밸패", "balance"],
+      "keywords": ["밸런스", "밸패", "balance", "밸런싱"],
       "search_override": {
         "type": "search_by_filename",
         "filename_pattern": "balance",
         "game_name": null
       },
-      "description": "밸런스 키워드 → 파일명 검색으로 전환",
+      "description": "밸런스 관련 → 파일명에 'balance' 포함 파일 검색",
+      "enabled": true
+    },
+    {
+      "id": "gkr-002",
+      "keywords": ["체크리스트", "checklist", "업체크"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "Checklist",
+        "game_name": null
+      },
+      "description": "업데이트 체크리스트 → 파일명 'Checklist' 검색",
+      "enabled": true
+    },
+    {
+      "id": "gkr-003",
+      "keywords": ["스킬", "skill", "스킬데이터"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "skill",
+        "game_name": null
+      },
+      "description": "스킬 데이터 → 파일명 'skill' 검색 (TSV 811건)",
+      "enabled": true
+    },
+    {
+      "id": "gkr-004",
+      "keywords": ["장비", "equip", "equipment", "재련"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "equip",
+        "game_name": null
+      },
+      "description": "장비/재련 데이터 → 파일명 'equip' 검색",
+      "enabled": true
+    },
+    {
+      "id": "gkr-005",
+      "keywords": ["가챠", "gacha", "뽑기", "소환"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "gacha",
+        "game_name": null
+      },
+      "description": "가챠/소환 데이터 → 파일명 'gacha' 검색 (595건)",
+      "enabled": true
+    },
+    {
+      "id": "gkr-006",
+      "keywords": ["상점", "shop", "구매"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "shop",
+        "game_name": null
+      },
+      "description": "상점 데이터 → 파일명 'shop' 검색 (411건)",
+      "enabled": true
+    },
+    {
+      "id": "gkr-007",
+      "keywords": ["보상", "reward", "리워드"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "reward",
+        "game_name": null
+      },
+      "description": "보상 데이터 → 파일명 'reward' 검색 (825건)",
+      "enabled": true
+    },
+    {
+      "id": "gkr-008",
+      "keywords": ["몬스터", "monster", "적", "enemy"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "monster",
+        "game_name": null
+      },
+      "description": "몬스터 데이터 → 파일명 'monster' 검색 (723건)",
+      "enabled": true
+    },
+    {
+      "id": "gkr-009",
+      "keywords": ["아이템", "item"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "item",
+        "game_name": null
+      },
+      "description": "아이템 데이터 → 파일명 'item' 검색 (393건)",
+      "enabled": true
+    },
+    {
+      "id": "gkr-010",
+      "keywords": ["퀘스트", "quest", "임무"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "quest",
+        "game_name": null
+      },
+      "description": "퀘스트 데이터 → 파일명 'quest' 검색",
+      "enabled": true
+    },
+    {
+      "id": "gkr-011",
+      "keywords": ["스토리", "story", "시나리오"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "story",
+        "game_name": null
+      },
+      "description": "스토리 데이터 → 파일명 'story' 검색 (841건)",
+      "enabled": true
+    },
+    {
+      "id": "gkr-012",
+      "keywords": ["카드", "card"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "card",
+        "game_name": null
+      },
+      "description": "카드 데이터 → 파일명 'card' 검색 (169건)",
+      "enabled": true
+    },
+    {
+      "id": "gkr-013",
+      "keywords": ["이벤트", "event"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "event",
+        "game_name": null
+      },
+      "description": "이벤트 데이터 → 파일명 'event' 검색 (533건)",
+      "enabled": true
+    },
+    {
+      "id": "gkr-014",
+      "keywords": ["스테이지", "stage", "던전"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "stage",
+        "game_name": null
+      },
+      "description": "스테이지/던전 데이터 → 파일명 'stage' 검색",
+      "enabled": true
+    },
+    {
+      "id": "gkr-015",
+      "keywords": ["bat", "빌드검증", "build acceptance"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "BAT",
+        "game_name": null
+      },
+      "description": "BAT(Build Acceptance Test) → 파일명 'BAT' 검색",
+      "enabled": true
+    },
+    {
+      "id": "gkr-016",
+      "keywords": ["버그검증", "bug verification", "버그 검증"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "Bug Verification",
+        "game_name": null
+      },
+      "description": "버그 검증 결과 → 파일명 'Bug Verification' 검색",
+      "enabled": true
+    },
+    {
+      "id": "gkr-017",
+      "keywords": ["파트너", "partner", "동료"],
+      "search_override": {
+        "type": "search_by_filename",
+        "filename_pattern": "partner",
+        "game_name": null
+      },
+      "description": "파트너/동료 데이터 → 파일명 'partner' 검색 (148건)",
       "enabled": true
     }
   ],
   "how_to_add_rule": [
     "1. rules 배열에 새 항목 추가",
     "2. id: 고유 ID (gkr-NNN)",
-    "3. keywords: 질문에 포함되면 매칭되는 키워드 목록 (소문자 비교)",
+    "3. keywords: 질문에 포함되면 매칭되는 키워드 목록 (소문자 비교, ANY 매칭)",
     "4. search_override.type: 'unified_search' 또는 'search_by_filename'",
     "5. search_override.filename_pattern: 파일명 검색 시 사용할 패턴",
-    "6. search_override.game_name: 게임 필터 (null이면 전체)",
+    "6. search_override.game_name: 게임 필터 (null이면 전체 게임)",
     "7. enabled: false로 비활성화 가능",
-    "8. 봇 재시작 없이 다음 /gdi 호출 시 자동 반영 (hot reload)"
+    "8. 봇 재시작 없이 다음 /gdi 호출 시 자동 반영 (hot reload)",
+    "",
+    "참고: taxonomy_search()가 먼저 실행됨.",
+    "게임명+카테고리+날짜는 택소노미가 처리하므로,",
+    "여기서는 파일명 패턴 기반 매칭에 집중할 것."
   ]
 }

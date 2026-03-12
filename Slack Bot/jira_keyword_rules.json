@@ -1,6 +1,7 @@
 {
-  "version": "1.0",
-  "description": "질문 키워드 → JQL 조건 매핑.\nquestion_to_jql() 내에서 기존 상태 의도 감지와 합성 적용됩니다.\nhot reload 지원 — 봇 재시작 없이 파일 수정 즉시 반영.",
+  "version": "1.1",
+  "updated": "2026-03-12",
+  "description": "질문 키워드 → JQL 조건 매핑.\nquestion_to_jql() 내에서 기존 상태 의도 감지와 합성 적용됩니다.\nhot reload 지원 — 봇 재시작 없이 파일 수정 즉시 반영.\n\n참고: 활성/완료 상태 필터는 jira_client.py의 _detect_status_intent()에서 처리.\n여기서는 시간·우선순위·유형·담당자 등 추가 조건에 집중.",
   "rules": [
     {
       "id": "jkr-001",
@@ -15,15 +16,76 @@
       "jql_append": "AND created >= startOfWeek()",
       "description": "이번주/금주 → 금주 생성 이슈 필터",
       "enabled": true
+    },
+    {
+      "id": "jkr-003",
+      "keywords": ["지난주", "전주", "last week"],
+      "jql_append": "AND created >= startOfWeek(-1) AND created < startOfWeek()",
+      "description": "지난주/전주 → 전주 생성 이슈 필터",
+      "enabled": true
+    },
+    {
+      "id": "jkr-004",
+      "keywords": ["이번달", "금월", "this month"],
+      "jql_append": "AND created >= startOfMonth()",
+      "description": "이번달/금월 → 금월 생성 이슈 필터",
+      "enabled": true
+    },
+    {
+      "id": "jkr-005",
+      "keywords": ["지난달", "전월", "last month"],
+      "jql_append": "AND created >= startOfMonth(-1) AND created < startOfMonth()",
+      "description": "지난달/전월 → 전월 생성 이슈 필터",
+      "enabled": true
+    },
+    {
+      "id": "jkr-006",
+      "keywords": ["오늘", "today", "금일"],
+      "jql_append": "AND created >= startOfDay()",
+      "description": "오늘/금일 → 금일 생성 이슈 필터",
+      "enabled": true
+    },
+    {
+      "id": "jkr-007",
+      "keywords": ["어제", "yesterday", "전일"],
+      "jql_append": "AND created >= startOfDay(-1) AND created < startOfDay()",
+      "description": "어제/전일 → 전일 생성 이슈 필터",
+      "enabled": true
+    },
+    {
+      "id": "jkr-008",
+      "keywords": ["미배정", "배정안됨", "담당자없음", "unassigned"],
+      "jql_append": "AND assignee is EMPTY",
+      "description": "미배정/담당자 없는 이슈 필터",
+      "enabled": true
+    },
+    {
+      "id": "jkr-009",
+      "keywords": ["버그", "bug", "결함", "defect"],
+      "jql_append": "AND issuetype = Bug",
+      "description": "버그/결함 → 이슈 유형 Bug 필터",
+      "enabled": true
+    },
+    {
+      "id": "jkr-010",
+      "keywords": ["높은우선순위", "high priority", "중요"],
+      "jql_append": "AND priority IN (Critical, Blocker, Highest, High)",
+      "description": "높은 우선순위/중요 → High 이상 필터",
+      "enabled": true
     }
   ],
   "how_to_add_rule": [
     "1. rules 배열에 새 항목 추가",
     "2. id: 고유 ID (jkr-NNN)",
-    "3. keywords: 질문에 포함되면 매칭되는 키워드 목록 (소문자 비교)",
+    "3. keywords: 질문에 포함되면 매칭되는 키워드 목록 (소문자 비교, ANY 매칭)",
     "4. jql_append: 기존 JQL에 AND 조건으로 추가될 구문",
     "5. project_key: (선택) 특정 프로젝트에서만 적용. 생략 시 전체 프로젝트 적용",
     "6. enabled: false로 비활성화 가능",
-    "7. 봇 재시작 없이 다음 /jira 호출 시 자동 반영 (hot reload)"
+    "7. 봇 재시작 없이 다음 /jira 호출 시 자동 반영 (hot reload)",
+    "",
+    "참고: jira_client.py의 _detect_status_intent()가 이미 처리하는 패턴:",
+    "  - 활성/오픈: 액티브, 열린, 오픈, 진행중 등",
+    "  - 완료/종료: 완료, 종료, 닫힌, 해결 등",
+    "이러한 상태 필터는 여기에 추가하지 말 것 (중복 적용 방지)."
   ]
 }

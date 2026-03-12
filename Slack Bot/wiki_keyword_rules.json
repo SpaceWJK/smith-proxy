@@ -1,6 +1,7 @@
 {
-  "version": "1.0",
-  "description": "질문 키워드 → Wiki 페이지 제목 직접 매핑.\nsearch_with_context() Stage 0으로 적용되어 기존 4단계 검색보다 먼저 실행됩니다.\nhot reload 지원 — 봇 재시작 없이 파일 수정 즉시 반영.",
+  "version": "1.1",
+  "updated": "2026-03-12",
+  "description": "질문 키워드 → Wiki 페이지 제목 직접 매핑.\nsearch_with_context() Stage 0으로 적용되어 기존 4단계 검색보다 먼저 실행됩니다.\nhot reload 지원 — 봇 재시작 없이 파일 수정 즉시 반영.\n\n사용 시점: CQL title 검색에서 한국어 키워드↔영어 페이지 제목 불일치 해결.\n예) '핫픽스' 검색 → '2026_Hot Fix' 페이지는 CQL title~'핫픽스'로 찾을 수 없음.",
   "rules": [
     {
       "id": "wkr-001",
@@ -9,17 +10,25 @@
         "에픽세븐": "2026_Hot Fix",
         "카제나": "CZ | Hotfix 이슈"
       },
-      "description": "게임별 핫픽스 페이지 직접 매핑",
+      "description": "게임별 핫픽스 페이지 직접 매핑 (한국어→영문 제목 불일치 해결)",
       "enabled": true
     }
   ],
   "how_to_add_rule": [
     "1. rules 배열에 새 항목 추가",
     "2. id: 고유 ID (wkr-NNN)",
-    "3. keywords: 질문에 포함되면 매칭되는 키워드 목록 (소문자 비교)",
+    "3. keywords: 질문에 포함되면 매칭되는 키워드 목록 (소문자 비교, ANY 매칭)",
     "4. game_page_map: 게임 canonical명 → Wiki 페이지 제목 매핑",
     "5. 게임명이 감지되지 않거나 game_page_map에 없는 게임이면 규칙 스킵",
     "6. enabled: false로 비활성화 가능",
-    "7. 봇 재시작 없이 다음 /wiki 호출 시 자동 반영 (hot reload)"
+    "7. 봇 재시작 없이 다음 /wiki 호출 시 자동 반영 (hot reload)",
+    "",
+    "규칙 추가 기준:",
+    "  - CQL title ~ '한국어키워드' 로 원하는 페이지를 찾지 못하는 경우",
+    "  - 주로 한국어↔영문, 약어↔정식명 불일치 케이스",
+    "  - search_with_context() 4단계 검색으로 이미 잘 찾아지면 규칙 불필요",
+    "",
+    "게임 canonical명 목록 (game_aliases.py):",
+    "  에픽세븐, 카제나, 리젝, 로드나인, 로드나인 아시아"
   ]
 }

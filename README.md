@@ -1,6 +1,6 @@
 # 🤖 퍼블리싱QA1팀 Slack 알림 봇 (QA Supporter)
 
-**현재 버전: `v1.5.6`** | [변경 이력 →](./changelog/CHANGELOG.md)
+**현재 버전: `v1.6.1`** | [변경 이력 →](./changelog/CHANGELOG.md)
 
 > **SGP 퍼블리싱QA1팀** 전용 Slack 자동화 봇
 > 일일 업무 헤더, QA 체크리스트, 주간 보고, 업데이트 차수 점검, 월간·분기 체크리스트를 자동 발송하고 담당자가 직접 체크할 수 있는 인터랙티브 메시지를 제공합니다.
@@ -61,7 +61,7 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트
 │   └── CHANGELOG.md               ← 버전 히스토리
 ├── scripts/                        ← 유틸리티 스크립트
 ├── Slack Bot/                      ← 소스 코드 디렉토리
-│   ├── slack_bot.py               ← 메인 진입점 (~1700줄)
+│   ├── slack_bot.py               ← 메인 진입점 (~1800줄)
 │   ├── scheduler.py               ← APScheduler 스케줄 관리
 │   ├── slack_sender.py            ← Slack Web API 래퍼 + Block Kit 빌더
 │   ├── interaction_handler.py     ← 인터랙티브 체크리스트 상태 관리
@@ -69,10 +69,17 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트
 │   ├── wiki_client.py             ← Confluence Wiki MCP 클라이언트
 │   ├── gdi_client.py              ← GDI(Game Doc Insight) MCP 클라이언트
 │   ├── jira_client.py             ← Jira MCP 클라이언트
+│   ├── game_aliases.py            ← 게임명 별칭 매핑 (Wiki/Jira 공용)
+│   ├── safety_guard.py            ← 읽기 전용 안전 가드 (쓰기 의도 차단)
 │   ├── missed_tracker.py          ← 전일 미체크 항목 추적
 │   ├── schedule_monitor.py        ← 스케줄 모니터링
 │   ├── config.json                ← ★ 스케줄 설정 파일
-│   └── wiki_search_rules.json     ← ★ wiki 검색 전략 예외 (hot reload)
+│   ├── wiki_search_rules.json     ← ★ wiki 검색 전략 예외 (hot reload)
+│   ├── gdi_keyword_rules.json     ← ★ GDI 키워드→검색 매핑 (hot reload)
+│   ├── jira_keyword_rules.json    ← ★ Jira 키워드→JQL 매핑 (hot reload)
+│   └── wiki_keyword_rules.json    ← ★ Wiki 키워드→페이지 매핑 (hot reload)
+├── tools/                          ← 운영 도구
+│   └── s3_manager.html            ← GDI S3 파일 업로드/다운로드 매니저
 ├── .env                            ← 환경변수 (비공개)
 ├── requirements.txt                ← 의존 패키지
 ├── Procfile                        ← Railway 실행 명령
@@ -414,7 +421,9 @@ GDI(Game Doc Insight) 문서 데이터를 Slack에서 검색합니다.
 
 - MCP 서버: `http://mcp-dev.sginfra.net/game-doc-insight-mcp`
 - 질문 의도 감지: 목록 질문 vs 내용 질문 자동 분기
+- 택소노미 우선 검색 → MCP 폴백 구조
 - 3계층 캐시: 폴더 6시간, 파일 24시간
+- GDI 로컬/클라우드 모드: `GDI_MODE` 환경변수로 전환
 
 ---
 
@@ -439,7 +448,30 @@ Jira 이슈/프로젝트를 Slack에서 조회합니다.
 
 ---
 
-### 7. 미션 진행 현황 리마인더
+### 7. 키워드 규칙 시스템 (v1.6.1~)
+
+3개 슬래시 커맨드 모두 **키워드 규칙 JSON**으로 검색 동작을 커스터마이징할 수 있습니다.
+봇 재시작 없이 파일 수정만으로 즉시 반영됩니다 (**hot reload**).
+
+| 파일 | 현재 규칙 수 | 역할 |
+|------|-------------|------|
+| `gdi_keyword_rules.json` | 17개 | 질문 키워드 → GDI 파일명 검색 전환 |
+| `jira_keyword_rules.json` | 10개 | 질문 키워드 → JQL 조건 추가 |
+| `wiki_keyword_rules.json` | 1개 | 질문 키워드 → Wiki 페이지 직접 매핑 |
+
+**GDI 키워드 규칙 예시:**
+- `밸런스`, `밸패` → `search_by_filename("balance")`
+- `스킬`, `skill` → `search_by_filename("skill")`
+- `BAT`, `빌드승인` → `search_by_filename("BAT")`
+
+**Jira 키워드 규칙 예시:**
+- `오늘`, `today` → `AND created >= startOfDay()`
+- `미배정` → `AND assignee is EMPTY`
+- `버그`, `bug` → `AND issuetype = Bug`
+
+---
+
+### 8. 미션 진행 현황 리마인더
 
 각 채널의 미션 진행 상황을 매일 자동 알림합니다.
 
@@ -610,21 +642,21 @@ python slack_bot.py --find-user 이동현
    → 스케줄러 봇 자동 재시작
 ```
 
-### 로컬 봇 시작 (WMI 방식 — 타임아웃 우회)
+### 로컬 봇 시작 (pythonw.exe — 콘솔 창 없음)
 ```powershell
 $wmi = [wmiclass]"Win32_Process"
-$r = $wmi.Create("cmd.exe /c `"D:\Vibe Dev\Slack Bot\start_bot.bat`"", "D:\Vibe Dev\Slack Bot")
+$r = $wmi.Create('"D:\Vibe Dev\Slack Bot\venv\Scripts\pythonw.exe" "D:\Vibe Dev\Slack Bot\Slack Bot\slack_bot.py" --commands-only', "D:\Vibe Dev\Slack Bot\Slack Bot")
 # PID 확인
-Get-Content "D:\Vibe Dev\Slack Bot\slack_bot.pid"
+Get-Content "D:\Vibe Dev\Slack Bot\Slack Bot\slack_bot.pid"
 # 로그 확인
-Get-Content "D:\Vibe Dev\Slack Bot\slack_bot.log" -Tail 20 -Encoding UTF8
+Get-Content "D:\Vibe Dev\Slack Bot\Slack Bot\slack_bot.log" -Tail 20 -Encoding UTF8
 ```
 
 ### 로컬 봇 종료
 ```powershell
-$pid = Get-Content "D:\Vibe Dev\Slack Bot\slack_bot.pid" -Raw
+$pid = Get-Content "D:\Vibe Dev\Slack Bot\Slack Bot\slack_bot.pid" -Raw
 Stop-Process -Id $pid -Force
-Remove-Item "D:\Vibe Dev\Slack Bot\slack_bot.pid" -Force
+Remove-Item "D:\Vibe Dev\Slack Bot\Slack Bot\slack_bot.pid" -Force
 ```
 
 ---
@@ -763,7 +795,7 @@ hot reload: mtime 비교 방식, 봇 재시작 없이 자동 반영
 
 ### 🔖 버전 관리 및 롤백 상세 가이드
 
-**현재 버전: v1.5.6** | 기능 4개 (알리미, /wiki, /gdi, /jira)
+**현재 버전: v1.6.1** | 기능 4개 (알리미, /wiki, /gdi, /jira)
 
 **버전 규칙 재확인**
 ```
@@ -820,6 +852,12 @@ git checkout -b rollback/v1.1.3 v1.1.3
 | `v1.3.5` | `d0c1420` | GDI 캐시 통합 (L1+L2) |
 | `v1.4.0` | `dcfacf0` | /jira 슬래시 커맨드 + Jira 캐시 통합 |
 | `v1.4.1` | — | 검색 정확도 개선 (Wiki/Jira/GDI) |
+| `v1.5.6` | — | GDI 청크 메타데이터 정제 |
+| `v1.5.7` | — | GDI 폴더 택소노미 인덱스 |
+| `v1.5.8` | — | 택소노미 질의 해석 고도화 |
+| `v1.5.9` | — | GDI 로컬/클라우드 모드 스위치 |
+| `v1.6.0` | `cd6d4bb` | AWS S3 자동 동기화 + MCP 읽기전용 안전장치 |
+| `v1.6.1` | — | 키워드 규칙 확장 + GDI 출처 표시 개선 |
 
 ### 🚀 봇 재시작 방법 (로컬 PC)
 

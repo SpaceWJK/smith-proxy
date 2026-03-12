@@ -1733,6 +1733,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     return
 
                 context = gc.get_file_content_text(data)
+                search_data = None  # 통합검색 폴백 시 할당
 
                 if not context:
                     logger.info(f"[gdi] 파일 내용 없음, 통합 검색 전환: {search_kw} {file_name}")
@@ -1759,7 +1760,21 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     respond(text=f"ℹ️ `{search_kw}/{file_name}` 관련 문서를 찾을 수 없습니다.")
                     return
 
-                source_label = f"{search_kw}/{file_name}"
+                # 출처: 실제 파일 경로 사용
+                _active_data = search_data if search_data else data
+                _3p_items = (_active_data or {}).get("results", [])
+                if _3p_items:
+                    _3p_paths = [r.get("file_path", r.get("file_name", ""))
+                                 for r in _3p_items[:3] if r]
+                    _3p_folders = []
+                    for p in _3p_paths:
+                        parts = p.rsplit("/", 1)
+                        folder = parts[0] if len(parts) > 1 else p
+                        if folder and folder not in _3p_folders:
+                            _3p_folders.append(folder)
+                    source_label = " / ".join(_3p_folders[:3]) if _3p_folders else f"{search_kw}/{file_name}"
+                else:
+                    source_label = f"{search_kw}/{file_name}"
                 _gdi_ask_claude(context, source_label, question, respond)
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
@@ -1783,7 +1798,12 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                 if tax_data and tax_data.get("files"):
                     context = gc.get_taxonomy_context_text(tax_data)
                     if context:
-                        _gdi_ask_claude(context, search_query, question, respond)
+                        # 출처: 실제 매칭된 폴더 경로 표시
+                        _tax_folders = tax_data.get("folders", [])
+                        _tax_label = " / ".join(
+                            f["full_path"] for f in _tax_folders[:3]
+                        ) if _tax_folders else search_query
+                        _gdi_ask_claude(context, _tax_label, question, respond)
                         gc.log_gdi_query(
                             user_id=user_id, user_name=user_name,
                             action="ask_claude", query=text,
@@ -1823,7 +1843,23 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     respond(text=f"ℹ️ `{search_query}` 관련 문서를 찾을 수 없습니다.")
                     return
 
-                _gdi_ask_claude(context, search_query, question, respond)
+                # 출처: 검색 결과의 실제 파일 경로 표시
+                _res_items = (data or {}).get("results", [])
+                if _res_items:
+                    # 파일 경로에서 공통 폴더 추출 (예: "Chaoszero/TSV/...")
+                    _paths = [r.get("file_path", r.get("file_name", ""))
+                              for r in _res_items[:5] if r]
+                    # 경로에서 파일명 제거하고 폴더 부분만 추출
+                    _folders_seen = []
+                    for p in _paths:
+                        parts = p.rsplit("/", 1)
+                        folder = parts[0] if len(parts) > 1 else p
+                        if folder and folder not in _folders_seen:
+                            _folders_seen.append(folder)
+                    _src_label = " / ".join(_folders_seen[:3]) if _folders_seen else search_query
+                else:
+                    _src_label = search_query
+                _gdi_ask_claude(context, _src_label, question, respond)
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
                     action="ask_claude", query=text,
