@@ -1778,8 +1778,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
             if search_query and question:
                 t0 = time.time()
 
-                # ── 택소노미 우선 해석 ─────────────────────────
-                tax_data = gc.taxonomy_search(search_query)
+                # ── 택소노미 우선 해석 (키워드+질문 결합) ─────────
+                tax_data = gc.taxonomy_search(search_query, question=question)
                 if tax_data and tax_data.get("files"):
                     context = gc.get_taxonomy_context_text(tax_data)
                     if context:

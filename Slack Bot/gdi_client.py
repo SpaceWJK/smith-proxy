@@ -829,8 +829,17 @@ def get_file_content_full(file_name: str, game_name: str = "",
 
 # ── 폴더 택소노미 검색 ──────────────────────────────────────────────────
 
-def taxonomy_search(query: str, max_files: int = 20) -> dict | None:
+def taxonomy_search(
+    query: str,
+    question: str = "",
+    max_files: int = 20,
+) -> dict | None:
     """자연어 질의를 폴더 택소노미로 해석하여 캐시 DB에서 직접 결과를 반환한다.
+
+    키워드(query)와 질문(question)을 결합하여 파싱한다.
+    예) query="카제나 2/4 3차", question="테스트 결과에서 FAIL 이슈?"
+      → 결합: "카제나 2/4 3차 테스트 결과에서 FAIL 이슈?"
+      → game=Chaoszero, date=0204, build=3차, category=Test Result
 
     택소노미가 비활성이거나, 게임명이 파싱되지 않으면 None 반환 (MCP 폴백).
 
@@ -842,16 +851,20 @@ def taxonomy_search(query: str, max_files: int = 20) -> dict | None:
         return None
 
     try:
-        parsed = _QueryParser.parse(query)
+        # 키워드 + 질문 결합하여 파싱 (카테고리 등 질문에서도 추출)
+        combined = f"{query} {question}".strip() if question else query
+        parsed = _QueryParser.parse(combined)
+
         # 최소 게임명이 있어야 택소노미 적용
         if not parsed.get("game"):
             return None
 
-        folders = _folder_index.resolve_query(query)
+        # 결합 텍스트로 폴더/파일 조회
+        folders = _folder_index.resolve_query(combined)
         if not folders:
             return None
 
-        files = _folder_index.get_files_with_content(query, max_files=max_files)
+        files = _folder_index.get_files_with_content(combined, max_files=max_files)
 
         logger.info(
             "[gdi] 택소노미 해석 성공: game=%s, cat=%s, date=%s, "
