@@ -15,10 +15,47 @@
 > git checkout v1.1.3      # 특정 버전 코드 확인
 > git checkout main        # 최신으로 복귀
 > ```
+>
+> **🔖 롤백 포인트**: 대규모 작업 전 표시된 안전 복원 지점. `⚠️ ROLLBACK POINT` 블록에 복원 명령어 포함.
 
 ---
 
-## [1.5.9] - 2026-03-12 <- 현재
+## [1.6.0] - 2026-03-12
+
+### 추가
+- **AWS S3 → gdi-repo/ 자동 동기화** (`auto_sync.py`)
+  - `_sync_s3()`: S3 단방향 다운로드 (업로드/삭제 구조적 차단)
+  - `_build_s3_sync_cmd()`: 인자 순서 고정으로 역방향 불가
+  - 이미지 제외 (*.png, *.jpg) → 텍스트 데이터만 동기화
+  - 에러 로깅 통합: CMD + STDERR + 소요시간 상세 기록
+  - 환경변수 제어: `GDI_S3_SYNC`, `GDI_S3_BUCKET`, `GDI_S3_TIMEOUT` 등
+  - 실패 시 기존 gdi-repo/ 그대로 유지 (fallback)
+- **GDI MCP 읽기 전용 안전장치** (`gdi_client.py`)
+  - `GDI_MCP_READONLY_TOOLS`: 허용 도구 화이트리스트 (frozenset)
+  - `_safe_call_tool()`: MCP 호출 전 허용 목록 검증, 비허용 시 차단 + 에러 로그
+  - MCP 경유 쓰기/업로드/삭제 원천 차단 (공유 서버 보호)
+
+### S3 안전 원칙
+- **자동 동기화**: S3 → gdi-repo/ 다운로드만 (업로드/삭제 절대 불가)
+- **로컬 CLI 수동**: 업로드(사용자 승인 1회) / 삭제(사용자 승인 2회)
+- **GDI MCP 경유**: 읽기 전용 — 쓰기/삭제 원천 차단
+
+### 의존 (mcp-cache-layer)
+- `.env` 신규: S3 환경변수 (`GDI_S3_BUCKET`, `GDI_S3_SYNC` 등)
+- `~/.aws/config`: S3 성능 설정 (max_concurrent_requests=20, multipart)
+- AWS CLI v2 설치 필수 (`aws s3 sync` 명령 사용)
+
+---
+
+## [1.5.9] - 2026-03-12 ← 🔖 롤백 포인트 `pre-aws-s3`
+
+> **⚠️ ROLLBACK POINT** — AWS S3 통합 작업 시작 전 안정 버전
+> ```powershell
+> # Slack Bot 롤백
+> cd "D:\Vibe Dev\Slack Bot" && git reset --hard pre-aws-s3
+> # mcp-cache-layer 롤백
+> cd "D:\Vibe Dev\QA Ops\mcp-cache-layer" && git reset --hard c22b1eb
+> ```
 
 ### 추가
 - **GDI 로컬/클라우드 모드 스위치** (`gdi_client.py`)
