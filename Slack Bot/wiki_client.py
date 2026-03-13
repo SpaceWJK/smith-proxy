@@ -353,6 +353,24 @@ class ConfluenceWikiClient:
         """
         sk = space_key or self._space_key
 
+        # ── Stage -1: 제목 정확 일치 우선 검색 ─────────────────────
+        # 사용자가 페이지 제목을 정확히 입력한 경우, 스마트 검색(게임/연도 추론)보다
+        # 정확 일치를 우선합니다. 이렇게 해야 "2026_MGQA" 같은 정확한 페이지명이
+        # 질문 속 게임명("카오스 제로")에 의해 엉뚱한 ancestor 트리로 빠지지 않습니다.
+        exact_page, exact_err = self.get_page_by_title(
+            title, space_key=space_key, fetch_full=fetch_full
+        )
+        if not exact_err and exact_page:
+            exact_title = (exact_page.get("title") or "").strip()
+            # 정확 일치 또는 밑줄→공백 변환 후 일치 체크
+            title_normalized = title.replace("_", " ").strip().lower()
+            exact_normalized = exact_title.lower()
+            if title_normalized == exact_normalized or title.strip().lower() == exact_normalized:
+                logger.info(
+                    f"[wiki][정확일치] 제목 정확 매칭: '{exact_title}' ← '{title}'"
+                )
+                return exact_page, None
+
         # ── 질문에서 게임명 감지 ──────────────────────────────────
         game = detect_game_in_text(question) if question else None
         game_ancestor_id = None
@@ -363,10 +381,15 @@ class ConfluenceWikiClient:
                 f"(ancestor_id={game_ancestor_id})"
             )
 
-        # ── 질문에서 연도 추출 ────────────────────────────────────
+        # ── 질문/제목에서 연도 추출 ──────────────────────────────────
         year = None
         if question:
             m = re.search(r'(20\d{2})', question)
+            if m:
+                year = m.group(1)
+        # question에서 못 찾았으면 title(page_part)에서도 추출
+        if not year:
+            m = re.search(r'(20\d{2})', title)
             if m:
                 year = m.group(1)
 
@@ -541,20 +564,27 @@ class ConfluenceWikiClient:
         sk  = space_key or self._space_key
 
         # ── 1단계: 정확 일치 우선 ──────────────────────────────────────
-        cql_exact = (f'title = "{title}" AND space = "{sk}"'
-                     f' AND type=page')
-        logger.info(f"[wiki] 제목 정확 검색 CQL: {cql_exact}")
-        raw, err = self._mcp.call_tool(
-            "cql_search",
-            {"cql": cql_exact, "limit": 1, "expand": "body.view"},
-        )
-        if not err:
-            results = self._parse_cql_results(raw)
-            if results:
-                logger.info(f"[wiki] 정확 일치 발견: {title}")
-                return self._cql_result_to_page_dict(
-                    results[0], title, fetch_full=fetch_full
-                ), None
+        # 밑줄→공백 변환 버전도 시도 (Confluence 제목은 공백 기반)
+        title_variants = [title]
+        title_spaced = title.replace("_", " ").strip()
+        if title_spaced != title:
+            title_variants.append(title_spaced)
+
+        for t_variant in title_variants:
+            cql_exact = (f'title = "{t_variant}" AND space = "{sk}"'
+                         f' AND type=page')
+            logger.info(f"[wiki] 제목 정확 검색 CQL: {cql_exact}")
+            raw, err = self._mcp.call_tool(
+                "cql_search",
+                {"cql": cql_exact, "limit": 1, "expand": "body.view"},
+            )
+            if not err:
+                results = self._parse_cql_results(raw)
+                if results:
+                    logger.info(f"[wiki] 정확 일치 발견: {t_variant}")
+                    return self._cql_result_to_page_dict(
+                        results[0], title, fetch_full=fetch_full
+                    ), None
 
         # ── 2단계: 부분 일치 (관련도 정렬) ─────────────────────────────
         cql_fuzzy = (f'title ~ "{title}" AND space = "{sk}"'

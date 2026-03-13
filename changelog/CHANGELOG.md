@@ -20,6 +20,31 @@
 
 ---
 
+## [1.6.4] - 2026-03-13
+
+### 수정 (Critical)
+- **Wiki 페이지 라우팅 근본 수정** (`wiki_client.py`)
+  - `search_with_context()`: 스마트 검색(게임/연도 추론) 이전에 **정확 일치 우선 검색** 추가 (Stage -1)
+  - 사용자가 `2026_MGQA`처럼 정확한 페이지명을 입력하면 게임명 감지/ancestor 스코핑을 건너뜀
+  - 밑줄→공백 변환 variant도 정확 일치에 포함 (`2026_MGQA` → `2026 MGQA`)
+  - 연도 추출 범위 확장: question에 없으면 title(page_part)에서도 20XX 추출
+  - `get_page_by_title()`: 정확 일치 단계에서 밑줄→공백 변환 variant 시도
+- **GDI 검색 enrichment 통합** (`gdi_client.py`, `slack_bot.py`)
+  - `_local_unified_search()`: SQL에 `dc.summary`, `dc.keywords` 추가 → 결과에 포함
+  - `get_search_context_text()`: summary/keywords를 Claude 컨텍스트에 반영
+  - `_gdi_ask_claude()`: enrichment 가이드를 프롬프트에 포함
+- **Jira 검색 메타데이터 강화** (`jira_client.py`, `slack_bot.py`)
+  - `get_search_context_text()`: issuetype, priority, labels, components, fixVersions 추가
+  - `_jira_ask_claude()`: 구조화 메타데이터 가이드를 프롬프트에 포함
+- **Dashboard 스케줄러 UI 개편** (`s3_manager.html`, `s3_server.py`)
+  - 필터: "체크리스트/미션/텍스트" → "알림/QA Task" 2카테고리 단순화
+  - 채널 태그 "undefined" 수정 → 전체 채널 매핑
+  - "미션" → "QA Task" 명칭 통일
+  - QA Task 행에 미션명 표시
+  - UI 간격 압축 (gap 8→4px, padding 축소)
+
+---
+
 ## [1.6.3] - 2026-03-13
 
 ### 추가

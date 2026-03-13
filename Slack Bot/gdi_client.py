@@ -585,7 +585,8 @@ class GdiClient:
 
             sql = f"""
                 SELECT n.title, n.path, n.node_type,
-                       SUBSTR(dc.body_text, 1, 500) AS snippet
+                       SUBSTR(dc.body_text, 1, 500) AS snippet,
+                       dc.summary, dc.keywords
                 FROM nodes n
                 JOIN doc_content dc ON dc.node_id = n.id
                 WHERE n.source_type = 'gdi'
@@ -601,7 +602,7 @@ class GdiClient:
 
             results = []
             for row in rows:
-                title, path, node_type, snippet = row
+                title, path, node_type, snippet, summary, keywords = row
                 # 스니펫에서 첫 매칭 키워드 주변 텍스트 추출
                 preview = snippet[:200] if snippet else ""
                 results.append({
@@ -609,6 +610,8 @@ class GdiClient:
                     "file_path": path or "",
                     "source_type": node_type or "gdi",
                     "content_preview": preview,
+                    "summary": summary or "",
+                    "keywords": keywords or "",
                     "_collection": "gdi_local_cache",
                 })
 
@@ -1124,6 +1127,7 @@ def get_search_context_text(data: dict) -> str:
     unified_search 결과에서 컨텍스트 텍스트를 추출합니다.
     Claude AI 답변 생성에 사용됩니다.
     각 청크의 형식(xlsx/pptx/tsv)에 맞게 메타데이터를 정제합니다.
+    enrichment 데이터(summary/keywords)가 있으면 컨텍스트에 포함합니다.
 
     Returns: 검색 결과 컨텍스트 텍스트 (없으면 빈 문자열)
     """
@@ -1138,7 +1142,17 @@ def get_search_context_text(data: dict) -> str:
     for r in results[:5]:
         fname   = r.get("file_name", "?")
         fpath   = r.get("file_path", "")
-        chunk   = _clean_any_chunk(r.get("chunk_content", ""))
-        parts.append(f"[파일: {fname}]\n경로: {fpath}\n내용: {chunk}")
+        # local 캐시 결과는 content_preview, cloud 결과는 chunk_content
+        chunk   = r.get("content_preview") or _clean_any_chunk(r.get("chunk_content", ""))
+        summary = r.get("summary", "")
+        keywords = r.get("keywords", "")
+
+        entry = f"[파일: {fname}]\n경로: {fpath}"
+        if summary:
+            entry += f"\n요약: {summary}"
+        if keywords:
+            entry += f"\n키워드: {keywords}"
+        entry += f"\n내용: {chunk}"
+        parts.append(entry)
 
     return "\n\n---\n\n".join(parts)

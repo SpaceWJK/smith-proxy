@@ -797,7 +797,11 @@ def get_issue_context_text(data) -> str:
 
 
 def get_search_context_text(data) -> str:
-    """JQL 검색 결과에서 Claude AI 컨텍스트 텍스트를 추출합니다."""
+    """JQL 검색 결과에서 Claude AI 컨텍스트 텍스트를 추출합니다.
+
+    각 이슈의 핵심 메타데이터(유형, 우선순위, 라벨, 컴포넌트 등)를
+    포함하여 Claude가 이슈 맥락을 정확히 파악할 수 있도록 합니다.
+    """
     if not data:
         return ""
 
@@ -816,10 +820,38 @@ def get_search_context_text(data) -> str:
         fields = issue.get("fields", {})
         summary = fields.get("summary", "")
         status = _extract_field(fields, "status")
+        issuetype = _extract_field(fields, "issuetype")
+        priority = _extract_field(fields, "priority")
         assignee = _extract_field(fields, "assignee", "displayName")
         description = fields.get("description") or ""
 
-        entry = f"[{key}] {summary}\n상태: {status}, 담당자: {assignee}"
+        # 핵심 메타데이터
+        meta_parts = []
+        if issuetype:
+            meta_parts.append(f"유형: {issuetype}")
+        meta_parts.append(f"상태: {status}")
+        if priority:
+            meta_parts.append(f"우선순위: {priority}")
+        meta_parts.append(f"담당자: {assignee}")
+
+        # 라벨, 컴포넌트, 수정 버전 (enrichment 대응 — 키워드 역할)
+        labels = fields.get("labels") or []
+        components = fields.get("components") or []
+        fix_versions = fields.get("fixVersions") or []
+
+        tags = []
+        if labels:
+            tags.extend(labels)
+        if components:
+            tags.extend(c.get("name", str(c)) if isinstance(c, dict) else str(c)
+                        for c in components)
+        if fix_versions:
+            tags.extend(v.get("name", str(v)) if isinstance(v, dict) else str(v)
+                        for v in fix_versions)
+
+        entry = f"[{key}] {summary}\n{', '.join(meta_parts)}"
+        if tags:
+            entry += f"\n태그: {', '.join(tags[:8])}"
         if description:
             desc_text = description if isinstance(description, str) else str(description)
             if len(desc_text) > 300:

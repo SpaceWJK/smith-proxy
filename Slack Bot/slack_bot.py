@@ -50,6 +50,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ── API 토큰 사용량 로거 ──────────────────────────────────────
+import threading
+_token_logger = None
+_token_logger_lock = threading.Lock()
+
+def _log_token_usage(source: str, input_tokens: int, output_tokens: int):
+    """Claude API 호출 후 토큰 사용량을 별도 로그 파일에 기록."""
+    global _token_logger
+    try:
+        with _token_logger_lock:
+            if _token_logger is None:
+                _token_logger = logging.getLogger("token_usage")
+                _token_logger.setLevel(logging.INFO)
+                _token_logger.propagate = False
+                _logs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+                os.makedirs(_logs_dir, exist_ok=True)
+                fh = logging.FileHandler(
+                    os.path.join(_logs_dir, "token_usage.log"), encoding="utf-8"
+                )
+                fh.setFormatter(logging.Formatter("%(asctime)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
+                _token_logger.addHandler(fh)
+        _token_logger.info(f"{source} | in={input_tokens} | out={output_tokens} | total={input_tokens + output_tokens}")
+    except Exception:
+        pass  # 로깅 실패가 비즈니스 로직을 방해하지 않도록
+
 
 # ── /wiki 검색 전략 예외처리 규칙 시스템 ──────────────────────────────────────
 # wiki_search_rules.json 에 페이지별 예외 규칙을 정의합니다.
@@ -291,6 +316,9 @@ def _wiki_call_claude(page_title: str, page_text: str, question: str,
             max_tokens = 1024,
             messages   = [{"role": "user", "content": prompt}],
         )
+        # 토큰 사용량 로깅
+        if hasattr(message, 'usage'):
+            _log_token_usage("wiki", message.usage.input_tokens, message.usage.output_tokens)
         return message.content[0].text
     except Exception as e:
         logger.error(f"[wiki] Claude API 오류: {e}")
@@ -820,6 +848,9 @@ def _gdi_claude_call(prompt: str, source_label: str, question: str,
             max_tokens = 1024,
             messages   = [{"role": "user", "content": prompt}],
         )
+        # 토큰 사용량 로깅
+        if hasattr(message, 'usage'):
+            _log_token_usage("gdi", message.usage.input_tokens, message.usage.output_tokens)
         answer = message.content[0].text
     except Exception as e:
         logger.error(f"[gdi] Claude API 오류: {e}")
@@ -839,14 +870,20 @@ def _gdi_claude_call(prompt: str, source_label: str, question: str,
 def _gdi_ask_claude(context_text: str, source_label: str,
                     question: str, respond,
                     display_question: str = ""):
-    """GDI 통합검색 결과를 컨텍스트로 Claude AI 에 질문 (기존 호환)."""
+    """GDI 통합검색 결과를 컨텍스트로 Claude AI 에 질문 (기존 호환).
+
+    context_text에 enrichment 데이터(요약/키워드)가 포함되어 있으면
+    Claude가 문서 맥락을 더 정확하게 파악하여 답변 품질이 향상됩니다.
+    """
     MAX_CHARS = 20000
     truncated = len(context_text) > MAX_CHARS
     content   = context_text[:MAX_CHARS] if truncated else context_text
     trunc_note = "\n*(내용이 길어 일부만 포함됨)*\n" if truncated else ""
 
     prompt = (
-        f"다음은 GDI 문서 저장소에서 검색한 '{source_label}' 관련 내용입니다:\n\n"
+        f"다음은 GDI 문서 저장소에서 검색한 '{source_label}' 관련 내용입니다.\n"
+        f"각 문서에는 [요약]과 [키워드]가 포함될 수 있으며, "
+        f"이를 통해 문서의 핵심 맥락을 빠르게 파악할 수 있습니다.\n\n"
         f"{content}{trunc_note}\n\n"
         f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n"
         f"질문에만 집중하세요. 질문에서 요청하지 않은 정보(통계, 메타데이터 등)는 포함하지 마세요.\n"
@@ -1019,6 +1056,9 @@ def _jira_claude_call(prompt: str, source_label: str, question: str,
             max_tokens = 1024,
             messages   = [{"role": "user", "content": prompt}],
         )
+        # 토큰 사용량 로깅
+        if hasattr(message, 'usage'):
+            _log_token_usage("jira", message.usage.input_tokens, message.usage.output_tokens)
         answer = message.content[0].text
     except Exception as e:
         logger.error(f"[jira] Claude API 오류: {e}")
@@ -1038,14 +1078,19 @@ def _jira_claude_call(prompt: str, source_label: str, question: str,
 def _jira_ask_claude(context_text: str, source_label: str,
                      question: str, respond, source_url: str = "",
                      display_question: str = ""):
-    """Jira 이슈/검색 결과를 컨텍스트로 Claude AI에 질문."""
+    """Jira 이슈/검색 결과를 컨텍스트로 Claude AI에 질문.
+
+    context_text에는 이슈 유형, 우선순위, 태그(라벨/컴포넌트/버전) 등
+    enrichment 수준의 메타데이터가 포함되어 정확한 답변을 돕습니다.
+    """
     MAX_CHARS = 20000
     truncated = len(context_text) > MAX_CHARS
     content   = context_text[:MAX_CHARS] if truncated else context_text
     trunc_note = "\n*(내용이 길어 일부만 포함됨)*\n" if truncated else ""
 
     prompt = (
-        f"다음은 Jira에서 조회한 '{source_label}' 관련 이슈 정보입니다:\n\n"
+        f"다음은 Jira에서 조회한 '{source_label}' 관련 이슈 정보입니다.\n"
+        f"각 이슈에는 유형, 상태, 우선순위, 태그(라벨/컴포넌트/버전) 정보가 포함되어 있습니다.\n\n"
         f"{content}{trunc_note}\n\n"
         f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n"
         f"질문에만 집중하세요. 질문에서 요청하지 않은 정보(메타데이터, 통계 등)는 포함하지 마세요.\n"

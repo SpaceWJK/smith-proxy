@@ -131,6 +131,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             "scheduler": self._dash_scheduler(),
             "claims": self._dash_claims(),
             "activity": self._dash_activity(),
+            "processes": self._dash_processes(),
+            "token_usage": self._dash_token_usage(),
         }
         body = json.dumps(result, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
@@ -143,12 +145,14 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     # ── Dashboard: Section 1 — System Health ──────────────
     def _dash_health(self):
         try:
-            # 봇 프로세스 확인 — wmic으로 커맨드라인까지 검색
+            # 봇 프로세스 확인 — PowerShell Get-CimInstance (wmic deprecated)
             import subprocess
             out = subprocess.check_output(
-                'wmic process where "name=\'python.exe\' or name=\'pythonw.exe\'"'
-                " get commandline /format:list",
-                shell=True, text=True, timeout=5,
+                ['powershell', '-NoProfile', '-Command',
+                 "Get-CimInstance Win32_Process -Filter"
+                 " \"name='python.exe' or name='pythonw.exe'\" |"
+                 " Select-Object -ExpandProperty CommandLine"],
+                text=True, timeout=10,
             )
             bot_running = "slack_bot" in out.lower()
         except Exception:
@@ -346,18 +350,29 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     def _dash_scheduler(self):
         schedules = []
         missions = []
+        channel_map = {}  # channel_id → channel_name (미션에서 추출)
         try:
             with open(os.path.join(_BOT_SRC, "config.json"), "r", encoding="utf-8") as f:
                 cfg = json.load(f)
             for s in cfg.get("schedules", []):
                 stype = s.get("type", "")
+                channel_id = s.get("channel", "")
                 if stype == "mission":
-                    continue  # 미션은 별도 처리
+                    # 미션에서 채널 이름 추출
+                    m = s.get("mission", {})
+                    if m.get("channel_name"):
+                        channel_map[channel_id] = m["channel_name"]
+                    continue
+                # 비미션 스케줄은 모두 "알림" 카테고리
+                category = "notification"
                 schedules.append({
                     "id": s.get("id", ""),
                     "name": s.get("name", ""),
                     "type": stype,
+                    "category": category,
                     "trigger": s.get("time", s.get("weekday", "")),
+                    "channel": channel_id,
+                    "enabled": s.get("enabled", False),
                 })
         except Exception:
             pass
@@ -388,20 +403,51 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             s["last_fire"] = log_entry.get("last_fire", "")
             s["status"] = log_entry.get("status", "")
 
-        # mission_state.json
+        # mission_state.json + config의 mission 스케줄 병합
         try:
             with open(os.path.join(_BOT_SRC, "mission_state.json"), "r", encoding="utf-8") as f:
                 ms = json.load(f)
+            # config.json에서 mission 스케줄의 채널/이름 재조회
+            mission_cfg = {}
+            try:
+                with open(os.path.join(_BOT_SRC, "config.json"), "r", encoding="utf-8") as f2:
+                    cfg2 = json.load(f2)
+                for s2 in cfg2.get("schedules", []):
+                    if s2.get("type") == "mission":
+                        m2 = s2.get("mission", {})
+                        mission_cfg[s2["id"]] = {
+                            "channel": s2.get("channel", ""),
+                            "channel_name": m2.get("channel_name", ""),
+                            "name": m2.get("name", s2.get("name", "")),
+                        }
+            except Exception:
+                pass
             for mid, mdata in ms.items():
+                mc = mission_cfg.get(mid, {})
                 missions.append({
                     "id": mid,
                     "number": mdata.get("mission_number", ""),
+                    "name": mc.get("name", ""),
                     "progress": mdata.get("progress", 0),
+                    "channel": mc.get("channel", ""),
+                    "channel_name": mc.get("channel_name", ""),
                 })
         except Exception:
             pass
 
-        return {"schedules": schedules, "missions": missions}
+        # 채널 이름 매핑 — 모든 채널 ID에 이름 부여
+        # 1) 비미션 스케줄의 채널 (동일 채널 사용)
+        for s in schedules:
+            ch = s.get("channel", "")
+            if ch and ch not in channel_map:
+                channel_map[ch] = "메인 업무"
+        # 2) 미션 채널은 위에서 이미 추출됨
+
+        return {
+            "schedules": schedules,
+            "missions": missions,
+            "channel_map": channel_map,
+        }
 
     # ── Dashboard: Section 5 — Claims ─────────────────────
     def _dash_claims(self):
@@ -478,6 +524,151 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         # 시간 역순 정렬, 상위 30건
         events.sort(key=lambda x: x.get("time", ""), reverse=True)
         return events[:30]
+
+    # ── Dashboard: Section 7 — Process Monitor (VIEW ONLY) ──
+    # 민감 정보 마스킹 패턴
+    _SENSITIVE_RE = re.compile(
+        r'(--?(?:token|key|password|secret|api.?key)\s*[=\s])\S+',
+        re.IGNORECASE,
+    )
+
+    def _dash_processes(self):
+        """관련 Python 프로세스 목록 반환 (조회만, Kill 불가)."""
+        procs = []
+        try:
+            import subprocess
+            # PowerShell로 python/pythonw 프로세스 정보 수집
+            # CreationDate를 문자열로 변환하여 반환
+            ps_cmd = (
+                "Get-CimInstance Win32_Process "
+                "-Filter \"name='python.exe' or name='pythonw.exe'\" "
+                "| Select-Object ProcessId, Name, "
+                "@{N='MemMB';E={[math]::Round($_.WorkingSetSize/1MB,1)}}, "
+                "CommandLine, "
+                "@{N='Created';E={$_.CreationDate.ToString('yyyy-MM-dd HH:mm:ss')}} "
+                "| ConvertTo-Json -Compress"
+            )
+            out = subprocess.check_output(
+                ['powershell', '-NoProfile', '-Command', ps_cmd],
+                text=True, timeout=10,
+            ).strip()
+            if not out:
+                return {"processes": [], "warnings": []}
+
+            data = json.loads(out)
+            if isinstance(data, dict):
+                data = [data]
+
+            # 프로세스 분류
+            seen_types = {}  # type -> count
+            for p in data:
+                cmd = (p.get("CommandLine") or "").lower()
+                pid = p.get("ProcessId", 0)
+                mem_mb = p.get("MemMB", 0)
+                name = p.get("Name", "")
+
+                # 프로세스 유형 식별
+                if "slack_bot" in cmd:
+                    ptype = "slack_bot"
+                    label = "Slack Bot"
+                elif "s3_server" in cmd:
+                    ptype = "s3_server"
+                    label = "KIS Server"
+                elif "auto_sync" in cmd:
+                    ptype = "auto_sync"
+                    label = "Auto Sync"
+                elif "enrichment" in cmd:
+                    ptype = "enrichment"
+                    label = "Enrichment"
+                else:
+                    ptype = "other_python"
+                    label = "Python"
+
+                # 커맨드라인 미리보기 — 민감 정보 마스킹
+                raw_cmd = (p.get("CommandLine") or "")[:120]
+                safe_cmd = self._SENSITIVE_RE.sub(r'\1****', raw_cmd)
+
+                seen_types[ptype] = seen_types.get(ptype, 0) + 1
+                procs.append({
+                    "pid": pid,
+                    "name": name,
+                    "type": ptype,
+                    "label": label,
+                    "mem_mb": mem_mb,
+                    "created": p.get("Created", ""),
+                    "cmd_preview": safe_cmd,
+                })
+
+            # 경고 생성: 중복 프로세스 탐지
+            warnings = []
+            for ptype, count in seen_types.items():
+                if ptype in ("slack_bot", "s3_server") and count > 1:
+                    label = "Slack Bot" if ptype == "slack_bot" else "KIS Server"
+                    warnings.append(
+                        f"⚠️ {label} 중복 실행 감지 ({count}개) — 수동 확인 필요"
+                    )
+            return {"processes": procs, "warnings": warnings}
+
+        except Exception as e:
+            return {"processes": [], "warnings": [f"프로세스 조회 실패: {str(e)}"]}
+
+    # ── Dashboard: Section 8 — Token Usage ─────────────────
+    def _dash_token_usage(self):
+        """token_usage.log에서 API 토큰 사용량 집계."""
+        log_path = os.path.join(_LOGS_DIR, "token_usage.log")
+        lines = self._tail_file(log_path, 500)
+        if not lines:
+            return {"total_calls": 0, "total_input": 0, "total_output": 0,
+                    "by_source": {}, "by_date": {}}
+
+        total_calls = 0
+        total_input = 0
+        total_output = 0
+        by_source = {}  # source -> {calls, input, output}
+        by_date = {}    # YYYY-MM-DD -> {calls, input, output}
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # 형식: 2026-03-13 17:30:44 | wiki | in=1234 | out=567 | total=1801
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) < 4:
+                continue
+            try:
+                ts = parts[0]
+                source = parts[1].strip()
+                in_tok = int(parts[2].split("=")[1])
+                out_tok = int(parts[3].split("=")[1])
+
+                total_calls += 1
+                total_input += in_tok
+                total_output += out_tok
+
+                # 소스별
+                if source not in by_source:
+                    by_source[source] = {"calls": 0, "input": 0, "output": 0}
+                by_source[source]["calls"] += 1
+                by_source[source]["input"] += in_tok
+                by_source[source]["output"] += out_tok
+
+                # 날짜별
+                date_key = ts[:10]
+                if date_key not in by_date:
+                    by_date[date_key] = {"calls": 0, "input": 0, "output": 0}
+                by_date[date_key]["calls"] += 1
+                by_date[date_key]["input"] += in_tok
+                by_date[date_key]["output"] += out_tok
+            except (ValueError, IndexError):
+                continue
+
+        return {
+            "total_calls": total_calls,
+            "total_input": total_input,
+            "total_output": total_output,
+            "by_source": by_source,
+            "by_date": by_date,
+        }
 
     # ── Dashboard 유틸 ────────────────────────────────────
     @staticmethod

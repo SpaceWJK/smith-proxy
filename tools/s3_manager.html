@@ -160,17 +160,28 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: var(--bg)
 .dash-bar-count { min-width: 24px; text-align: right; font-size: 12px; color: var(--text); }
 
 /* Dashboard: Scheduler */
-.dash-sched-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: 12px; }
-.dash-sched-icon { font-size: 14px; }
-.dash-sched-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dash-sched-time { color: var(--text2); min-width: 40px; text-align: right; }
+.dash-sched-item { display: flex; align-items: center; gap: 4px; margin-bottom: 3px; font-size: 12px; padding: 2px 0; }
+.dash-sched-icon { font-size: 13px; flex-shrink: 0; width: 18px; text-align: center; }
+.dash-sched-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dash-sched-time { color: var(--text2); min-width: 36px; text-align: right; font-size: 11px; flex-shrink: 0; }
 .dash-sched-status { min-width: 28px; text-align: center; font-size: 11px; }
-.dash-mission-sep { margin: 8px 0 6px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text2); font-weight: 600; }
-.dash-mission-row { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-size: 12px; }
-.dash-mission-num { min-width: 32px; color: var(--text2); }
-.dash-mission-bar { flex: 1; height: 10px; background: var(--surface2); border-radius: 5px; overflow: hidden; }
-.dash-mission-fill { height: 100%; background: var(--accent); border-radius: 5px; transition: width 0.5s ease; }
-.dash-mission-pct { min-width: 36px; text-align: right; font-size: 11px; color: var(--text2); }
+.dash-mission-sep { margin: 6px 0 4px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text2); font-weight: 600; }
+.dash-mission-row { display: flex; align-items: center; gap: 4px; margin-bottom: 3px; font-size: 12px; padding: 2px 0; }
+.dash-mission-num { min-width: 36px; color: var(--accent); font-weight: 600; font-size: 11px; flex-shrink: 0; }
+.dash-mission-bar { flex: 0 0 60px; height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.dash-mission-fill { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.5s ease; }
+.dash-mission-pct { min-width: 32px; text-align: right; font-size: 11px; color: var(--text2); flex-shrink: 0; }
+.dash-mission-name { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; min-width: 0; }
+
+/* Dashboard: Scheduler Tags */
+.dash-sched-tags { display: flex; gap: 3px; align-items: center; flex-shrink: 0; }
+.dash-tag { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 600; line-height: 15px; white-space: nowrap; }
+.dash-tag.notification { background: #3b82f6; color: #fff; }
+.dash-tag.mission { background: #10b981; color: #fff; }
+.dash-tag.ch { background: var(--surface2); color: var(--text2); font-weight: 500; }
+.dash-tag.off { background: #ef4444; color: #fff; }
+.dash-sched-disabled { opacity: 0.5; }
+.dash-sched-disabled .dash-sched-name { text-decoration: line-through; }
 
 /* Dashboard: Claims */
 .dash-claim-item { margin-bottom: 8px; padding: 8px 10px; background: var(--surface2); border-radius: 6px; font-size: 12px; }
@@ -194,6 +205,48 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: var(--bg)
 .dash-activity-src.sched { background: #ec4899; }
 .dash-activity-event { min-width: 44px; color: var(--text2); }
 .dash-activity-detail { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Dashboard: Process Monitor */
+.dash-proc-item { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(71,85,105,0.2); font-size: 12px; }
+.dash-proc-item:last-child { border-bottom: none; }
+.dash-proc-type { min-width: 80px; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; color: white; text-align: center; }
+.dash-proc-type.slack_bot { background: #3b82f6; }
+.dash-proc-type.s3_server { background: #8b5cf6; }
+.dash-proc-type.auto_sync { background: #22c55e; }
+.dash-proc-type.enrichment { background: #f59e0b; }
+.dash-proc-type.other_python { background: #64748b; }
+.dash-proc-pid { min-width: 50px; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 11px; color: var(--text2); }
+.dash-proc-mem { min-width: 55px; text-align: right; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 11px; color: var(--text); }
+.dash-proc-cmd { flex: 1; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.dash-proc-warn { padding: 6px 10px; margin-bottom: 6px; background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); border-radius: 6px; font-size: 12px; color: #fca5a5; }
+
+/* Dashboard: Query Trends */
+.dash-trend-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.dash-trend-total { font-size: 22px; font-weight: 700; color: var(--text); }
+.dash-trend-delta { font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+.dash-trend-delta.up { background: rgba(34,197,94,0.2); color: #4ade80; }
+.dash-trend-delta.down { background: rgba(239,68,68,0.2); color: #fca5a5; }
+.dash-trend-delta.flat { background: rgba(100,116,139,0.2); color: #94a3b8; }
+.dash-trend-chart { position: relative; height: 120px; display: flex; align-items: flex-end; gap: 2px; padding-top: 4px; }
+.dash-trend-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.dash-trend-bar { width: 100%; border-radius: 3px 3px 0 0; background: var(--accent); min-height: 2px; transition: height 0.3s ease; }
+.dash-trend-bar.wiki { background: #3b82f6; }
+.dash-trend-bar.gdi { background: #8b5cf6; }
+.dash-trend-bar.jira { background: #06b6d4; }
+.dash-trend-label { font-size: 9px; color: var(--text2); white-space: nowrap; writing-mode: vertical-lr; text-orientation: mixed; max-height: 40px; overflow: hidden; }
+.dash-trend-legend { display: flex; gap: 12px; margin-top: 8px; font-size: 11px; color: var(--text2); }
+.dash-trend-legend-item { display: flex; align-items: center; gap: 4px; }
+.dash-trend-legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* Dashboard: Token Usage */
+.dash-token-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
+.dash-token-stat { text-align: center; padding: 10px; background: var(--surface2); border-radius: 8px; }
+.dash-token-stat-value { font-size: 20px; font-weight: 700; color: var(--text); }
+.dash-token-stat-label { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.dash-token-source { display: flex; gap: 12px; flex-wrap: wrap; }
+.dash-token-src-card { flex: 1; min-width: 140px; padding: 8px 12px; background: var(--surface2); border-radius: 6px; }
+.dash-token-src-name { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 4px; text-transform: uppercase; }
+.dash-token-src-detail { font-size: 11px; color: var(--text2); }
 
 /* Dashboard: Footer */
 .dash-footer {
@@ -533,7 +586,9 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: var(--bg)
           <h3>Drop files here</h3>
           <p>or click to browse</p>
           <button class="browse-btn" onclick="document.getElementById('fileInput').click()">Browse Files</button>
+          <button class="browse-btn" style="margin-left:8px;background:#6c757d" onclick="document.getElementById('folderInput').click()">Browse Folder</button>
           <input type="file" id="fileInput" multiple onchange="handleFileSelect(event)">
+          <input type="file" id="folderInput" webkitdirectory style="display:none" onchange="handleFolderSelect(event)">
         </div>
         <div class="upload-queue" id="uploadQueue"></div>
       </div>
@@ -620,7 +675,7 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: var(--bg)
         <!-- Row 2 Right: Scheduler -->
         <div class="dash-card" id="dashScheduler">
           <h4>&#x1F4C5; Scheduler
-            <span class="dash-tooltip">체크리스트 스케줄 및 다음 실행 시간</span>
+            <span class="dash-tooltip">알림 스케줄 및 QA Task 현황</span>
           </h4>
           <div class="dash-filter-bar" id="dashSchedulerFilter"></div>
           <div class="dash-card-body" id="dashSchedulerBody">
@@ -644,6 +699,34 @@ body { font-family: 'Segoe UI', -apple-system, sans-serif; background: var(--bg)
           </h4>
           <div class="dash-filter-bar" id="dashActivityFilter"></div>
           <div class="dash-card-body" id="dashActivityBody">
+            <div class="dash-loading"><div class="spinner"></div></div>
+          </div>
+        </div>
+        <!-- Row 4 Left: Process Monitor (VIEW ONLY) -->
+        <div class="dash-card" id="dashProcesses">
+          <h4>&#x2699;&#xFE0F; Process Monitor
+            <span class="dash-tooltip">관련 Python 프로세스 현황 (조회 전용)</span>
+          </h4>
+          <div class="dash-card-body" id="dashProcessesBody">
+            <div class="dash-loading"><div class="spinner"></div></div>
+          </div>
+        </div>
+        <!-- Row 4 Right: Query Trends -->
+        <div class="dash-card" id="dashTrends">
+          <h4>&#x1F4C8; Query Trends
+            <span class="dash-tooltip">기간별 쿼리 추이</span>
+          </h4>
+          <div class="dash-filter-bar" id="dashTrendsFilter"></div>
+          <div class="dash-card-body" id="dashTrendsBody">
+            <div class="dash-loading"><div class="spinner"></div></div>
+          </div>
+        </div>
+        <!-- Row 5: Token Usage (full width) -->
+        <div class="dash-card" style="grid-column: 1 / -1" id="dashTokenUsage">
+          <h4>&#x1F4B0; API Token Usage
+            <span class="dash-tooltip">Anthropic Claude API 토큰 소모량</span>
+          </h4>
+          <div class="dash-card-body" id="dashTokenUsageBody">
             <div class="dash-loading"><div class="spinner"></div></div>
           </div>
         </div>
@@ -993,15 +1076,72 @@ function showUploadArea() {
   sec.style.display = sec.style.display === 'none' ? 'block' : 'none';
 }
 
-function handleDrop(e) {
+async function handleDrop(e) {
   e.preventDefault();
   e.currentTarget.classList.remove('drag-over');
-  const files = Array.from(e.dataTransfer.files);
-  if (files.length) uploadFiles(files);
+
+  // dataTransfer.items + webkitGetAsEntry로 폴더 재귀 탐색
+  const items = e.dataTransfer.items;
+  if (!items || !items.length) return;
+
+  const entries = [];
+  for (let i = 0; i < items.length; i++) {
+    const entry = items[i].webkitGetAsEntry ? items[i].webkitGetAsEntry() : null;
+    if (entry) entries.push(entry);
+  }
+
+  if (!entries.length) {
+    // webkitGetAsEntry 미지원 브라우저 — 기존 방식 폴백
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length) uploadFiles(files);
+    return;
+  }
+
+  const fileList = [];
+  await Promise.all(entries.map(entry => _traverseEntry(entry, '', fileList)));
+  if (fileList.length) uploadFiles(fileList);
+}
+
+function _traverseEntry(entry, basePath, fileList) {
+  return new Promise(resolve => {
+    if (entry.isFile) {
+      entry.file(file => {
+        file._relativePath = basePath ? basePath + '/' + file.name : '';
+        fileList.push(file);
+        resolve();
+      });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const readAll = (all = []) => {
+        reader.readEntries(async batch => {
+          if (!batch.length) {
+            const dir = basePath ? basePath + '/' + entry.name : entry.name;
+            await Promise.all(all.map(e => _traverseEntry(e, dir, fileList)));
+            resolve();
+          } else {
+            readAll([...all, ...batch]);
+          }
+        });
+      };
+      readAll();
+    } else {
+      resolve();
+    }
+  });
 }
 
 function handleFileSelect(e) {
   const files = Array.from(e.target.files);
+  if (files.length) uploadFiles(files);
+  e.target.value = '';
+}
+
+function handleFolderSelect(e) {
+  const files = Array.from(e.target.files).map(f => {
+    // webkitRelativePath: "폴더명/하위/파일.txt"
+    f._relativePath = f.webkitRelativePath || '';
+    return f;
+  });
   if (files.length) uploadFiles(files);
   e.target.value = '';
 }
@@ -1022,8 +1162,11 @@ async function uploadFiles(files) {
       const formData = new FormData();
       formData.append('file', file);
       // path must end with / for API to place file in correct folder
-      const uploadPath = currentPath ? (currentPath.endsWith('/') ? currentPath : currentPath + '/') : '';
-      formData.append('path', uploadPath);
+      const base = currentPath ? (currentPath.endsWith('/') ? currentPath : currentPath + '/') : '';
+      // 폴더 업로드 시 하위 경로 보존
+      const relPath = file._relativePath || '';
+      const relDir = relPath.includes('/') ? relPath.substring(0, relPath.lastIndexOf('/') + 1) : '';
+      formData.append('path', base + relDir);
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `${getApi()}/upload`);
@@ -2211,7 +2354,7 @@ async function loadDashboard() {
     console.error('loadDashboard error:', e);
     document.getElementById('dashUpdated').textContent = `Error: ${e.message}`;
     // 각 카드의 스피너를 제거하고 에러 메시지 표시
-    ['dashHealthBody','dashCacheBody','dashQueriesBody','dashSchedulerBody','dashClaimsBody','dashActivityBody'].forEach(id => {
+    ['dashHealthBody','dashCacheBody','dashQueriesBody','dashSchedulerBody','dashClaimsBody','dashActivityBody','dashProcessesBody','dashTrendsBody','dashTokenUsageBody'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.innerHTML = '<p class="dash-error">API 연결 실패</p>';
     });
@@ -2233,6 +2376,9 @@ function renderDashboard(d) {
   renderDashScheduler(d.scheduler);
   renderDashClaims(d.claims);
   renderDashActivity(d.activity);
+  renderDashProcesses(d.processes);
+  renderDashTrends(d.activity);
+  renderDashTokenUsage(d.token_usage);
 }
 
 // -- Section 1: System Health --
@@ -2357,52 +2503,75 @@ function renderDashScheduler(s) {
   try {
     if (!s) { el.innerHTML = '<p class="dash-empty">데이터 없음</p>'; return; }
     _schedRaw = s;
-    // 채널 목록 추출 → 필터 바 생성
-    const channels = [...new Set((s.schedules || []).map(sc => sc.channel || 'default'))];
     const filterEl = document.getElementById('dashSchedulerFilter');
-    if (filterEl && channels.length > 1) {
-      let fb = '<button class="dash-filter-btn active" onclick="filterScheduler(\'all\')">All</button>';
-      for (const ch of channels) {
-        fb += `<button class="dash-filter-btn" onclick="filterScheduler('${ch}')">${ch}</button>`;
-      }
-      filterEl.innerHTML = fb;
+    if (filterEl) {
+      filterEl.innerHTML = `
+        <button class="dash-filter-btn active" onclick="filterScheduler('all')">All</button>
+        <button class="dash-filter-btn" onclick="filterScheduler('notification')">알림</button>
+        <button class="dash-filter-btn" onclick="filterScheduler('mission')">QA Task</button>`;
     }
-    _renderSchedItems(s.schedules || [], s.missions || [], el);
+    _renderSchedItems('all');
   } catch (e) {
     console.error('renderDashScheduler error:', e);
     el.innerHTML = '<p class="dash-error">렌더링 오류</p>';
   }
 }
-function filterScheduler(ch) {
+function filterScheduler(filter) {
   if (!_schedRaw) return;
   const filterEl = document.getElementById('dashSchedulerFilter');
   if (filterEl) filterEl.querySelectorAll('.dash-filter-btn').forEach(b => {
-    b.classList.toggle('active', b.textContent === ch || (ch === 'all' && b.textContent === 'All'));
+    const bFilter = b.getAttribute('onclick').match(/'([^']+)'/)?.[1] || '';
+    b.classList.toggle('active', bFilter === filter);
   });
-  const items = ch === 'all' ? (_schedRaw.schedules || [])
-    : (_schedRaw.schedules || []).filter(sc => (sc.channel || 'default') === ch);
-  _renderSchedItems(items, ch === 'all' ? (_schedRaw.missions || []) : [], document.getElementById('dashSchedulerBody'));
+  _renderSchedItems(filter);
 }
-function _renderSchedItems(schedules, missions, el) {
+function _renderSchedItems(filter) {
+  const el = document.getElementById('dashSchedulerBody');
+  if (!el || !_schedRaw) return;
+  const chMap = _schedRaw.channel_map || {};
+  const getChName = (chId) => chMap[chId] || '';
+  const today = new Date().toISOString().slice(0, 10);
   let html = '';
-  for (const sc of schedules) {
-    const icon = sc.status === 'sent' ? '✅' : (sc.last_fire ? '✅' : '⏳');
-    html += `
-      <div class="dash-sched-item">
-        <span class="dash-sched-icon">${icon}</span>
-        <span class="dash-sched-name" title="${sc.name || sc.id}">${sc.name || sc.id}</span>
-        <span class="dash-sched-time">${sc.trigger || ''}</span>
-      </div>`;
-  }
-  if (missions.length) {
-    html += '<div class="dash-mission-sep">Missions</div>';
-    for (const m of missions) {
+
+  // 알림(비미션) 스케줄 렌더
+  if (filter === 'all' || filter === 'notification') {
+    const scheds = _schedRaw.schedules || [];
+    for (const sc of scheds) {
+      const sentToday = sc.last_fire === today && sc.status === 'sent';
+      const icon = sentToday ? '✅' : (sc.last_fire ? '📤' : '⏳');
+      const disabledCls = sc.enabled === false ? ' dash-sched-disabled' : '';
+      const disabledTag = sc.enabled === false ? '<span class="dash-tag off">OFF</span>' : '';
+      const chName = getChName(sc.channel);
+      const chTag = chName ? `<span class="dash-tag ch">#${chName}</span>` : '';
       html += `
-        <div class="dash-mission-row">
-          <span class="dash-mission-num">${m.number || m.id}</span>
-          <div class="dash-mission-bar"><div class="dash-mission-fill" style="width:${m.progress}%"></div></div>
-          <span class="dash-mission-pct">${m.progress}%</span>
+        <div class="dash-sched-item${disabledCls}">
+          <span class="dash-sched-icon">${icon}</span>
+          <span class="dash-sched-name" title="${sc.name || sc.id}">${sc.name || sc.id}</span>
+          <span class="dash-sched-tags">${chTag}${disabledTag}</span>
+          <span class="dash-sched-time">${sc.trigger || ''}</span>
         </div>`;
+    }
+  }
+
+  // QA Task(미션) 렌더
+  if (filter === 'all' || filter === 'mission') {
+    const missions = _schedRaw.missions || [];
+    if (missions.length) {
+      if (filter === 'all') html += '<div class="dash-mission-sep">QA Tasks</div>';
+      for (const m of missions) {
+        const chName = m.channel_name || getChName(m.channel);
+        const chTag = chName ? `<span class="dash-tag ch">#${chName}</span>` : '';
+        const label = m.number ? `${m.number}` : m.id;
+        const fullName = m.name ? `${label} · ${m.name}` : label;
+        html += `
+          <div class="dash-mission-row">
+            <span class="dash-mission-num">${label}</span>
+            <span class="dash-mission-name" title="${fullName}">${m.name || m.id}</span>
+            ${chTag}
+            <div class="dash-mission-bar"><div class="dash-mission-fill" style="width:${m.progress}%"></div></div>
+            <span class="dash-mission-pct">${m.progress}%</span>
+          </div>`;
+      }
     }
   }
   el.innerHTML = html || '<span style="color:var(--text2)">No schedules</span>';
@@ -2463,38 +2632,46 @@ function _renderClaimItems(items, total, el) {
   el.innerHTML = html;
 }
 
-// -- Section 6: Activity Log (with filter) --
+// -- Section 6: Activity Log (with source filter) --
 let _activityRaw = null;
+let _activityFilter = 'all';
 function renderDashActivity(a) {
   const el = document.getElementById('dashActivityBody');
   if (!el) return;
   try {
     if (!a || !a.length) { el.innerHTML = '<span style="color:var(--text2)">No activity</span>'; return; }
     _activityRaw = a;
-    // 이벤트 타입 추출 → 필터 바
-    const types = [...new Set(a.map(ev => ev.event || ev.source || 'other'))];
+    // 소스별 필터 바 (고정: all/wiki/gdi/jira/claim/sync)
     const filterEl = document.getElementById('dashActivityFilter');
-    if (filterEl && types.length > 1) {
-      let fb = '<button class="dash-filter-btn active" onclick="filterActivity(\'all\')">All</button>';
-      for (const t of types) {
-        fb += `<button class="dash-filter-btn" onclick="filterActivity('${t}')">${t}</button>`;
+    if (filterEl) {
+      const sources = ['all', 'wiki', 'gdi', 'jira', 'claim', 'sync'];
+      const labels = { all: 'All', wiki: 'Wiki', gdi: 'GDI', jira: 'Jira', claim: 'Claim', sync: 'Sync' };
+      let fb = '';
+      for (const s of sources) {
+        const active = s === _activityFilter ? ' active' : '';
+        fb += `<button class="dash-filter-btn${active}" onclick="filterActivity('${s}')">${labels[s]}</button>`;
       }
       filterEl.innerHTML = fb;
     }
-    _renderActivityItems(a, el);
+    _applyActivityFilter();
   } catch (e) {
     console.error('renderDashActivity error:', e);
     el.innerHTML = '<p class="dash-error">렌더링 오류</p>';
   }
 }
-function filterActivity(type) {
-  if (!_activityRaw) return;
+function filterActivity(source) {
+  _activityFilter = source;
   const filterEl = document.getElementById('dashActivityFilter');
   if (filterEl) filterEl.querySelectorAll('.dash-filter-btn').forEach(b => {
-    b.classList.toggle('active', b.textContent === type || (type === 'all' && b.textContent === 'All'));
+    const s = b.getAttribute('onclick').match(/'([^']+)'/)?.[1] || '';
+    b.classList.toggle('active', s === source);
   });
-  const items = type === 'all' ? _activityRaw
-    : _activityRaw.filter(ev => (ev.event || ev.source || 'other') === type);
+  _applyActivityFilter();
+}
+function _applyActivityFilter() {
+  if (!_activityRaw) return;
+  const items = _activityFilter === 'all' ? _activityRaw
+    : _activityRaw.filter(ev => (ev.source || '').toLowerCase() === _activityFilter);
   _renderActivityItems(items, document.getElementById('dashActivityBody'));
 }
 function _renderActivityItems(items, el) {
@@ -2511,6 +2688,219 @@ function _renderActivityItems(items, el) {
       </div>`;
   }
   el.innerHTML = html || '<span style="color:var(--text2)">No activity</span>';
+}
+
+// -- Section 7: Process Monitor (VIEW ONLY) --
+function renderDashProcesses(p) {
+  const el = document.getElementById('dashProcessesBody');
+  if (!el) return;
+  try {
+    if (!p || !p.processes) { el.innerHTML = '<p class="dash-empty">데이터 없음</p>'; return; }
+    let html = '';
+
+    // 경고 표시
+    if (p.warnings && p.warnings.length) {
+      for (const w of p.warnings) {
+        html += `<div class="dash-proc-warn">${w}</div>`;
+      }
+    }
+
+    // 프로세스 수 요약
+    const counts = {};
+    for (const proc of p.processes) {
+      counts[proc.label] = (counts[proc.label] || 0) + 1;
+    }
+    const summary = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(' · ');
+    html += `<div style="font-size:11px;color:var(--text2);margin-bottom:8px">총 ${p.processes.length}개 프로세스 (${summary})</div>`;
+
+    // 프로세스 목록
+    for (const proc of p.processes) {
+      html += `
+        <div class="dash-proc-item" title="${proc.cmd_preview || ''}">
+          <span class="dash-proc-type ${proc.type}">${proc.label}</span>
+          <span class="dash-proc-pid">PID ${proc.pid}</span>
+          <span class="dash-proc-mem">${proc.mem_mb} MB</span>
+          <span class="dash-proc-cmd">${proc.cmd_preview || ''}</span>
+        </div>`;
+    }
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<p class="dash-error">렌더링 오류</p>';
+  }
+}
+
+// -- Section 8: Query Trends (activity 기반 집계) --
+let _trendsRange = '7d';
+function renderDashTrends(activity) {
+  const filterEl = document.getElementById('dashTrendsFilter');
+  if (filterEl) {
+    filterEl.innerHTML = `
+      <button class="dash-filter-btn${_trendsRange==='today'?' active':''}" onclick="setTrendRange('today')">Today</button>
+      <button class="dash-filter-btn${_trendsRange==='7d'?' active':''}" onclick="setTrendRange('7d')">7D</button>
+      <button class="dash-filter-btn${_trendsRange==='30d'?' active':''}" onclick="setTrendRange('30d')">30D</button>`;
+  }
+  _renderTrendChart(activity);
+}
+function setTrendRange(range) {
+  _trendsRange = range;
+  const filterEl = document.getElementById('dashTrendsFilter');
+  if (filterEl) filterEl.querySelectorAll('.dash-filter-btn').forEach(b => {
+    const r = b.getAttribute('onclick').match(/'([^']+)'/)?.[1] || '';
+    b.classList.toggle('active', r === range);
+  });
+  if (dashboardData && dashboardData.activity) _renderTrendChart(dashboardData.activity);
+}
+function _renderTrendChart(activity) {
+  const el = document.getElementById('dashTrendsBody');
+  if (!el || !activity) { if (el) el.innerHTML = '<p class="dash-empty">데이터 없음</p>'; return; }
+
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+
+  // 날짜 범위 계산
+  let days = 7;
+  if (_trendsRange === 'today') days = 1;
+  else if (_trendsRange === '30d') days = 30;
+
+  // 날짜별 소스별 카운트 집계
+  const dateMap = {};
+  const dates = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const ds = d.toISOString().slice(0, 10);
+    dates.push(ds);
+    dateMap[ds] = { wiki: 0, gdi: 0, jira: 0 };
+  }
+
+  let totalInRange = 0;
+  for (const ev of activity) {
+    if (ev.event !== 'query') continue;
+    const evDate = (ev.time || '').slice(0, 10);
+    if (dateMap[evDate]) {
+      const src = (ev.source || '').toLowerCase();
+      if (src === 'wiki' || src === 'gdi' || src === 'jira') {
+        dateMap[evDate][src]++;
+      }
+      totalInRange++;
+    }
+  }
+
+  // Today 모드: 시간별 차트
+  if (_trendsRange === 'today') {
+    const hourMap = {};
+    for (let h = 0; h < 24; h++) {
+      const hk = String(h).padStart(2, '0');
+      hourMap[hk] = { wiki: 0, gdi: 0, jira: 0 };
+    }
+    for (const ev of activity) {
+      if (ev.event !== 'query') continue;
+      const evDate = (ev.time || '').slice(0, 10);
+      if (evDate !== today) continue;
+      const hour = (ev.time || '').slice(11, 13);
+      if (hourMap[hour]) {
+        const src = (ev.source || '').toLowerCase();
+        if (hourMap[hour][src] !== undefined) hourMap[hour][src]++;
+      }
+    }
+    // 현재 시간까지만 표시
+    const curHour = now.getHours();
+    const hourKeys = Object.keys(hourMap).filter(h => parseInt(h) <= curHour);
+    const maxVal = Math.max(1, ...hourKeys.map(h => hourMap[h].wiki + hourMap[h].gdi + hourMap[h].jira));
+
+    let html = `<div class="dash-trend-header">
+      <span class="dash-trend-total">${totalInRange}</span>
+      <span style="font-size:12px;color:var(--text2)">queries today</span>
+    </div>`;
+    html += '<div class="dash-trend-chart">';
+    for (const h of hourKeys) {
+      const d = hourMap[h];
+      const total = d.wiki + d.gdi + d.jira;
+      const pct = (total / maxVal) * 100;
+      html += `<div class="dash-trend-bar-wrap" title="${h}:00 — ${total} queries">
+        <div class="dash-trend-bar" style="height:${Math.max(pct, 2)}%;background:linear-gradient(to top,#3b82f6 ${d.wiki}px,#8b5cf6 0,#8b5cf6 ${d.wiki+d.gdi}px,#06b6d4 0)"></div>
+        <span class="dash-trend-label">${h}</span>
+      </div>`;
+    }
+    html += '</div>';
+    html += _trendLegend();
+    el.innerHTML = html;
+    return;
+  }
+
+  // 7D / 30D: 일별 차트
+  const maxVal = Math.max(1, ...dates.map(ds => dateMap[ds].wiki + dateMap[ds].gdi + dateMap[ds].jira));
+  let html = `<div class="dash-trend-header">
+    <span class="dash-trend-total">${totalInRange}</span>
+    <span style="font-size:12px;color:var(--text2)">queries (${days}일)</span>
+  </div>`;
+  html += '<div class="dash-trend-chart">';
+  for (const ds of dates) {
+    const d = dateMap[ds];
+    const total = d.wiki + d.gdi + d.jira;
+    const pct = (total / maxVal) * 100;
+    const label = ds.slice(5); // MM-DD
+    html += `<div class="dash-trend-bar-wrap" title="${ds} — ${total} queries (W:${d.wiki} G:${d.gdi} J:${d.jira})">
+      <div class="dash-trend-bar" style="height:${Math.max(pct, 2)}%"></div>
+      <span class="dash-trend-label">${label}</span>
+    </div>`;
+  }
+  html += '</div>';
+  html += _trendLegend();
+  el.innerHTML = html;
+}
+function _trendLegend() {
+  return `<div class="dash-trend-legend">
+    <span class="dash-trend-legend-item"><span class="dash-trend-legend-dot" style="background:#3b82f6"></span>Wiki</span>
+    <span class="dash-trend-legend-item"><span class="dash-trend-legend-dot" style="background:#8b5cf6"></span>GDI</span>
+    <span class="dash-trend-legend-item"><span class="dash-trend-legend-dot" style="background:#06b6d4"></span>Jira</span>
+  </div>`;
+}
+
+// -- Section 9: Token Usage --
+function renderDashTokenUsage(t) {
+  const el = document.getElementById('dashTokenUsageBody');
+  if (!el) return;
+  try {
+    if (!t || t.total_calls === 0) {
+      el.innerHTML = '<span style="color:var(--text2)">토큰 사용 데이터 없음 — 봇 재시작 후 API 호출 시 자동 기록됩니다</span>';
+      return;
+    }
+    const fmt = (n) => n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n);
+
+    let html = '<div class="dash-token-grid">';
+    html += `<div class="dash-token-stat">
+      <div class="dash-token-stat-value">${t.total_calls}</div>
+      <div class="dash-token-stat-label">Total API Calls</div>
+    </div>`;
+    html += `<div class="dash-token-stat">
+      <div class="dash-token-stat-value">${fmt(t.total_input)}</div>
+      <div class="dash-token-stat-label">Input Tokens</div>
+    </div>`;
+    html += `<div class="dash-token-stat">
+      <div class="dash-token-stat-value">${fmt(t.total_output)}</div>
+      <div class="dash-token-stat-label">Output Tokens</div>
+    </div>`;
+    html += '</div>';
+
+    // 소스별 분포
+    const sources = Object.entries(t.by_source || {});
+    if (sources.length) {
+      html += '<div class="dash-token-source">';
+      const colors = { wiki: '#3b82f6', gdi: '#8b5cf6', jira: '#06b6d4' };
+      for (const [src, data] of sources) {
+        const color = colors[src] || '#64748b';
+        html += `<div class="dash-token-src-card" style="border-left:3px solid ${color}">
+          <div class="dash-token-src-name">${src}</div>
+          <div class="dash-token-src-detail">${data.calls} calls · In: ${fmt(data.input)} · Out: ${fmt(data.output)}</div>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<p class="dash-error">렌더링 오류</p>';
+  }
 }
 </script>
 </body>
