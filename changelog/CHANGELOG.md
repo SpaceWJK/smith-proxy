@@ -20,6 +20,35 @@
 
 ---
 
+## [1.6.2] - 2026-03-13
+
+### 수정
+- **Wiki 핸들러 — 매크로 전용 페이지 감지** (`slack_bot.py`)
+  - `_is_macro_only_content()`: Confluence 매크로 JSON(childpages, toc 등)만 포함된 페이지 조기 감지
+  - Stage 1 진입 전 빈 콘텐츠 + 매크로 콘텐츠 체크 → 불필요한 Claude 호출 차단
+  - Stage 2 자식 페이지 검색: `ORDER BY lastmodified DESC` + `limit=10`으로 최신 페이지 우선 탐색
+  - Stage 2 매크로 전용 자식 페이지 스킵 로직 추가
+- **Dashboard 로딩 버그 수정** (`s3_manager.html`, `s3_server.py`)
+  - `loadDashboard()` 셀렉터 오류 수정 (`#dashboard-panel` → `#panelDashboard`)
+  - API 실패 시 스피너 영구 회전 버그 수정 (무조건 에러 메시지 교체)
+  - System Health 봇 프로세스 감지: `tasklist` → `wmic` 변경 (커맨드라인 검색)
+
+### 추가
+- **Dashboard 한글 툴팁** — 카드 제목 마우스 호버 시 1줄 설명 표시
+- **Dashboard 카드 스크롤** — `max-height: 280px` + 개별 스크롤 적용 (레이아웃 뚫림 방지)
+- **Dashboard 필터 기능** — Scheduler(채널별), Claims(카테고리별), Activity Log(이벤트별)
+- **Dashboard 적재 상태 표시** — Cache Status 카드에 소스별 body 적재율(%) 표시
+- **오토싱크 백그라운드 실행** — `run_sync_silent.vbs` + Task Scheduler 등록
+  - `MCP-AutoSync-Delta`: 4시간 주기 델타 싱크 (CMD 창 없이 백그라운드)
+  - `MCP-AutoSync-FullWiki`: 매주 월요일 08:00 전체 적재
+- **sync_engine 복구 함수** (`sync_engine.py`, `cache_manager.py`)
+  - `repair_missing_content()`: body 누락 177개 노드 MCP 재가져오기
+  - `repair_parent_ids()`: 고아 노드 부모 관계 복구
+  - 3개 헬퍼 쿼리 추가 (`get_nodes_missing_content`, `get_orphan_nodes`, `update_parent_id`)
+  - `auto_sync.py`: full_ingest 후 repair 자동 호출
+
+---
+
 ## [1.6.1] - 2026-03-12
 
 ### 수정

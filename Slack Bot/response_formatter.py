@@ -50,12 +50,14 @@ def format_ai_response(
     source_type: str,       # "wiki" | "jira" | "gdi"
     source_label: str,      # 페이지 제목 / 이슈키 / 파일명
     source_url: str = "",   # 원본 링크 (없으면 빈 문자열)
+    display_question: str = "",  # 표시용 전체 커맨드 (없으면 question 사용)
 ) -> str:
     """3단 구조 통합 포맷 mrkdwn 문자열을 반환."""
     answer, evidence = parse_answer_sections(raw_answer)
 
+    shown_question = display_question or question
     parts = [
-        f"📋 *질문*\n{question}",
+        f"📋 *질문*\n{shown_question}",
         f"💬 *답변*\n{answer}",
     ]
 

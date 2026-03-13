@@ -283,8 +283,56 @@ def _wiki_call_claude(page_title: str, page_text: str, question: str):
         return None
 
 
-# "찾을 수 없습니다" 패턴 — fallback 트리거
-_NOT_FOUND_PATTERN = "찾을 수 없습니다"
+# 빈 콘텐츠 / 답변 불가 — fallback 트리거
+_MIN_CONTENT_LENGTH = 20   # 이 미만이면 유의미한 콘텐츠가 아닌 것으로 판단
+
+# Confluence 매크로 전용 페이지 감지 패턴
+# body가 매크로 JSON만 포함된 경우 (예: childpages, toc 등) → 유의미한 텍스트 아님
+_MACRO_ONLY_PATTERNS = [
+    '{"type":"childpages"',       # 하위 페이지 목록 매크로
+    '{"type":"toc"',              # 목차 매크로
+    '{"type":"pagetree"',         # 페이지 트리 매크로
+    '{"type":"children"',         # 자식 페이지 매크로
+    '{"type":"livesearch"',       # 라이브 검색 매크로
+    '{"type":"recently-updated"', # 최근 업데이트 매크로
+]
+
+_NOT_FOUND_PATTERNS = [
+    "찾을 수 없습니다",
+    "찾을 수 없었습니다",
+    "표시되지 않",
+    "내용이 없",
+    "내용을 확인할 수 없",
+    "텍스트가 없",
+    "비어 있",
+    "제공된 텍스트",
+    "관련 내용이 포함되어 있지 않",
+    "관련된 내용이 없",
+    "no relevant content",
+    "not found",
+]
+
+
+def _is_macro_only_content(text: str) -> bool:
+    """Confluence 매크로 JSON만 포함된 콘텐츠인지 판별.
+
+    childpages, toc 등 매크로 전용 페이지는 본문이 JSON 구조로만 되어 있어
+    사람이 읽을 수 있는 텍스트 콘텐츠가 아닙니다.
+    이런 페이지는 Claude에 전달해도 의미 있는 답변을 얻을 수 없으므로
+    즉시 폴백(하위 페이지/MCP 실시간 조회)으로 넘깁니다.
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    return any(stripped.startswith(p) for p in _MACRO_ONLY_PATTERNS)
+
+
+def _is_not_found(answer: str) -> bool:
+    """Claude 응답이 '콘텐츠 없음'을 의미하는지 다중 패턴으로 판별"""
+    if not answer:
+        return True
+    lower = answer.lower()
+    return any(p in lower for p in _NOT_FOUND_PATTERNS)
 
 
 # ── 답변 실패(answer miss) 전용 로거 ─────────────────────────────────────
@@ -333,7 +381,8 @@ def _log_answer_miss(*, user_id: str, user_name: str,
 
 
 def _wiki_ask_claude(page_title: str, page_text: str, page_url: str,
-                     question: str, respond, wiki_client=None):
+                     question: str, respond, wiki_client=None,
+                     display_question: str = ""):
     """
     Claude API 를 사용해 페이지 내용 기반으로 질문에 답변.
 
@@ -356,8 +405,8 @@ def _wiki_ask_claude(page_title: str, page_text: str, page_url: str,
     source_label = page_title
     source_url   = page_url
 
-    # ── MCP Fallback: "찾을 수 없습니다" 감지 → 하위 페이지 자동 검색 ──
-    if _NOT_FOUND_PATTERN in answer and wiki_client:
+    # ── MCP Fallback: 답변 불가 감지 → 하위 페이지 자동 검색 ──
+    if _is_not_found(answer) and wiki_client:
         # page_text에서 page_id를 직접 알 수 없으므로 외부에서 전달
         # → _wiki_ask_claude_with_fallback 에서 처리
         pass  # fallback은 handler에서 처리
@@ -368,6 +417,7 @@ def _wiki_ask_claude(page_title: str, page_text: str, page_url: str,
         source_type="wiki",
         source_label=source_label,
         source_url=source_url,
+        display_question=display_question,
     ))
 
 
@@ -614,7 +664,8 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
             return
 
         source_label = f"{folder_path}{target_name}"
-        _gdi_ask_claude_content(context, source_label, question, respond)
+        _gdi_ask_claude_content(context, source_label, question, respond,
+                                display_question=f"/gdi {raw_text}")
         gc.log_gdi_query(user_id=user_id, user_name=user_name,
                          action="folder_ai", query=raw_text,
                          result=f"파일: {target_name}",
@@ -647,7 +698,8 @@ def _gdi_folder_ai(client, folder_path: str, file_keyword: str,
         )
 
         source_label = f"{folder_path} (키워드: {file_keyword})"
-        _gdi_ask_claude_list(file_list_context, source_label, question, respond)
+        _gdi_ask_claude_list(file_list_context, source_label, question, respond,
+                             display_question=f"/gdi {raw_text}")
         gc.log_gdi_query(user_id=user_id, user_name=user_name,
                          action="folder_ai_list", query=raw_text,
                          result=f"매칭 {len(matched)}건, 목록 기반 답변",
@@ -729,7 +781,8 @@ def _gdi_folder_list(client, path: str, respond):
 
 
 def _gdi_claude_call(prompt: str, source_label: str, question: str,
-                     respond, source_url: str = ""):
+                     respond, source_url: str = "",
+                     display_question: str = ""):
     """Claude API 공통 호출 + 통합 포맷 응답 전송."""
     import anthropic
 
@@ -760,11 +813,13 @@ def _gdi_claude_call(prompt: str, source_label: str, question: str,
         source_type="gdi",
         source_label=source_label,
         source_url=source_url,
+        display_question=display_question,
     ))
 
 
 def _gdi_ask_claude(context_text: str, source_label: str,
-                    question: str, respond):
+                    question: str, respond,
+                    display_question: str = ""):
     """GDI 통합검색 결과를 컨텍스트로 Claude AI 에 질문 (기존 호환)."""
     MAX_CHARS = 20000
     truncated = len(context_text) > MAX_CHARS
@@ -780,11 +835,13 @@ def _gdi_ask_claude(context_text: str, source_label: str,
         f"{ANSWER_FORMAT_INSTRUCTION}\n\n"
         f"질문: {question}"
     )
-    _gdi_claude_call(prompt, source_label, question, respond)
+    _gdi_claude_call(prompt, source_label, question, respond,
+                     display_question=display_question)
 
 
 def _gdi_ask_claude_content(context_text: str, source_label: str,
-                            question: str, respond):
+                            question: str, respond,
+                            display_question: str = ""):
     """파일 내용 기반 Claude 답변 — 요약/분석/내용 질문용."""
     MAX_CHARS = 50000
     truncated = len(context_text) > MAX_CHARS
@@ -804,11 +861,13 @@ def _gdi_ask_claude_content(context_text: str, source_label: str,
         f"{ANSWER_FORMAT_INSTRUCTION}\n\n"
         f"질문: {question}"
     )
-    _gdi_claude_call(prompt, source_label, question, respond)
+    _gdi_claude_call(prompt, source_label, question, respond,
+                     display_question=display_question)
 
 
 def _gdi_ask_claude_list(file_list_text: str, source_label: str,
-                         question: str, respond):
+                         question: str, respond,
+                         display_question: str = ""):
     """파일 목록 기반 Claude 답변 — 종류/목록/어떤 파일 질문용."""
     prompt = (
         f"다음은 GDI 문서 저장소에서 검색한 파일 목록입니다:\n\n"
@@ -822,7 +881,8 @@ def _gdi_ask_claude_list(file_list_text: str, source_label: str,
         f"{ANSWER_FORMAT_INSTRUCTION}\n\n"
         f"질문: {question}"
     )
-    _gdi_claude_call(prompt, source_label, question, respond)
+    _gdi_claude_call(prompt, source_label, question, respond,
+                     display_question=display_question)
 
 
 # ── /jira 헬퍼 함수 ──────────────────────────────────────────────────────
@@ -920,7 +980,8 @@ def _jira_projects(client, user_id: str, user_name: str, respond):
 
 
 def _jira_claude_call(prompt: str, source_label: str, question: str,
-                      respond, source_url: str = ""):
+                      respond, source_url: str = "",
+                      display_question: str = ""):
     """Jira 컨텍스트 기반 Claude API 호출 + 통합 포맷 응답 전송."""
     import anthropic
 
@@ -951,11 +1012,13 @@ def _jira_claude_call(prompt: str, source_label: str, question: str,
         source_type="jira",
         source_label=source_label,
         source_url=source_url,
+        display_question=display_question,
     ))
 
 
 def _jira_ask_claude(context_text: str, source_label: str,
-                     question: str, respond, source_url: str = ""):
+                     question: str, respond, source_url: str = "",
+                     display_question: str = ""):
     """Jira 이슈/검색 결과를 컨텍스트로 Claude AI에 질문."""
     MAX_CHARS = 20000
     truncated = len(context_text) > MAX_CHARS
@@ -972,7 +1035,8 @@ def _jira_ask_claude(context_text: str, source_label: str,
         f"질문: {question}"
     )
     _jira_claude_call(prompt, source_label, question, respond,
-                      source_url=source_url)
+                      source_url=source_url,
+                      display_question=display_question)
 
 
 # ── 단일 인스턴스 보장 ────────────────────────────────────────
@@ -1352,20 +1416,35 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     return
 
                 # ── Claude 1차 답변 (적재 데이터) ────────────────
-                answer = _wiki_call_claude(
-                    page["title"], page["text"], question
-                )
-                if answer is None:
-                    respond(text="❌ Claude API 호출에 실패했습니다.")
-                    return
-
                 source_label = page["title"]
                 source_url   = page["url"]
                 fallback_stage = "cache"  # 어느 단계에서 답변 성공했는지
 
+                page_text = (page.get("text") or "").strip()
+                if (len(page_text) < _MIN_CONTENT_LENGTH
+                        or _is_macro_only_content(page_text)):
+                    # 빈 콘텐츠 또는 매크로 전용 → Claude 호출 없이 즉시 폴백
+                    reason = (
+                        f"매크로 전용 콘텐츠 ({len(page_text)}자)"
+                        if _is_macro_only_content(page_text)
+                        else f"빈 콘텐츠 ({len(page_text)}자 < {_MIN_CONTENT_LENGTH})"
+                    )
+                    logger.info(
+                        f"[wiki][fallback] {reason} → "
+                        f"폴백 진행: {page.get('title')}"
+                    )
+                    answer = "해당 페이지에서 관련 내용을 찾을 수 없습니다."
+                else:
+                    answer = _wiki_call_claude(
+                        page["title"], page_text, question
+                    )
+                    if answer is None:
+                        respond(text="❌ Claude API 호출에 실패했습니다.")
+                        return
+
                 # ── Fallback 파이프라인 ──────────────────────────
                 # Stage 1(적재) 실패 → Stage 2(하위) → Stage 3(MCP 실시간)
-                if _NOT_FOUND_PATTERN in answer:
+                if _is_not_found(answer):
                     # ── CACHE_MISS 로깅: 적재 데이터만으로 답변 불가 ──
                     _log_answer_miss(
                         user_id=user_id, user_name=user_name,
@@ -1384,14 +1463,15 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     # ── Stage 2: 하위 페이지 검색 ────────────────
                     if page.get("id"):
                         children, _ = wiki_client.get_descendant_pages(
-                            page["id"], limit=5
+                            page["id"], limit=10
                         )
                         if children:
                             combined_parts = []
                             char_budget = 35000
                             for child in children:
                                 child_text = child.get("text", "")
-                                if not child_text:
+                                if (not child_text
+                                        or _is_macro_only_content(child_text)):
                                     continue
                                 combined_parts.append(
                                     f"=== {child['title']} ===\n"
@@ -1415,7 +1495,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                                 answer2 = _wiki_call_claude(
                                     fallback_title, combined_text, question
                                 )
-                                if answer2 and _NOT_FOUND_PATTERN not in answer2:
+                                if answer2 and not _is_not_found(answer2):
                                     answer = answer2
                                     source_label = fallback_title
                                     fallback_stage = "descendant"
@@ -1424,7 +1504,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                                     )
 
                     # ── Stage 3: MCP 실시간 조회 ─────────────────
-                    if _NOT_FOUND_PATTERN in answer:
+                    if _is_not_found(answer):
                         logger.info(
                             "[wiki][fallback] Stage 2 실패 → "
                             "Stage 3: MCP 실시간 조회"
@@ -1445,7 +1525,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                                     page["title"], live_text, question
                                 )
                                 if (answer3 and
-                                        _NOT_FOUND_PATTERN not in answer3):
+                                        not _is_not_found(answer3)):
                                     answer = answer3
                                     source_label = page["title"]
                                     fallback_stage = "mcp_live"
@@ -1454,7 +1534,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                                     )
 
                         # 3-B: MCP 본문 검색 (질문 키워드로 전문 검색)
-                        if _NOT_FOUND_PATTERN in answer:
+                        if _is_not_found(answer):
                             search_q = question[:50]
                             live_pages, _ = (
                                 wiki_client.search_content_live(
@@ -1492,8 +1572,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                                     answer4 = _wiki_call_claude(
                                         live_title, live_combined, question
                                     )
-                                    if (answer4 and _NOT_FOUND_PATTERN
-                                            not in answer4):
+                                    if (answer4 and
+                                            not _is_not_found(answer4)):
                                         answer = answer4
                                         source_label = live_title
                                         source_url = (
@@ -1505,7 +1585,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                                         )
 
                     # ── 최종 실패 로깅 ────────────────────────────
-                    if _NOT_FOUND_PATTERN in answer:
+                    if _is_not_found(answer):
                         fallback_stage = "all_failed"
                         _log_answer_miss(
                             user_id=user_id,
@@ -1523,6 +1603,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     source_type="wiki",
                     source_label=source_label,
                     source_url=source_url,
+                    display_question=f"/wiki {text}",
                 ))
                 wc.log_wiki_query(
                     user_id=user_id, user_name=user_name,
@@ -1775,7 +1856,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     source_label = " / ".join(_3p_folders[:3]) if _3p_folders else f"{search_kw}/{file_name}"
                 else:
                     source_label = f"{search_kw}/{file_name}"
-                _gdi_ask_claude(context, source_label, question, respond)
+                _gdi_ask_claude(context, source_label, question, respond,
+                               display_question=f"/gdi {text}")
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
                     action="ask_claude",
@@ -1803,7 +1885,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                         _tax_label = " / ".join(
                             f["full_path"] for f in _tax_folders[:3]
                         ) if _tax_folders else search_query
-                        _gdi_ask_claude(context, _tax_label, question, respond)
+                        _gdi_ask_claude(context, _tax_label, question, respond,
+                                       display_question=f"/gdi {text}")
                         gc.log_gdi_query(
                             user_id=user_id, user_name=user_name,
                             action="ask_claude", query=text,
@@ -1859,7 +1942,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     _src_label = " / ".join(_folders_seen[:3]) if _folders_seen else search_query
                 else:
                     _src_label = search_query
-                _gdi_ask_claude(context, _src_label, question, respond)
+                _gdi_ask_claude(context, _src_label, question, respond,
+                               display_question=f"/gdi {text}")
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
                     action="ask_claude", query=text,
@@ -2002,7 +2086,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                         if not context:
                             respond(text=f":information_source: *{target}* 프로젝트에서 관련 이슈를 찾을 수 없습니다.")
                             return
-                        _jira_ask_claude(context, target, question, respond)
+                        _jira_ask_claude(context, target, question, respond,
+                                        display_question=f"/jira {text}")
                         jc.log_jira_query(user_id=user_id, user_name=user_name,
                                           action="ask_claude_project", query=text,
                                           result=f"프로젝트: {project_key}",
@@ -2023,7 +2108,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                             respond(text=f":information_source: `{target}` 이슈 내용을 가져올 수 없습니다.")
                             return
                         _jira_ask_claude(context, target.upper(), question, respond,
-                                         source_url=jc._issue_url(target.upper()))
+                                         source_url=jc._issue_url(target.upper()),
+                                         display_question=f"/jira {text}")
                         jc.log_jira_query(user_id=user_id, user_name=user_name,
                                           action="ask_claude_issue", query=text,
                                           result=f"이슈: {target.upper()}",
@@ -2043,7 +2129,8 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                         if not context:
                             respond(text=f":information_source: `{target}` 관련 이슈를 찾을 수 없습니다.")
                             return
-                        _jira_ask_claude(context, target, question, respond)
+                        _jira_ask_claude(context, target, question, respond,
+                                        display_question=f"/jira {text}")
                         jc.log_jira_query(user_id=user_id, user_name=user_name,
                                           action="ask_claude_search", query=text,
                                           result=f"검색어: {target}",

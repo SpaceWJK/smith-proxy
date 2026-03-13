@@ -750,7 +750,7 @@ class ConfluenceWikiClient:
         """
         sk = space_key or self._space_key
         cql = (f'ancestor = {page_id} AND space = "{sk}"'
-               f' AND type=page ORDER BY title ASC')
+               f' AND type=page ORDER BY lastmodified DESC')
         logger.info(f"[wiki][하위검색] CQL: {cql}")
 
         raw, err = self._mcp.call_tool(
