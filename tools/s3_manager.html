@@ -1,0 +1,1933 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knowledge Integration System</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+  --border: #475569; --text: #e2e8f0; --text2: #94a3b8;
+  --accent: #3b82f6; --accent-hover: #2563eb;
+  --success: #22c55e; --error: #ef4444; --warn: #f59e0b;
+}
+body { font-family: 'Segoe UI', -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+/* Header */
+.header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .env-badge { background: var(--accent); color: white; padding: 2px 10px; border-radius: 12px; font-size: 12px; }
+
+/* Config Bar */
+.config-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 8px 24px; display: flex; align-items: center; gap: 12px; }
+.config-bar #connBtn { background: var(--accent); color: white; border: none; padding: 6px 20px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; min-width: 100px; transition: all 0.2s; }
+.config-bar #connBtn:hover { background: var(--accent-hover); }
+.config-bar #connBtn.connected { background: var(--success); }
+.config-bar #connBtn.connected:hover { background: var(--error); }
+.config-bar .status { font-size: 12px; margin-left: 8px; }
+.config-bar .status.ok { color: var(--success); }
+.config-bar .status.err { color: var(--error); }
+
+/* Tab Bar (top-level navigation) */
+.tab-bar { display: flex; gap: 0; background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; }
+.tab-item { padding: 12px 20px; font-size: 13px; font-weight: 400; color: var(--text2); cursor: pointer; border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 8px; transition: all 0.15s; user-select: none; position: relative; }
+.tab-item:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.tab-item.active { color: white; font-weight: 600; border-bottom-color: var(--accent); }
+.tab-item.disabled { color: #4B5563; cursor: not-allowed; }
+.tab-item.disabled:hover { background: none; color: #4B5563; }
+.tab-item .tab-badge { font-size: 10px; opacity: 0.6; }
+.tab-item .tab-spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+.tab-panel { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+.tab-panel.active { display: flex; }
+
+/* Layout */
+.main { display: flex; height: calc(100vh - 140px); }
+.sidebar { width: 320px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Sidebar: Tree */
+.tree-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.tree-header h3 { font-size: 14px; }
+.tree-header button { background: none; border: 1px solid var(--border); color: var(--text2); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.tree-header button:hover { background: var(--surface2); }
+.tree-body { flex: 1; overflow-y: auto; padding: 8px; }
+.tree-item { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-item:hover { background: var(--surface2); }
+.tree-item.active { background: var(--accent); color: white; }
+.tree-item .icon { width: 16px; text-align: center; flex-shrink: 0; }
+.tree-item .name { overflow: hidden; text-overflow: ellipsis; }
+.tree-loading { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 12px; color: var(--text2); }
+.spinner-sm { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+
+/* Breadcrumb */
+.breadcrumb { padding: 12px 24px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text2); display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.breadcrumb span { cursor: pointer; }
+.breadcrumb span:hover { color: var(--accent); text-decoration: underline; }
+.breadcrumb .sep { color: var(--border); }
+
+/* File list */
+.file-list { flex: 1; overflow-y: auto; padding: 8px 24px; }
+.file-row { display: flex; align-items: center; padding: 10px 12px; border-radius: 6px; gap: 12px; font-size: 13px; }
+.file-row:hover { background: var(--surface); }
+.file-row .icon { font-size: 16px; width: 24px; text-align: center; flex-shrink: 0; }
+.file-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.file-row .name:hover { color: var(--accent); }
+.file-row .meta { color: var(--text2); font-size: 12px; min-width: 80px; text-align: right; }
+.file-row .actions { display: flex; gap: 4px; }
+.file-row .actions button { background: none; border: 1px solid var(--border); color: var(--text2); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+.file-row .actions button:hover { background: var(--surface2); color: var(--text); }
+.file-row .actions button.dl:hover { border-color: var(--success); color: var(--success); }
+.file-row .actions button.del { border-color: var(--error); color: var(--error); opacity: 0.8; }
+.file-row .actions button.del:hover { background: var(--error); color: white; opacity: 1; }
+
+/* Admin mode */
+.admin-btn { background: none; border: 1px solid var(--border); color: var(--text2); padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; margin-left: auto; transition: all 0.2s; display: flex; align-items: center; gap: 6px; }
+.admin-btn:hover { background: var(--surface2); color: var(--text); }
+.admin-btn.active { background: var(--error); border-color: var(--error); color: white; }
+.admin-btn.active:hover { background: #dc2626; }
+.admin-btn .lock-icon { font-size: 14px; }
+.admin-badge { background: var(--error); color: white; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+.modal .warn-text { color: var(--error); font-size: 13px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+.modal .del-target { background: var(--surface2); padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; word-break: break-all; }
+
+/* Toolbar */
+.toolbar { padding: 12px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+.toolbar button { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.toolbar button:hover { background: var(--surface2); }
+.toolbar button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+.toolbar button.primary:hover { background: var(--accent-hover); }
+.toolbar .spacer { flex: 1; }
+.toolbar .info { font-size: 12px; color: var(--text2); }
+
+/* Upload area */
+.upload-area { margin: 16px 24px; border: 2px dashed var(--border); border-radius: 12px; padding: 32px; text-align: center; transition: all 0.2s; }
+.upload-area.drag-over { border-color: var(--accent); background: rgba(59,130,246,0.1); }
+.upload-area h3 { margin-bottom: 8px; font-size: 15px; }
+.upload-area p { color: var(--text2); font-size: 13px; margin-bottom: 16px; }
+.upload-area input[type=file] { display: none; }
+.upload-area .browse-btn { background: var(--accent); color: white; border: none; padding: 10px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+.upload-area .browse-btn:hover { background: var(--accent-hover); }
+
+/* Upload queue */
+.upload-queue { margin: 0 24px; max-height: 200px; overflow-y: auto; }
+.uq-item { display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--surface); border-radius: 6px; margin-bottom: 4px; font-size: 13px; }
+.uq-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uq-item .size { color: var(--text2); font-size: 12px; }
+.uq-item .status-icon { width: 20px; text-align: center; }
+.uq-item .progress-bar { width: 80px; height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+.uq-item .progress-bar .fill { height: 100%; background: var(--accent); transition: width 0.3s; }
+.uq-item.done .progress-bar .fill { background: var(--success); }
+.uq-item.error .progress-bar .fill { background: var(--error); }
+
+/* New folder dialog */
+.modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
+.modal-overlay.show { display: flex; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; min-width: 400px; }
+.modal h3 { margin-bottom: 16px; }
+.modal input { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 10px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 16px; }
+.modal .btns { display: flex; gap: 8px; justify-content: flex-end; }
+.modal .btns button { padding: 8px 20px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; font-size: 13px; }
+.modal .btns button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+
+/* Toast */
+.toast { position: fixed; bottom: 24px; right: 24px; background: var(--surface); border: 1px solid var(--border); padding: 12px 20px; border-radius: 8px; font-size: 13px; z-index: 200; display: none; max-width: 400px; }
+.toast.show { display: block; animation: slideIn 0.3s ease; }
+.toast.success { border-color: var(--success); }
+.toast.error { border-color: var(--error); }
+.toast.warn { border-color: var(--warn); }
+@keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+/* Loading */
+.loading { display: flex; align-items: center; justify-content: center; padding: 40px; color: var(--text2); gap: 8px; }
+.spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Empty state */
+.empty { text-align: center; padding: 60px; color: var(--text2); }
+.empty .icon { font-size: 48px; margin-bottom: 12px; }
+
+/* ===== Sidebar Mode Banner ===== */
+.sidebar-mode-banner { padding: 8px 12px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 500; background: rgba(59,130,246,0.08); }
+.sidebar-mode-banner .mode-icon { font-size: 14px; }
+.sidebar-mode-banner .mode-text { flex: 1; }
+.sidebar-mode-banner.slot-a { background: rgba(56,189,248,0.08); color: #38BDF8; }
+.sidebar-mode-banner.slot-b { background: rgba(251,146,60,0.08); color: #FB923C; }
+.tree-item .slot-badge { font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: auto; flex-shrink: 0; }
+.tree-item .slot-badge.badge-a { background: #38BDF8; color: #0f172a; }
+.tree-item .slot-badge.badge-b { background: #FB923C; color: #0f172a; }
+
+/* ===== Compare Mode (cmp- namespace) ===== */
+/* Slot bar */
+.cmp-slot-bar { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: var(--surface); flex-shrink: 0; flex-wrap: wrap; }
+.cmp-slot { flex: 1; min-width: 180px; display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.cmp-slot:hover { border-color: var(--text2); }
+.cmp-slot.active-slot { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.cmp-slot .slot-label { font-size: 12px; font-weight: 700; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
+.cmp-slot .slot-label.label-a { background: #38BDF8; color: #0f172a; }
+.cmp-slot .slot-label.label-b { background: #FB923C; color: #0f172a; }
+.cmp-slot .slot-path { flex: 1; font-size: 13px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-slot .slot-path.filled { color: var(--text); }
+.cmp-slot .slot-clear { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 14px; padding: 2px 4px; flex-shrink: 0; }
+.cmp-slot .slot-clear:hover { color: var(--error); }
+.cmp-swap { background: none; border: 1px solid var(--border); color: var(--text2); width: 32px; height: 32px; border-radius: 6px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.cmp-swap:hover { background: var(--surface2); color: var(--text); }
+.cmp-run { background: var(--accent); border: none; color: white; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
+.cmp-run:hover { background: var(--accent-hover); }
+.cmp-run:disabled { opacity: 0.4; cursor: not-allowed; }
+.cmp-run:disabled:hover { background: var(--accent); }
+.cmp-same-warn { width: 100%; padding: 6px 12px; font-size: 12px; color: var(--warn); text-align: center; }
+.cmp-body { flex: 1; overflow-y: auto; padding: 24px; }
+
+/* Progress */
+.cmp-progress { padding: 16px 24px; background: var(--surface); border-bottom: 1px solid var(--border); display: none; flex-shrink: 0; }
+.cmp-progress.show { display: block; }
+.cmp-progress-info { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 12px; color: var(--text2); }
+.cmp-progress-bar { height: 4px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+.cmp-progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; width: 0%; }
+
+/* Stats bar */
+.cmp-stats { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+.cmp-stat { background: var(--surface); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.cmp-stat .num { font-weight: 700; font-size: 16px; }
+.cmp-stat.match .num { color: var(--success); }
+.cmp-stat.mismatch .num { color: var(--error); }
+.cmp-stat.only .num { color: var(--warn); }
+
+/* Tabs */
+.cmp-tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+.cmp-tab { background: var(--surface); border: 1px solid var(--border); color: var(--text2); padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.cmp-tab:hover { background: var(--surface2); color: var(--text); }
+.cmp-tab.active { background: var(--accent); border-color: var(--accent); color: white; }
+
+/* Results table */
+.cmp-table-head { display: flex; padding: 8px 12px; font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+.cmp-table-head .col-name { flex: 1; }
+.cmp-table-head .col-size { width: 100px; text-align: right; }
+.cmp-table-head .col-status { width: 120px; text-align: center; }
+.cmp-table-head .col-action { width: 80px; text-align: center; }
+.cmp-row { display: flex; align-items: center; padding: 8px 12px; border-radius: 6px; margin-bottom: 2px; font-size: 13px; transition: background 0.15s; }
+.cmp-row:hover { filter: brightness(1.15); }
+.cmp-row .col-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-row .col-size { width: 100px; text-align: right; color: var(--text2); font-size: 12px; }
+.cmp-row .col-status { width: 120px; text-align: center; font-size: 12px; font-weight: 600; }
+.cmp-row .col-action { width: 80px; text-align: center; }
+.cmp-row .col-action button { background: none; border: 1px solid var(--border); color: var(--text2); padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+.cmp-row .col-action button:hover { background: var(--accent); border-color: var(--accent); color: white; }
+.cmp-row.match { background: rgba(34,197,94,0.08); }
+.cmp-row.match .col-status { color: var(--success); }
+.cmp-row.mismatch { background: rgba(239,68,68,0.08); }
+.cmp-row.mismatch .col-status { color: var(--error); }
+.cmp-row.only-a { background: rgba(245,158,11,0.08); }
+.cmp-row.only-a .col-status { color: var(--warn); }
+.cmp-row.only-b { background: rgba(59,130,246,0.08); }
+.cmp-row.only-b .col-status { color: var(--accent); }
+
+/* Detail view */
+.cmp-detail-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.cmp-detail-bar .cmp-back { background: none; border: 1px solid var(--border); color: var(--text2); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.cmp-detail-bar .cmp-back:hover { background: var(--surface2); color: var(--text); }
+.cmp-detail-bar .cmp-filename { font-size: 14px; font-weight: 600; }
+.cmp-detail-stats { display: flex; gap: 12px; margin-bottom: 12px; font-size: 12px; color: var(--text2); }
+.cmp-detail-stats span { display: flex; align-items: center; gap: 4px; }
+.cmp-diff-container { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.cmp-diff-header { display: flex; background: var(--surface); border-bottom: 1px solid var(--border); }
+.cmp-diff-header div { flex: 1; padding: 8px 16px; font-size: 12px; font-weight: 600; color: var(--text2); }
+.cmp-diff-header div:first-child { border-right: 1px solid var(--border); }
+.cmp-diff-body { max-height: calc(100vh - 280px); overflow-y: auto; }
+.cmp-diff-row { display: flex; border-bottom: 1px solid rgba(71,85,105,0.3); min-height: 28px; }
+.cmp-diff-row:last-child { border-bottom: none; }
+.cmp-diff-side { flex: 1; display: flex; font-size: 12px; font-family: 'Consolas', 'Courier New', monospace; line-height: 1.6; }
+.cmp-diff-side:first-child { border-right: 1px solid var(--border); }
+.cmp-diff-num { min-width: 44px; padding: 2px 8px; text-align: right; color: var(--text2); background: rgba(30,41,59,0.5); user-select: none; flex-shrink: 0; font-size: 11px; }
+.cmp-diff-text { flex: 1; padding: 2px 8px; white-space: pre-wrap; word-break: break-all; overflow-wrap: break-word; }
+.cmp-diff-row.changed .cmp-diff-side { background: rgba(245,158,11,0.10); }
+.cmp-diff-row.added .cmp-diff-side:last-child { background: rgba(34,197,94,0.12); }
+.cmp-diff-row.added .cmp-diff-side:first-child { background: rgba(30,41,59,0.5); }
+.cmp-diff-row.deleted .cmp-diff-side:first-child { background: rgba(239,68,68,0.12); }
+.cmp-diff-row.deleted .cmp-diff-side:last-child { background: rgba(30,41,59,0.5); }
+.cmp-hl-del { background: rgba(239,68,68,0.35); border-radius: 2px; }
+.cmp-hl-ins { background: rgba(34,197,94,0.35); border-radius: 2px; }
+.cmp-hl-chg { background: rgba(245,158,11,0.35); border-radius: 2px; }
+/* Diff type label column */
+.cmp-diff-label { min-width: 32px; max-width: 32px; padding: 2px; text-align: center; font-size: 9px; font-weight: 700; font-family: 'Consolas', monospace; flex-shrink: 0; user-select: none; display: flex; align-items: center; justify-content: center; border-right: 1px solid rgba(71,85,105,0.3); }
+.cmp-diff-row.changed .cmp-diff-label { color: var(--warn); background: rgba(245,158,11,0.18); }
+.cmp-diff-row.added .cmp-diff-label { color: var(--success); background: rgba(34,197,94,0.18); }
+.cmp-diff-row.deleted .cmp-diff-label { color: var(--error); background: rgba(239,68,68,0.18); }
+/* TSV Table Diff — Split-Panel (A scroll | B scroll 독립) */
+.cmp-tsv-wrap { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; max-height: calc(100vh - 270px); }
+/* Type label column (far-left, synced via JS) */
+.cmp-tsv-tc { flex-shrink: 0; width: 32px; overflow: hidden; border-right: 1px solid var(--border); }
+.cmp-tsv-tc table { width: 100%; border-collapse: collapse; }
+.cmp-tsv-tc th { position: sticky; top: 0; background: var(--surface); height: 26px; border-bottom: 1px solid var(--border); }
+.cmp-tsv-tc th:last-child { top: 26px; border-bottom-width: 2px; }
+.cmp-tsv-tc td { text-align: center; font-weight: 700; font-size: 9px; font-family: 'Consolas',monospace; height: 24px; padding: 0 2px; white-space: nowrap; border-bottom: 1px solid rgba(71,85,105,0.15); }
+.cmp-tsv-tc td.tc-chg { color: var(--warn); background: rgba(245,158,11,0.12); }
+.cmp-tsv-tc td.tc-del { color: var(--error); background: rgba(239,68,68,0.12); }
+.cmp-tsv-tc td.tc-add { color: var(--success); background: rgba(34,197,94,0.12); }
+.cmp-tsv-tc td.tc-sep { color: var(--text2); font-size: 8px; background: rgba(30,41,59,0.3); }
+/* A / B panels (independent horizontal scroll) */
+.cmp-tsv-pn { flex: 1; min-width: 0; overflow: auto; }
+.cmp-tsv-pn + .cmp-tsv-pn { border-left: 3px solid var(--accent); }
+.cmp-tsv-pn table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; font-family: 'Consolas',monospace; }
+.cmp-tsv-pn th { position: sticky; top: 0; background: var(--surface); padding: 0 10px; font-size: 11px; font-weight: 600; color: var(--text2); white-space: nowrap; height: 26px; z-index: 2; border-bottom: 1px solid var(--border); }
+.cmp-tsv-pn thead tr:first-child th { z-index: 3; }
+.cmp-tsv-pn thead tr:nth-child(2) th { top: 26px; border-bottom-width: 2px; }
+.cmp-tsv-pn td { padding: 0 10px; white-space: nowrap; height: 24px; font-size: 12px; border-bottom: 1px solid rgba(71,85,105,0.15); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.cmp-tsv-pn .tg-a { text-align: center; color: #38BDF8; background: rgba(56,189,248,0.08); }
+.cmp-tsv-pn .tg-b { text-align: center; color: #FB923C; background: rgba(251,146,60,0.08); }
+.cmp-tsv-pn .tln { min-width: 36px; color: var(--text2); font-size: 11px; text-align: right; padding-right: 6px; }
+.cmp-tsv-pn td.tc-del { background: rgba(239,68,68,0.15); }
+.cmp-tsv-pn td.tc-ins { background: rgba(34,197,94,0.15); }
+.cmp-tsv-pn td.tc-dim { background: rgba(30,41,59,0.35); color: rgba(148,163,184,0.3); text-align: center; }
+.cmp-tsv-pn tr.tsep td { text-align: center; color: var(--text2); font-size: 11px; background: rgba(30,41,59,0.3); height: 24px; }
+
+/* Diff limit notice */
+.cmp-diff-notice { padding: 12px 16px; background: var(--surface); text-align: center; font-size: 12px; color: var(--text2); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Knowledge_Integration_System</h1>
+  <a href="https://spacewjk.github.io/QA-Report/Multi_Source_Knowledge_Integration_System.html" target="_blank" rel="noopener" style="color:var(--accent); font-size:13px; text-decoration:none; margin-left:12px; opacity:0.8;">(Link)</a>
+  <span class="env-badge">Lite</span>
+</div>
+
+<input type="hidden" id="apiBase" value="/api">
+<div class="config-bar">
+  <button id="connBtn" onclick="toggleConnection()">Connect</button>
+  <span id="connStatus" class="status"></span>
+  <span id="adminBadge" class="admin-badge" style="display:none;">ADMIN MODE <span id="adminCountdown" style="font-weight:400; opacity:0.85;"></span></span>
+  <button id="adminBtn" class="admin-btn" onclick="toggleAdminMode()">
+    <span class="lock-icon">&#x1F512;</span> Admin
+  </button>
+</div>
+
+<!-- Tab Bar (top-level navigation) -->
+<div class="tab-bar">
+  <div class="tab-item active" data-tab="files" onclick="switchTab('files')">
+    &#x1F4C1; Files
+  </div>
+  <div class="tab-item" data-tab="compare" onclick="switchTab('compare')">
+    &#x1F50D; Compare <span class="tab-badge" id="cmpTabBadge"></span>
+  </div>
+  <div class="tab-item disabled" data-tab="dashboard">
+    &#x1F4CA; Dashboard <span class="tab-badge">(Coming Soon)</span>
+  </div>
+</div>
+
+<div class="main">
+  <!-- Shared Sidebar -->
+  <div class="sidebar">
+    <div class="tree-header">
+      <h3>Folders</h3>
+      <button onclick="refreshTree()">Refresh</button>
+    </div>
+    <div class="sidebar-mode-banner" id="sidebarModeBanner" style="display:none;">
+      <span class="mode-icon">&#x1F50D;</span>
+      <span class="mode-text" id="sidebarModeText"></span>
+    </div>
+    <div class="tree-body" id="treeBody">
+      <div class="loading"><div class="spinner"></div> Loading...</div>
+    </div>
+  </div>
+
+  <div class="content">
+    <!-- Files Panel (기존 구조 그대로) -->
+    <div class="tab-panel active" id="panelFiles">
+      <div class="breadcrumb" id="breadcrumb">
+        <span onclick="navigateTo('')">Root</span>
+      </div>
+
+      <div class="toolbar">
+        <button class="primary" onclick="showUploadArea()">Upload Files</button>
+        <button onclick="showNewFolderModal()">New Folder</button>
+        <div class="spacer"></div>
+        <div class="info" id="fileCount"></div>
+      </div>
+
+      <div id="uploadSection" style="display:none;">
+        <div class="upload-area" id="dropZone"
+          ondragover="event.preventDefault(); this.classList.add('drag-over')"
+          ondragleave="this.classList.remove('drag-over')"
+          ondrop="handleDrop(event)">
+          <h3>Drop files here</h3>
+          <p>or click to browse</p>
+          <button class="browse-btn" onclick="document.getElementById('fileInput').click()">Browse Files</button>
+          <input type="file" id="fileInput" multiple onchange="handleFileSelect(event)">
+        </div>
+        <div class="upload-queue" id="uploadQueue"></div>
+      </div>
+
+      <div class="file-list" id="fileList">
+        <div class="loading"><div class="spinner"></div> Loading...</div>
+      </div>
+    </div>
+
+    <!-- Compare Panel (인라인, 오버레이 아님) -->
+    <div class="tab-panel" id="panelCompare">
+      <div class="cmp-slot-bar" id="cmpSlotBar">
+        <div class="cmp-slot" id="cmpSlotA" onclick="cmpActivateSlot('A')">
+          <span class="slot-label label-a">A</span>
+          <span class="slot-path" id="cmpSlotAPath">&#8592; 사이드바에서 폴더 선택</span>
+          <button class="slot-clear" id="cmpSlotAClear" onclick="event.stopPropagation(); cmpClearSlot('A')" style="display:none;">&#x2715;</button>
+        </div>
+        <button class="cmp-swap" onclick="cmpSwapSlots()" title="A ↔ B">&#x21C4;</button>
+        <div class="cmp-slot" id="cmpSlotB" onclick="cmpActivateSlot('B')">
+          <span class="slot-label label-b">B</span>
+          <span class="slot-path" id="cmpSlotBPath">&#8592; 사이드바에서 폴더 선택</span>
+          <button class="slot-clear" id="cmpSlotBClear" onclick="event.stopPropagation(); cmpClearSlot('B')" style="display:none;">&#x2715;</button>
+        </div>
+        <button class="cmp-run" id="cmpRunBtn" onclick="cmpStartCompare()" disabled>&#x25B6; Compare</button>
+        <div class="cmp-same-warn" id="cmpSameWarn" style="display:none;">&#x26A0; 동일한 폴더입니다. 차이점이 없을 수 있습니다.</div>
+      </div>
+      <div class="cmp-progress" id="cmpProgress">
+        <div class="cmp-progress-info">
+          <span id="cmpProgressText">Comparing...</span>
+          <span id="cmpProgressPct">0%</span>
+        </div>
+        <div class="cmp-progress-bar"><div class="cmp-progress-fill" id="cmpProgressFill"></div></div>
+      </div>
+      <div class="cmp-body">
+        <div id="cmpResults" style="display:none;">
+          <div class="cmp-stats" id="cmpStats"></div>
+          <div class="cmp-tabs" id="cmpTabs"></div>
+          <div class="cmp-table-head">
+            <div class="col-name">Filename</div>
+            <div class="col-size">Size (A / B)</div>
+            <div class="col-status">Status</div>
+            <div class="col-action">Detail</div>
+          </div>
+          <div id="cmpTableBody"></div>
+        </div>
+        <div id="cmpDetail" style="display:none;"></div>
+        <div id="cmpEmpty" class="empty" style="padding:60px;">
+          <div class="icon">&#x1F50D;</div>
+          <p style="color:var(--text2); font-size:13px;">사이드바에서 폴더 A, B를 선택 후 Compare를 실행하세요.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dashboard Panel (Coming Soon) -->
+    <div class="tab-panel" id="panelDashboard">
+      <div class="empty" style="padding:80px;">
+        <div class="icon">&#x1F4CA;</div>
+        <p style="color:var(--text2);">Dashboard — Coming Soon</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- New Folder Modal -->
+<div class="modal-overlay" id="newFolderModal">
+  <div class="modal">
+    <h3>New Folder</h3>
+    <input type="text" id="newFolderName" placeholder="Folder name" onkeydown="if(event.key==='Enter')createFolder()">
+    <div class="btns">
+      <button onclick="closeNewFolderModal()">Cancel</button>
+      <button class="primary" onclick="createFolder()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Admin Password Modal -->
+<div class="modal-overlay" id="adminPasswordModal">
+  <div class="modal">
+    <h3>&#x1F512; Admin Mode</h3>
+    <p style="color:var(--text2); font-size:13px; margin-bottom:12px;">관리자 비밀번호를 입력하세요.</p>
+    <input type="password" id="adminPassword" placeholder="Password" onkeydown="if(event.key==='Enter')submitAdminPassword()">
+    <div id="adminPasswordError" style="color:var(--error); font-size:12px; margin:-8px 0 12px; display:none;">비밀번호가 올바르지 않습니다.</div>
+    <div class="btns">
+      <button onclick="closeAdminPasswordModal()">Cancel</button>
+      <button class="primary" onclick="submitAdminPassword()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirm Modal -->
+<div class="modal-overlay" id="deleteConfirmModal">
+  <div class="modal">
+    <h3>&#x26A0; Delete Confirm</h3>
+    <div class="warn-text">&#x26A0; 이 작업은 되돌릴 수 없습니다.</div>
+    <div class="del-target" id="deleteTargetName"></div>
+    <p style="color:var(--text2); font-size:13px; margin-bottom:12px;">삭제하려면 비밀번호를 다시 입력하세요.</p>
+    <input type="password" id="deletePassword" placeholder="Password" onkeydown="if(event.key==='Enter')confirmDelete()">
+    <div id="deletePasswordError" style="color:var(--error); font-size:12px; margin:-8px 0 12px; display:none;">비밀번호가 올바르지 않습니다.</div>
+    <div class="btns">
+      <button onclick="closeDeleteConfirmModal()">Cancel</button>
+      <button style="background:var(--error); border-color:var(--error); color:white;" onclick="confirmDelete()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ========== State ==========
+let currentPath = '';
+let apiBase = '';
+let treeData = {};
+let expandedFolders = new Set(['']);
+let loadingFolders = new Set();
+let isConnected = false;
+let isAdminMode = false;
+let pendingDeleteKey = '';
+let pendingDeleteName = '';
+
+// Admin password — change this value to set a different password
+const ADMIN_PW = 'qateam2025@';
+
+// ========== API ==========
+function getApi() {
+  return document.getElementById('apiBase').value.replace(/\/+$/, '');
+}
+
+async function apiFetch(endpoint, options = {}) {
+  const url = `${getApi()}${endpoint}`;
+  const res = await fetch(url, { ...options, mode: 'cors' });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+function toggleConnection() {
+  if (isConnected) {
+    disconnect();
+  } else {
+    connect();
+  }
+}
+
+async function connect() {
+  const btn = document.getElementById('connBtn');
+  const el = document.getElementById('connStatus');
+  btn.textContent = 'Connecting...';
+  btn.disabled = true;
+  el.textContent = '';
+  el.className = 'status';
+  try {
+    const data = await apiFetch('/count');
+    isConnected = true;
+    btn.textContent = 'Connected';
+    btn.className = 'connected';
+    btn.disabled = false;
+    el.textContent = `${(data.total_files || 0).toLocaleString()} files`;
+    el.className = 'status ok';
+    loadTree();
+    loadFiles('');
+  } catch (e) {
+    btn.textContent = 'Connect';
+    btn.className = '';
+    btn.disabled = false;
+    el.textContent = `Failed: ${e.message}`;
+    el.className = 'status err';
+  }
+}
+
+function disconnect() {
+  isConnected = false;
+  // Exit admin mode on disconnect
+  if (isAdminMode) exitAdminMode();
+  const btn = document.getElementById('connBtn');
+  btn.textContent = 'Connect';
+  btn.className = '';
+  document.getElementById('connStatus').textContent = '';
+  document.getElementById('connStatus').className = 'status';
+  document.getElementById('treeBody').innerHTML = '<div class="empty">Disconnected</div>';
+  document.getElementById('fileList').innerHTML = '<div class="empty"><div class="icon">&#x1F50C;</div>Click Connect to start</div>';
+  document.getElementById('fileCount').textContent = '';
+  treeData = {};
+  expandedFolders = new Set(['']);
+  loadingFolders = new Set();
+  currentPath = '';
+  renderBreadcrumb();
+}
+
+// Hover effect is set up in Init section below
+
+// ========== Tree ==========
+async function loadTree() {
+  const el = document.getElementById('treeBody');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div> Loading...</div>';
+  try {
+    const data = await apiFetch('/list?path=');
+    treeData = {};
+    const items = [...(data.folders || []), ...(data.files || [])];
+    buildTreeMap(items, '');
+    renderTree();
+  } catch (e) {
+    el.innerHTML = `<div class="empty">Failed to load</div>`;
+  }
+}
+
+function buildTreeMap(items, parentPath) {
+  const folders = items.filter(i => i.type === 'folder' || i.type === 'directory');
+  treeData[parentPath] = folders;
+}
+
+async function expandFolder(path) {
+  if (treeData[path]) return;
+  try {
+    const data = await apiFetch(`/list?path=${encodeURIComponent(path)}`);
+    // Filter out ghost self-reference folders (API bug: returns parent as child with // in path)
+    treeData[path] = (data.folders || []).filter(f => !(f.path || '').includes('//'));
+  } catch (e) {
+    treeData[path] = [];
+  }
+}
+
+function renderTree() {
+  const el = document.getElementById('treeBody');
+  let html = '';
+  const rootFolders = treeData[''] || [];
+  const inCompare = activeTab === 'compare';
+
+  function getBadge(path) {
+    if (!inCompare) return '';
+    let badge = '';
+    if (cmpFolderAPath === path) badge += '<span class="slot-badge badge-a">A</span>';
+    if (cmpFolderBPath === path) badge += '<span class="slot-badge badge-b">B</span>';
+    return badge;
+  }
+
+  function treeClick(path) {
+    if (inCompare) return `onclick="event.stopPropagation(); toggleTreeFolder('${escHtml(path)}')" ondblclick="event.stopPropagation(); cmpSelectFolder('${escHtml(path)}')"`;
+    return `onclick="event.stopPropagation(); toggleTreeFolder('${escHtml(path)}')" ondblclick="event.stopPropagation(); navigateTo('${escHtml(path)}')"`;
+  }
+
+  function renderLevel(folders, depth) {
+    const pad = 8 + depth * 16;
+    for (const f of folders) {
+      const path = f.path || f.name;
+      const name = f.name || path.split('/').pop();
+      const isExpanded = expandedFolders.has(path);
+      const isActive = !inCompare && path === currentPath;
+      const icon = isExpanded ? '&#x25BE;' : '&#x25B8;';
+      const badge = getBadge(path);
+      html += `<div class="tree-item ${isActive ? 'active' : ''}" style="padding-left:${pad}px"
+        ${treeClick(path)}>
+        <span class="icon">${icon}</span>
+        <span class="name" title="${escHtml(path)}">${escHtml(name)}</span>${badge}
+      </div>`;
+      if (isExpanded) {
+        if (loadingFolders.has(path)) {
+          html += `<div class="tree-loading" style="padding-left:${pad + 16}px">
+            <span class="spinner-sm"></span> Loading...
+          </div>`;
+        } else if (treeData[path]) {
+          renderLevel(treeData[path], depth + 1);
+        }
+      }
+    }
+  }
+
+  // Root entry
+  if (inCompare) {
+    html += `<div class="tree-item" ondblclick="cmpSelectFolder('')">
+      <span class="icon">&#x1F4C1;</span><span class="name">/ (Root)</span>${getBadge('')}
+    </div>`;
+  } else {
+    html += `<div class="tree-item ${currentPath === '' ? 'active' : ''}" onclick="navigateTo('')">
+      <span class="icon">&#x1F4C1;</span><span class="name">/ (Root)</span>
+    </div>`;
+  }
+  renderLevel(rootFolders, 1);
+  el.innerHTML = html;
+}
+
+async function toggleTreeFolder(path) {
+  if (expandedFolders.has(path)) {
+    expandedFolders.delete(path);
+    renderTree();
+  } else {
+    expandedFolders.add(path);
+    if (!treeData[path]) {
+      loadingFolders.add(path);
+      renderTree();  // show spinner immediately
+      await expandFolder(path);
+      loadingFolders.delete(path);
+    }
+    renderTree();  // show loaded data
+  }
+}
+
+function refreshTree() {
+  treeData = {};
+  expandedFolders = new Set(['']);
+  loadingFolders = new Set();
+  loadTree();
+}
+
+// ========== Files ==========
+async function loadFiles(path) {
+  currentPath = path;
+  renderBreadcrumb();
+  renderTree();
+
+  const el = document.getElementById('fileList');
+  el.innerHTML = '<div class="loading"><div class="spinner"></div> Loading...</div>';
+
+  try {
+    const data = await apiFetch(`/list?path=${encodeURIComponent(path)}`);
+    // Filter out ghost self-reference folders (API bug: returns parent as child with // in path)
+    const folders = (data.folders || []).filter(f => !(f.path || '').includes('//'));
+    renderFileList(folders, data.files || []);
+  } catch (e) {
+    el.innerHTML = `<div class="empty"><div class="icon">&#x26A0;</div>Failed: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderFileList(folders, files) {
+  const el = document.getElementById('fileList');
+
+  document.getElementById('fileCount').textContent = `${folders.length} folders, ${files.length} files`;
+
+  if (folders.length === 0 && files.length === 0) {
+    el.innerHTML = '<div class="empty"><div class="icon">&#x1F4C2;</div>Empty folder</div>';
+    return;
+  }
+
+  let html = '';
+
+  // Folders first
+  for (const f of folders) {
+    const path = f.path || f.name;
+    const name = f.name || path.split('/').pop();
+    const count = f.item_count != null ? `${f.item_count} items` : '&mdash;';
+    const delBtn = isAdminMode
+      ? `<button class="del" onclick="event.stopPropagation(); showDeleteConfirmModal('${escHtml(path)}', '${escHtml(name)}', true)">Delete</button>`
+      : '';
+    html += `<div class="file-row">
+      <div class="icon">&#x1F4C1;</div>
+      <div class="name" onclick="navigateTo('${escHtml(path)}')">${escHtml(name)}</div>
+      <div class="meta">${count}</div>
+      <div class="actions">${delBtn}</div>
+    </div>`;
+  }
+
+  // Files
+  for (const f of files) {
+    const path = f.path || f.name;
+    const name = f.name || path.split('/').pop();
+    const size = f.size ? formatSize(f.size) : '';
+    const ext = name.split('.').pop().toLowerCase();
+    const icon = getFileIcon(ext);
+    const delBtn = isAdminMode
+      ? `<button class="del" onclick="event.stopPropagation(); showDeleteConfirmModal('${escHtml(path)}', '${escHtml(name)}', false)">Delete</button>`
+      : '';
+    html += `<div class="file-row">
+      <div class="icon">${icon}</div>
+      <div class="name" title="${escHtml(path)}">${escHtml(name)}</div>
+      <div class="meta">${size}</div>
+      <div class="actions">
+        <button class="dl" onclick="downloadFile('${escHtml(path)}', '${escHtml(name)}')">Download</button>
+        ${delBtn}
+      </div>
+    </div>`;
+  }
+
+  el.innerHTML = html;
+}
+
+function navigateTo(path) {
+  expandedFolders.add(path);
+  expandFolder(path).then(() => loadFiles(path));
+}
+
+// ========== Breadcrumb ==========
+function renderBreadcrumb() {
+  const el = document.getElementById('breadcrumb');
+  const parts = currentPath ? currentPath.split('/') : [];
+  let html = `<span onclick="navigateTo('')">Root</span>`;
+  let acc = '';
+  for (const p of parts) {
+    if (!p) continue;
+    acc += (acc ? '/' : '') + p;
+    const path = acc;
+    html += `<span class="sep">/</span><span onclick="navigateTo('${escHtml(path)}')">${escHtml(p)}</span>`;
+  }
+  el.innerHTML = html;
+}
+
+// ========== Upload ==========
+function showUploadArea() {
+  const sec = document.getElementById('uploadSection');
+  sec.style.display = sec.style.display === 'none' ? 'block' : 'none';
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const files = Array.from(e.dataTransfer.files);
+  if (files.length) uploadFiles(files);
+}
+
+function handleFileSelect(e) {
+  const files = Array.from(e.target.files);
+  if (files.length) uploadFiles(files);
+  e.target.value = '';
+}
+
+async function uploadFiles(files) {
+  const queue = document.getElementById('uploadQueue');
+
+  for (const file of files) {
+    const id = 'uq_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    queue.innerHTML += `<div class="uq-item" id="${id}">
+      <div class="status-icon">&#x23F3;</div>
+      <div class="name">${escHtml(file.name)}</div>
+      <div class="size">${formatSize(file.size)}</div>
+      <div class="progress-bar"><div class="fill" style="width:0%"></div></div>
+    </div>`;
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      // path must end with / for API to place file in correct folder
+      const uploadPath = currentPath ? (currentPath.endsWith('/') ? currentPath : currentPath + '/') : '';
+      formData.append('path', uploadPath);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${getApi()}/upload`);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          const el = document.getElementById(id);
+          if (el) el.querySelector('.fill').style.width = pct + '%';
+        }
+      };
+
+      await new Promise((resolve, reject) => {
+        xhr.onload = () => {
+          const el = document.getElementById(id);
+          if (xhr.status >= 200 && xhr.status < 300) {
+            if (el) { el.classList.add('done'); el.querySelector('.status-icon').innerHTML = '&#x2705;'; }
+            resolve();
+          } else {
+            if (el) { el.classList.add('error'); el.querySelector('.status-icon').innerHTML = '&#x274C;'; }
+            reject(new Error(`Upload failed: ${xhr.status}`));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.send(formData);
+      });
+
+      toast(`Uploaded: ${file.name}`, 'success');
+    } catch (e) {
+      toast(`Failed: ${file.name} - ${e.message}`, 'error');
+    }
+  }
+
+  // Refresh file list
+  loadFiles(currentPath);
+}
+
+// ========== Download ==========
+async function downloadFile(path, name) {
+  try {
+    toast(`Downloading: ${name}...`);
+    const url = `${getApi()}/download?key=${encodeURIComponent(path)}`;
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) throw new Error(`${res.status}`);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast(`Downloaded: ${name}`, 'success');
+  } catch (e) {
+    toast(`Download failed: ${e.message}`, 'error');
+  }
+}
+
+// ========== New Folder ==========
+function showNewFolderModal() {
+  document.getElementById('newFolderModal').classList.add('show');
+  document.getElementById('newFolderName').value = '';
+  setTimeout(() => document.getElementById('newFolderName').focus(), 100);
+}
+
+function closeNewFolderModal() {
+  document.getElementById('newFolderModal').classList.remove('show');
+}
+
+async function createFolder() {
+  const name = document.getElementById('newFolderName').value.trim();
+  if (!name) return;
+  closeNewFolderModal();
+  try {
+    if (currentPath) {
+      // Sub-folder: API doesn't support nested creation, use upload workaround
+      // Upload a zero-byte placeholder to create the S3 prefix
+      const base = currentPath.endsWith('/') ? currentPath : currentPath + '/';
+      const formData = new FormData();
+      formData.append('file', new Blob(['']), '.folder');
+      formData.append('path', `${base}${name}/`);
+      await apiFetch('/upload', { method: 'POST', body: formData });
+    } else {
+      // Root folder: use folder API directly
+      await apiFetch('/folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_name: name })
+      });
+    }
+    toast(`Folder created: ${name}`, 'success');
+    loadFiles(currentPath);
+    delete treeData[currentPath];
+    expandFolder(currentPath).then(() => renderTree());
+  } catch (e) {
+    toast(`Failed: ${e.message}`, 'error');
+  }
+}
+
+// ========== Admin Mode ==========
+function toggleAdminMode() {
+  if (isAdminMode) {
+    exitAdminMode();
+  } else {
+    showAdminPasswordModal();
+  }
+}
+
+function showAdminPasswordModal() {
+  document.getElementById('adminPasswordModal').classList.add('show');
+  document.getElementById('adminPassword').value = '';
+  document.getElementById('adminPasswordError').style.display = 'none';
+  setTimeout(() => document.getElementById('adminPassword').focus(), 100);
+}
+
+function closeAdminPasswordModal() {
+  document.getElementById('adminPasswordModal').classList.remove('show');
+}
+
+function submitAdminPassword() {
+  const pw = document.getElementById('adminPassword').value;
+  if (pw === ADMIN_PW) {
+    closeAdminPasswordModal();
+    enterAdminMode();
+  } else {
+    document.getElementById('adminPasswordError').style.display = 'block';
+    document.getElementById('adminPassword').value = '';
+    document.getElementById('adminPassword').focus();
+  }
+}
+
+// ---- Admin auto-timeout (5 min inactivity) + countdown ----
+const ADMIN_TIMEOUT = 5 * 60 * 1000;   // 5분
+const ADMIN_WARN    = 30 * 1000;        // 만료 30초 전 경고
+let _adminTimer = null;
+let _adminWarnTimer = null;
+let _adminTickIv = null;
+let _adminExpireAt = 0;
+const _adminEvents = ['mousemove','click','keydown','scroll'];
+
+function _adminUpdateCountdown() {
+  const cd = document.getElementById('adminCountdown');
+  if (!cd) return;
+  const left = Math.max(0, Math.ceil((_adminExpireAt - Date.now()) / 1000));
+  const m = Math.floor(left / 60), s = left % 60;
+  cd.textContent = `${m}:${String(s).padStart(2, '0')}`;
+  if (left <= 30) cd.style.color = '#F59E0B';
+  else cd.style.color = '';
+}
+
+function _adminResetTimer() {
+  clearTimeout(_adminTimer);
+  clearTimeout(_adminWarnTimer);
+  _adminExpireAt = Date.now() + ADMIN_TIMEOUT;
+  _adminUpdateCountdown();
+  _adminWarnTimer = setTimeout(() => {
+    toast('⚠️ 30초 후 Admin 모드가 자동 해제됩니다', 'warn');
+  }, ADMIN_TIMEOUT - ADMIN_WARN);
+  _adminTimer = setTimeout(() => {
+    if (isAdminMode) exitAdminMode(true);
+  }, ADMIN_TIMEOUT);
+}
+
+function _adminStartWatch() {
+  _adminEvents.forEach(e => document.addEventListener(e, _adminResetTimer, { passive: true }));
+  _adminResetTimer();
+  _adminTickIv = setInterval(_adminUpdateCountdown, 1000);
+}
+
+function _adminStopWatch() {
+  clearTimeout(_adminTimer);
+  clearTimeout(_adminWarnTimer);
+  clearInterval(_adminTickIv);
+  _adminTimer = _adminWarnTimer = _adminTickIv = null;
+  _adminExpireAt = 0;
+  const cd = document.getElementById('adminCountdown');
+  if (cd) { cd.textContent = ''; cd.style.color = ''; }
+  _adminEvents.forEach(e => document.removeEventListener(e, _adminResetTimer));
+}
+
+function enterAdminMode() {
+  isAdminMode = true;
+  const btn = document.getElementById('adminBtn');
+  btn.className = 'admin-btn active';
+  btn.innerHTML = '<span class="lock-icon">&#x1F513;</span> Exit Admin';
+  document.getElementById('adminBadge').style.display = '';
+  toast('Admin mode activated — 삭제 기능이 활성화되었습니다.', 'success');
+  _adminStartWatch();
+  // Re-render file list to show delete buttons
+  loadFiles(currentPath);
+}
+
+function exitAdminMode(auto) {
+  _adminStopWatch();
+  isAdminMode = false;
+  const btn = document.getElementById('adminBtn');
+  btn.className = 'admin-btn';
+  btn.innerHTML = '<span class="lock-icon">&#x1F512;</span> Admin';
+  document.getElementById('adminBadge').style.display = 'none';
+  toast(auto ? '🔒 비활성으로 Admin 모드가 자동 해제되었습니다' : 'Admin mode deactivated');
+  // Re-render file list to hide delete buttons
+  loadFiles(currentPath);
+}
+
+// ========== Delete ==========
+function showDeleteConfirmModal(key, name, isFolder) {
+  pendingDeleteKey = key;
+  pendingDeleteName = name;
+  document.getElementById('deleteTargetName').textContent = (isFolder ? '📁 ' : '📄 ') + name;
+  document.getElementById('deleteConfirmModal').classList.add('show');
+  document.getElementById('deletePassword').value = '';
+  document.getElementById('deletePasswordError').style.display = 'none';
+  setTimeout(() => document.getElementById('deletePassword').focus(), 100);
+}
+
+function closeDeleteConfirmModal() {
+  document.getElementById('deleteConfirmModal').classList.remove('show');
+  pendingDeleteKey = '';
+  pendingDeleteName = '';
+}
+
+async function confirmDelete() {
+  const pw = document.getElementById('deletePassword').value;
+  if (pw !== ADMIN_PW) {
+    document.getElementById('deletePasswordError').style.display = 'block';
+    document.getElementById('deletePassword').value = '';
+    document.getElementById('deletePassword').focus();
+    return;
+  }
+  // Read values BEFORE closing modal (close resets them to '')
+  const key = pendingDeleteKey;
+  const name = pendingDeleteName;
+  closeDeleteConfirmModal();
+
+  if (!key) { toast('Delete failed: empty key', 'error'); return; }
+
+  try {
+    toast(`Deleting: ${name}...`);
+    await apiFetch('/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys: [key] })
+    });
+    toast(`Deleted: ${name}`, 'success');
+    // Refresh tree and file list
+    delete treeData[currentPath];
+    expandFolder(currentPath).then(() => renderTree());
+    loadFiles(currentPath);
+  } catch (e) {
+    toast(`Delete failed: ${e.message}`, 'error');
+  }
+}
+
+// ========== Utils ==========
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+
+function formatSize(bytes) {
+  if (!bytes || bytes === 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let size = bytes;
+  while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+  return size.toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+}
+
+function getFileIcon(ext) {
+  const icons = {
+    xlsx: '&#x1F4CA;', xls: '&#x1F4CA;', xlsb: '&#x1F4CA;',
+    tsv: '&#x1F4C4;', csv: '&#x1F4C4;',
+    pptx: '&#x1F4D1;', ppt: '&#x1F4D1;',
+    docx: '&#x1F4DD;', doc: '&#x1F4DD;',
+    png: '&#x1F5BC;', jpg: '&#x1F5BC;', jpeg: '&#x1F5BC;',
+    pdf: '&#x1F4D5;',
+    py: '&#x1F40D;',
+    json: '&#x2699;',
+  };
+  return icons[ext] || '&#x1F4C4;';
+}
+
+function toast(msg, type = '') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  clearTimeout(el._timeout);
+  el._timeout = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ========== Tab System ==========
+let activeTab = 'files';
+const tabState = { files: { scrollPos: 0 }, compare: { scrollPos: 0 }, dashboard: { scrollPos: 0 } };
+
+function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+function switchTab(tabName) {
+  if (tabName === 'dashboard') return;
+  if (tabName === activeTab) return;
+
+  // Save current scroll
+  const curPanel = document.getElementById('panel' + cap(activeTab));
+  if (curPanel) {
+    const scrollEl = curPanel.querySelector('.cmp-body') || curPanel.querySelector('.file-list');
+    if (scrollEl) tabState[activeTab].scrollPos = scrollEl.scrollTop;
+  }
+
+  // Switch tab bar active
+  document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+  const tabEl = document.querySelector(`[data-tab="${tabName}"]`);
+  if (tabEl) tabEl.classList.add('active');
+
+  // Switch panels (DOM preserved)
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  const newPanel = document.getElementById('panel' + cap(tabName));
+  if (newPanel) newPanel.classList.add('active');
+
+  // Restore scroll
+  if (newPanel) {
+    const scrollEl = newPanel.querySelector('.cmp-body') || newPanel.querySelector('.file-list');
+    if (scrollEl) scrollEl.scrollTop = tabState[tabName].scrollPos;
+  }
+
+  // Sidebar mode
+  updateSidebarMode(tabName);
+  activeTab = tabName;
+
+  // Auto-activate slot A if entering Compare for first time
+  if (tabName === 'compare' && !cmpFolderAPath && !cmpFolderBPath) {
+    cmpActivateSlot('A');
+  }
+}
+
+function updateSidebarMode(tab) {
+  const banner = document.getElementById('sidebarModeBanner');
+  if (tab === 'compare') {
+    banner.style.display = '';
+    updateSelectionBanner();
+  } else {
+    banner.style.display = 'none';
+  }
+  renderTree();
+}
+
+function updateSelectionBanner() {
+  const banner = document.getElementById('sidebarModeBanner');
+  const text = document.getElementById('sidebarModeText');
+  if (cmpActiveSlot === 'A') {
+    banner.className = 'sidebar-mode-banner slot-a';
+    text.textContent = '폴더 A 선택 중 — 더블클릭으로 선택';
+  } else {
+    banner.className = 'sidebar-mode-banner slot-b';
+    text.textContent = '폴더 B 선택 중 — 더블클릭으로 선택';
+  }
+}
+
+// ========== Compare Mode (cmp namespace) ==========
+let cmpAbort = null;
+let cmpResultData = [];
+let cmpCurrentFilter = 'all';
+let cmpFolderAPath = '';
+let cmpFolderBPath = '';
+let cmpActiveSlot = 'A';
+
+function cmpActivateSlot(slot) {
+  cmpActiveSlot = slot;
+  // Visual: highlight active slot
+  document.getElementById('cmpSlotA').classList.toggle('active-slot', slot === 'A');
+  document.getElementById('cmpSlotB').classList.toggle('active-slot', slot === 'B');
+  if (activeTab === 'compare') updateSelectionBanner();
+}
+
+async function cmpSelectFolder(path) {
+  // Also expand the folder in tree so children are visible
+  if (!expandedFolders.has(path)) {
+    expandedFolders.add(path);
+    if (!treeData[path]) {
+      loadingFolders.add(path);
+      renderTree();
+      await expandFolder(path);
+      loadingFolders.delete(path);
+    }
+  }
+
+  // Assign to active slot
+  if (cmpActiveSlot === 'A') {
+    cmpFolderAPath = path;
+    const el = document.getElementById('cmpSlotAPath');
+    el.textContent = path || '/ (Root)';
+    el.classList.add('filled');
+    document.getElementById('cmpSlotAClear').style.display = '';
+    // Auto-advance to B
+    cmpActivateSlot('B');
+  } else {
+    cmpFolderBPath = path;
+    const el = document.getElementById('cmpSlotBPath');
+    el.textContent = path || '/ (Root)';
+    el.classList.add('filled');
+    document.getElementById('cmpSlotBClear').style.display = '';
+  }
+  cmpUpdateRunBtn();
+  renderTree();
+}
+
+function cmpClearSlot(slot) {
+  if (slot === 'A') {
+    cmpFolderAPath = '';
+    document.getElementById('cmpSlotAPath').textContent = '\u2190 사이드바에서 폴더 선택';
+    document.getElementById('cmpSlotAPath').classList.remove('filled');
+    document.getElementById('cmpSlotAClear').style.display = 'none';
+  } else {
+    cmpFolderBPath = '';
+    document.getElementById('cmpSlotBPath').textContent = '\u2190 사이드바에서 폴더 선택';
+    document.getElementById('cmpSlotBPath').classList.remove('filled');
+    document.getElementById('cmpSlotBClear').style.display = 'none';
+  }
+  cmpActivateSlot(slot);
+  cmpUpdateRunBtn();
+  renderTree();
+}
+
+function cmpSwapSlots() {
+  const tmpPath = cmpFolderAPath;
+  cmpFolderAPath = cmpFolderBPath;
+  cmpFolderBPath = tmpPath;
+  // Update UI
+  const pathA = document.getElementById('cmpSlotAPath');
+  const pathB = document.getElementById('cmpSlotBPath');
+  pathA.textContent = cmpFolderAPath || '\u2190 사이드바에서 폴더 선택';
+  pathB.textContent = cmpFolderBPath || '\u2190 사이드바에서 폴더 선택';
+  pathA.classList.toggle('filled', !!cmpFolderAPath);
+  pathB.classList.toggle('filled', !!cmpFolderBPath);
+  document.getElementById('cmpSlotAClear').style.display = cmpFolderAPath ? '' : 'none';
+  document.getElementById('cmpSlotBClear').style.display = cmpFolderBPath ? '' : 'none';
+  cmpUpdateRunBtn();
+  renderTree();
+}
+
+function cmpUpdateRunBtn() {
+  const btn = document.getElementById('cmpRunBtn');
+  const warn = document.getElementById('cmpSameWarn');
+  const both = cmpFolderAPath && cmpFolderBPath;
+  btn.disabled = !both;
+  warn.style.display = (both && cmpFolderAPath === cmpFolderBPath) ? '' : 'none';
+}
+
+function cmpResetUI() {
+  cmpResultData = [];
+  cmpCurrentFilter = 'all';
+  document.getElementById('cmpResults').style.display = 'none';
+  document.getElementById('cmpDetail').style.display = 'none';
+  document.getElementById('cmpEmpty').style.display = '';
+  document.getElementById('cmpProgress').classList.remove('show');
+}
+
+function cmpShowProgress(text, pct) {
+  const el = document.getElementById('cmpProgress');
+  el.classList.add('show');
+  document.getElementById('cmpProgressText').textContent = text;
+  document.getElementById('cmpProgressPct').textContent = Math.round(pct) + '%';
+  document.getElementById('cmpProgressFill').style.width = pct + '%';
+}
+
+function cmpHideProgress() {
+  document.getElementById('cmpProgress').classList.remove('show');
+}
+
+async function cmpFetchFileList(path) {
+  // Fetch all files recursively under a folder path
+  const files = [];
+  const queue = [path];
+  while (queue.length > 0) {
+    const p = queue.shift();
+    try {
+      const data = await apiFetch(`/list?path=${encodeURIComponent(p)}`);
+      const subFolders = (data.folders || []).filter(f => !(f.path || '').includes('//'));
+      for (const f of subFolders) {
+        queue.push(f.path || f.name);
+      }
+      for (const f of (data.files || [])) {
+        // Store relative path from the selected folder
+        const fullPath = f.path || f.name;
+        const relPath = fullPath.startsWith(path) ? fullPath.slice(path.length).replace(/^\//, '') : fullPath;
+        files.push({ name: relPath, fullPath, size: f.size || 0 });
+      }
+    } catch (e) {
+      // skip failed subfolder
+    }
+  }
+  return files;
+}
+
+async function cmpComputeHash(blob) {
+  const buffer = await blob.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Concurrency-limited Promise pool
+async function cmpPoolRun(tasks, concurrency = 3) {
+  const results = [];
+  let idx = 0;
+  async function worker() {
+    while (idx < tasks.length) {
+      const i = idx++;
+      results[i] = await tasks[i]();
+    }
+  }
+  const workers = [];
+  for (let i = 0; i < Math.min(concurrency, tasks.length); i++) {
+    workers.push(worker());
+  }
+  await Promise.all(workers);
+  return results;
+}
+
+async function cmpStartCompare() {
+  if (!cmpFolderAPath || !cmpFolderBPath) { toast('Select both folders', 'error'); return; }
+  if (!isConnected) { toast('Connect first', 'error'); return; }
+
+  cmpAbort = new AbortController();
+  const btn = document.getElementById('cmpRunBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="tab-spinner"></span> Comparing...';
+
+  // Hide empty state, show progress
+  document.getElementById('cmpEmpty').style.display = 'none';
+  document.getElementById('cmpResults').style.display = 'none';
+  document.getElementById('cmpDetail').style.display = 'none';
+
+  // Update tab badge with spinner
+  document.getElementById('cmpTabBadge').innerHTML = '<span class="tab-spinner"></span>';
+
+  const folderA = cmpFolderAPath;
+  const folderB = cmpFolderBPath;
+
+  try {
+    // Phase 1: Fetch file lists
+    cmpShowProgress('Scanning Folder A...', 5);
+    const filesA = await cmpFetchFileList(folderA);
+    if (cmpAbort.signal.aborted) return;
+
+    cmpShowProgress('Scanning Folder B...', 15);
+    const filesB = await cmpFetchFileList(folderB);
+    if (cmpAbort.signal.aborted) return;
+
+    // Phase 2: Compare
+    const mapA = new Map(filesA.map(f => [f.name, f]));
+    const mapB = new Map(filesB.map(f => [f.name, f]));
+    const allNames = new Set([...mapA.keys(), ...mapB.keys()]);
+    const results = [];
+    const needHash = []; // files that need hash comparison
+
+    for (const name of allNames) {
+      const a = mapA.get(name);
+      const b = mapB.get(name);
+      if (a && b) {
+        if (a.size !== b.size) {
+          results.push({ name, sizeA: a.size, sizeB: b.size, pathA: a.fullPath, pathB: b.fullPath, status: 'mismatch', reason: 'Size differs' });
+        } else {
+          needHash.push({ name, a, b });
+        }
+      } else if (a) {
+        results.push({ name, sizeA: a.size, sizeB: null, pathA: a.fullPath, pathB: null, status: 'only-a', reason: 'Only in A' });
+      } else {
+        results.push({ name, sizeA: null, sizeB: b.size, pathA: null, pathB: b.fullPath, status: 'only-b', reason: 'Only in B' });
+      }
+    }
+
+    // Phase 3: Hash compare for same-size files
+    const MAX_HASH_SIZE = 10 * 1024 * 1024; // 10MB
+    const hashTasks = [];
+    const hashItems = [];
+
+    for (const item of needHash) {
+      if (item.a.size > MAX_HASH_SIZE) {
+        results.push({ name: item.name, sizeA: item.a.size, sizeB: item.b.size, pathA: item.a.fullPath, pathB: item.b.fullPath, status: 'match', reason: 'Size match (too large for hash)' });
+        continue;
+      }
+      hashItems.push(item);
+    }
+
+    if (hashItems.length > 0) {
+      let hashDone = 0;
+      const tasks = hashItems.map((item) => async () => {
+        if (cmpAbort && cmpAbort.signal.aborted) return;
+        try {
+          const [resA, resB] = await Promise.all([
+            fetch(`${getApi()}/download?key=${encodeURIComponent(item.a.fullPath)}`, { mode: 'cors' }),
+            fetch(`${getApi()}/download?key=${encodeURIComponent(item.b.fullPath)}`, { mode: 'cors' })
+          ]);
+          if (!resA.ok || !resB.ok) throw new Error('Download failed');
+          const [blobA, blobB] = await Promise.all([resA.blob(), resB.blob()]);
+          const [hashA, hashB] = await Promise.all([cmpComputeHash(blobA), cmpComputeHash(blobB)]);
+          const status = hashA === hashB ? 'match' : 'mismatch';
+          results.push({ name: item.name, sizeA: item.a.size, sizeB: item.b.size, pathA: item.a.fullPath, pathB: item.b.fullPath, status, reason: status === 'match' ? 'Hash match' : 'Content differs' });
+        } catch (e) {
+          results.push({ name: item.name, sizeA: item.a.size, sizeB: item.b.size, pathA: item.a.fullPath, pathB: item.b.fullPath, status: 'mismatch', reason: 'Compare error: ' + e.message });
+        }
+        hashDone++;
+        cmpShowProgress(`Comparing files... (${hashDone}/${hashItems.length})`, 20 + (hashDone / hashItems.length) * 75);
+      });
+      await cmpPoolRun(tasks, 3);
+    }
+
+    // Sort: mismatch first, then only-a, only-b, match
+    const order = { 'mismatch': 0, 'only-a': 1, 'only-b': 2, 'match': 3 };
+    results.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || a.name.localeCompare(b.name));
+
+    cmpResultData = results;
+    cmpHideProgress();
+    cmpShowResults();
+
+  } catch (e) {
+    if (!cmpAbort || !cmpAbort.signal.aborted) {
+      toast('Compare failed: ' + e.message, 'error');
+    }
+    cmpHideProgress();
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '&#x25B6; Compare';
+    cmpUpdateRunBtn();
+    document.getElementById('cmpTabBadge').innerHTML = '';
+  }
+}
+
+function cmpShowResults() {
+  document.getElementById('cmpEmpty').style.display = 'none';
+  document.getElementById('cmpResults').style.display = '';
+  document.getElementById('cmpDetail').style.display = 'none';
+
+  const stats = { match: 0, mismatch: 0, 'only-a': 0, 'only-b': 0 };
+  for (const r of cmpResultData) stats[r.status] = (stats[r.status] || 0) + 1;
+
+  document.getElementById('cmpStats').innerHTML = `
+    <div class="cmp-stat"><span>Total</span><span class="num">${cmpResultData.length}</span></div>
+    <div class="cmp-stat match"><span>Match</span><span class="num">${stats.match}</span></div>
+    <div class="cmp-stat mismatch"><span>Mismatch</span><span class="num">${stats.mismatch}</span></div>
+    <div class="cmp-stat only"><span>Only A</span><span class="num">${stats['only-a']}</span></div>
+    <div class="cmp-stat only"><span>Only B</span><span class="num">${stats['only-b']}</span></div>
+  `;
+
+  const tabs = ['all', 'mismatch', 'only-a', 'only-b', 'match'];
+  const tabLabels = { all: 'All', mismatch: 'Mismatch', 'only-a': 'Only A', 'only-b': 'Only B', match: 'Match' };
+  document.getElementById('cmpTabs').innerHTML = tabs.map(t =>
+    `<div class="cmp-tab ${t === cmpCurrentFilter ? 'active' : ''}" onclick="cmpFilterResults('${t}')">${tabLabels[t]}</div>`
+  ).join('');
+
+  cmpRenderResultRows();
+}
+
+function cmpFilterResults(type) {
+  cmpCurrentFilter = type;
+  // Update tab active state
+  const tabs = document.querySelectorAll('#cmpTabs .cmp-tab');
+  tabs.forEach(t => t.classList.remove('active'));
+  const tabLabels = { all: 'All', mismatch: 'Mismatch', 'only-a': 'Only A', 'only-b': 'Only B', match: 'Match' };
+  tabs.forEach(t => { if (t.textContent === tabLabels[type]) t.classList.add('active'); });
+  cmpRenderResultRows();
+}
+
+function cmpRenderResultRows() {
+  const filtered = cmpCurrentFilter === 'all' ? cmpResultData : cmpResultData.filter(r => r.status === cmpCurrentFilter);
+  const statusLabel = { match: 'Match', mismatch: 'Mismatch', 'only-a': 'Only in A', 'only-b': 'Only in B' };
+
+  let html = '';
+  for (const r of filtered) {
+    const sizeA = r.sizeA != null ? formatSize(r.sizeA) : '—';
+    const sizeB = r.sizeB != null ? formatSize(r.sizeB) : '—';
+    const canDetail = r.status === 'mismatch' && r.pathA && r.pathB;
+    const detailBtn = canDetail
+      ? `<button onclick="cmpShowDetail('${escHtml(r.pathA)}','${escHtml(r.pathB)}','${escHtml(r.name)}')">Diff</button>`
+      : '';
+    html += `<div class="cmp-row ${r.status}">
+      <div class="col-name" title="${escHtml(r.name)}">${escHtml(r.name)}</div>
+      <div class="col-size">${sizeA} / ${sizeB}</div>
+      <div class="col-status">${statusLabel[r.status]}</div>
+      <div class="col-action">${detailBtn}</div>
+    </div>`;
+  }
+
+  if (filtered.length === 0) {
+    html = '<div style="text-align:center; padding:40px; color:var(--text2);">No files in this category</div>';
+  }
+  document.getElementById('cmpTableBody').innerHTML = html;
+}
+
+// ===== 2nd Phase: Detail Diff =====
+const CMP_MAX_DIFF_LINES = 500;
+const CMP_TEXT_EXTS = new Set(['txt','csv','tsv','json','xml','html','htm','css','js','py','md','yml','yaml','ini','cfg','log','sql','sh','bat','ps1','r','srt']);
+
+async function cmpShowDetail(pathA, pathB, name) {
+  const ext = name.split('.').pop().toLowerCase();
+  if (!CMP_TEXT_EXTS.has(ext)) {
+    const extList = [...CMP_TEXT_EXTS].sort().join(', ');
+    toast(`지원 형식: ${extList}`, 'error');
+    return;
+  }
+
+  document.getElementById('cmpResults').style.display = 'none';
+  document.getElementById('cmpDetail').style.display = '';
+  cmpShowProgress('Downloading files for diff...', 30);
+
+  try {
+    const [resA, resB] = await Promise.all([
+      fetch(`${getApi()}/download?key=${encodeURIComponent(pathA)}`, { mode: 'cors' }),
+      fetch(`${getApi()}/download?key=${encodeURIComponent(pathB)}`, { mode: 'cors' })
+    ]);
+    if (!resA.ok || !resB.ok) throw new Error('Download failed');
+    const [textA, textB] = await Promise.all([resA.text(), resB.text()]);
+    cmpHideProgress();
+
+    const linesA = textA.split('\n');
+    const linesB = textB.split('\n');
+
+    const isTsv = ext === 'tsv';
+    const renderFn = isTsv ? cmpRenderTsvDetail : cmpRenderDetail;
+
+    if (linesA.length > CMP_MAX_DIFF_LINES || linesB.length > CMP_MAX_DIFF_LINES) {
+      // Truncate for performance
+      const truncA = linesA.slice(0, CMP_MAX_DIFF_LINES);
+      const truncB = linesB.slice(0, CMP_MAX_DIFF_LINES);
+      const diffs = cmpLineDiff(truncA, truncB);
+      renderFn(name, pathA, pathB, diffs, true, linesA.length, linesB.length);
+    } else {
+      const diffs = cmpLineDiff(linesA, linesB);
+      renderFn(name, pathA, pathB, diffs, false, linesA.length, linesB.length);
+    }
+  } catch (e) {
+    cmpHideProgress();
+    toast('Failed to load file: ' + e.message, 'error');
+    cmpBackToResults();
+  }
+}
+
+function cmpBackToResults() {
+  document.getElementById('cmpDetail').style.display = 'none';
+  document.getElementById('cmpResults').style.display = '';
+}
+
+function cmpBackToSetup() {
+  document.getElementById('cmpResults').style.display = 'none';
+  document.getElementById('cmpDetail').style.display = 'none';
+  document.getElementById('cmpEmpty').style.display = '';
+}
+
+// LCS-based line diff (simplified Differ algorithm)
+function cmpLineDiff(linesA, linesB) {
+  const n = linesA.length, m = linesB.length;
+  // For large files, use a simpler O(n+m) approach
+  if (n + m > 2000) return cmpSimpleDiff(linesA, linesB);
+
+  // Build LCS table (O(n*m) but bounded by CMP_MAX_DIFF_LINES)
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (linesA[i - 1] === linesB[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  // Backtrack to produce diff
+  const result = [];
+  let i = n, j = m;
+  const stack = [];
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && linesA[i - 1] === linesB[j - 1]) {
+      stack.push({ type: 'equal', lineA: i, lineB: j, textA: linesA[i - 1], textB: linesB[j - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      stack.push({ type: 'added', lineA: null, lineB: j, textA: '', textB: linesB[j - 1] });
+      j--;
+    } else {
+      stack.push({ type: 'deleted', lineA: i, lineB: null, textA: linesA[i - 1], textB: '' });
+      i--;
+    }
+  }
+  stack.reverse();
+
+  // Merge adjacent delete+add into 'changed'
+  for (let k = 0; k < stack.length; k++) {
+    if (stack[k].type === 'deleted' && k + 1 < stack.length && stack[k + 1].type === 'added') {
+      result.push({ type: 'changed', lineA: stack[k].lineA, lineB: stack[k + 1].lineB, textA: stack[k].textA, textB: stack[k + 1].textB });
+      k++;
+    } else {
+      result.push(stack[k]);
+    }
+  }
+  return result;
+}
+
+// Simple diff for large files (line-by-line comparison)
+function cmpSimpleDiff(linesA, linesB) {
+  const result = [];
+  const maxLen = Math.max(linesA.length, linesB.length);
+  for (let i = 0; i < maxLen; i++) {
+    const a = i < linesA.length ? linesA[i] : undefined;
+    const b = i < linesB.length ? linesB[i] : undefined;
+    if (a !== undefined && b !== undefined) {
+      if (a === b) {
+        result.push({ type: 'equal', lineA: i + 1, lineB: i + 1, textA: a, textB: b });
+      } else {
+        result.push({ type: 'changed', lineA: i + 1, lineB: i + 1, textA: a, textB: b });
+      }
+    } else if (a !== undefined) {
+      result.push({ type: 'deleted', lineA: i + 1, lineB: null, textA: a, textB: '' });
+    } else {
+      result.push({ type: 'added', lineA: null, lineB: i + 1, textA: '', textB: b });
+    }
+  }
+  return result;
+}
+
+// Character-level diff (SequenceMatcher port)
+function cmpCharDiff(textA, textB) {
+  // Simple SequenceMatcher-like character diff
+  const n = textA.length, m = textB.length;
+  if (n === 0 && m === 0) return { htmlA: '', htmlB: '' };
+  if (n === 0) return { htmlA: '', htmlB: `<span class="cmp-hl-ins">${escHtml(textB)}</span>` };
+  if (m === 0) return { htmlA: `<span class="cmp-hl-del">${escHtml(textA)}</span>`, htmlB: '' };
+
+  // For very long lines, skip char diff
+  if (n > 500 || m > 500) {
+    return { htmlA: `<span class="cmp-hl-del">${escHtml(textA)}</span>`, htmlB: `<span class="cmp-hl-ins">${escHtml(textB)}</span>` };
+  }
+
+  // LCS for characters
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (textA[i - 1] === textB[j - 1]) dp[i][j] = dp[i - 1][j - 1] + 1;
+      else dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+
+  // Backtrack to get opcodes
+  const ops = [];
+  let i = n, j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && textA[i - 1] === textB[j - 1]) {
+      ops.push({ op: 'equal', iA: i - 1, iB: j - 1 });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      ops.push({ op: 'insert', iB: j - 1 });
+      j--;
+    } else {
+      ops.push({ op: 'delete', iA: i - 1 });
+      i--;
+    }
+  }
+  ops.reverse();
+
+  // Build HTML
+  let htmlA = '', htmlB = '';
+  let bufA = '', bufB = '', eqA = '', eqB = '';
+
+  function flushDiff() {
+    if (bufA) { htmlA += `<span class="cmp-hl-del">${escHtml(bufA)}</span>`; bufA = ''; }
+    if (bufB) { htmlB += `<span class="cmp-hl-ins">${escHtml(bufB)}</span>`; bufB = ''; }
+  }
+  function flushEqual() {
+    if (eqA) { htmlA += escHtml(eqA); eqA = ''; }
+    if (eqB) { htmlB += escHtml(eqB); eqB = ''; }
+  }
+
+  for (const op of ops) {
+    if (op.op === 'equal') {
+      flushDiff();
+      eqA += textA[op.iA];
+      eqB += textB[op.iB];
+    } else if (op.op === 'delete') {
+      flushEqual();
+      bufA += textA[op.iA];
+    } else {
+      flushEqual();
+      bufB += textB[op.iB];
+    }
+  }
+  flushEqual();
+  flushDiff();
+
+  return { htmlA, htmlB };
+}
+
+function cmpRenderDetail(name, pathA, pathB, diffs, truncated, totalA, totalB) {
+  const changedCount = diffs.filter(d => d.type === 'changed').length;
+  const addedCount = diffs.filter(d => d.type === 'added').length;
+  const deletedCount = diffs.filter(d => d.type === 'deleted').length;
+
+  let html = `
+    <div class="cmp-detail-bar">
+      <button class="cmp-back" onclick="cmpBackToResults()">&#x2190; Back</button>
+      <span class="cmp-filename">${escHtml(name)}</span>
+    </div>
+    <div class="cmp-detail-stats">
+      <span style="color:var(--warn);">&#x25CF; Changed: ${changedCount}</span>
+      <span style="color:var(--success);">&#x25CF; Added: ${addedCount}</span>
+      <span style="color:var(--error);">&#x25CF; Deleted: ${deletedCount}</span>
+      <span>Lines: ${totalA} → ${totalB}</span>
+    </div>
+    <div class="cmp-diff-container">
+      <div class="cmp-diff-header">
+        <div>Before (Folder A)</div>
+        <div>After (Folder B)</div>
+      </div>
+      <div class="cmp-diff-body">`;
+
+  // Only render non-equal lines + context (2 lines around changes)
+  const isChange = (d) => d.type !== 'equal';
+  const contextLines = 2;
+  const showFlags = new Array(diffs.length).fill(false);
+
+  for (let i = 0; i < diffs.length; i++) {
+    if (isChange(diffs[i])) {
+      for (let j = Math.max(0, i - contextLines); j <= Math.min(diffs.length - 1, i + contextLines); j++) {
+        showFlags[j] = true;
+      }
+    }
+  }
+
+  let lastShown = -1;
+  for (let i = 0; i < diffs.length; i++) {
+    if (!showFlags[i]) continue;
+
+    // Show separator if gap
+    if (lastShown >= 0 && i - lastShown > 1) {
+      html += `<div class="cmp-diff-row" style="justify-content:center; color:var(--text2); font-size:11px; padding:4px;">
+        <div style="text-align:center; width:100%;">⋯ ${i - lastShown - 1} equal lines hidden ⋯</div>
+      </div>`;
+    }
+    lastShown = i;
+
+    const d = diffs[i];
+    const numA = d.lineA != null ? d.lineA : '';
+    const numB = d.lineB != null ? d.lineB : '';
+
+    if (d.type === 'equal') {
+      html += `<div class="cmp-diff-row">
+        <div class="cmp-diff-label"></div>
+        <div class="cmp-diff-side"><div class="cmp-diff-num">${numA}</div><div class="cmp-diff-text">${escHtml(d.textA)}</div></div>
+        <div class="cmp-diff-side"><div class="cmp-diff-num">${numB}</div><div class="cmp-diff-text">${escHtml(d.textB)}</div></div>
+      </div>`;
+    } else if (d.type === 'changed') {
+      const charDiff = cmpCharDiff(d.textA, d.textB);
+      html += `<div class="cmp-diff-row changed">
+        <div class="cmp-diff-label">CHG</div>
+        <div class="cmp-diff-side"><div class="cmp-diff-num">${numA}</div><div class="cmp-diff-text">${charDiff.htmlA}</div></div>
+        <div class="cmp-diff-side"><div class="cmp-diff-num">${numB}</div><div class="cmp-diff-text">${charDiff.htmlB}</div></div>
+      </div>`;
+    } else if (d.type === 'deleted') {
+      html += `<div class="cmp-diff-row deleted">
+        <div class="cmp-diff-label">DEL</div>
+        <div class="cmp-diff-side"><div class="cmp-diff-num">${numA}</div><div class="cmp-diff-text">${escHtml(d.textA)}</div></div>
+        <div class="cmp-diff-side"><div class="cmp-diff-num"></div><div class="cmp-diff-text" style="color:var(--text2); font-style:italic;"></div></div>
+      </div>`;
+    } else if (d.type === 'added') {
+      html += `<div class="cmp-diff-row added">
+        <div class="cmp-diff-label">ADD</div>
+        <div class="cmp-diff-side"><div class="cmp-diff-num"></div><div class="cmp-diff-text" style="color:var(--text2); font-style:italic;"></div></div>
+        <div class="cmp-diff-side"><div class="cmp-diff-num">${numB}</div><div class="cmp-diff-text">${escHtml(d.textB)}</div></div>
+      </div>`;
+    }
+  }
+
+  html += '</div></div>';
+
+  if (truncated) {
+    html += `<div class="cmp-diff-notice">&#x26A0; File truncated to first ${CMP_MAX_DIFF_LINES} lines (A: ${totalA} lines, B: ${totalB} lines)</div>`;
+  }
+
+  // If all lines are equal
+  if (changedCount === 0 && addedCount === 0 && deletedCount === 0) {
+    html += '<div style="text-align:center; padding:40px; color:var(--text2);">Files are identical</div>';
+  }
+
+  document.getElementById('cmpDetail').innerHTML = html;
+}
+
+// ===== TSV Table Diff Renderer (Split-Panel: A scroll | B scroll 독립) =====
+function cmpRenderTsvDetail(name, pathA, pathB, diffs, truncated, totalA, totalB) {
+  const firstDiff = diffs[0];
+  const headerLine = (firstDiff && firstDiff.textA) ? firstDiff.textA : (firstDiff ? firstDiff.textB || '' : '');
+  const headers = headerLine.split('\t');
+  const colCount = headers.length;
+
+  const changedCount = diffs.filter(d => d.type === 'changed').length;
+  const addedCount = diffs.filter(d => d.type === 'added').length;
+  const deletedCount = diffs.filter(d => d.type === 'deleted').length;
+
+  // --- Build visible rows (context ± 2) ---
+  const contextLines = 2;
+  const showFlags = new Array(diffs.length).fill(false);
+  for (let i = 0; i < diffs.length; i++) {
+    if (diffs[i].type !== 'equal') {
+      for (let j = Math.max(0, i - contextLines); j <= Math.min(diffs.length - 1, i + contextLines); j++) showFlags[j] = true;
+    }
+  }
+  if (diffs.length > 0 && diffs[0].type === 'equal' && (diffs[0].lineA === 1 || diffs[0].lineB === 1)) showFlags[0] = false;
+
+  const rows = [];
+  let lastShown = -1;
+  for (let i = 0; i < diffs.length; i++) {
+    if (!showFlags[i]) continue;
+    if (lastShown >= 0 && i - lastShown > 1) rows.push({ _sep: true, count: i - lastShown - 1 });
+    lastShown = i;
+    rows.push(diffs[i]);
+  }
+
+  // --- Build 3 parallel HTML streams: Type column, A-table, B-table ---
+  let tHtml = '<table><thead><tr><th>&nbsp;</th></tr><tr><th>&nbsp;</th></tr></thead><tbody>';
+  let aHtml = `<table><thead><tr><th class="tg-a" colspan="${colCount+1}">A &#x2014; Before</th></tr><tr><th class="tln">#</th>`;
+  for (const h of headers) aHtml += `<th title="${escHtml(h)}">${escHtml(h)}</th>`;
+  aHtml += '</tr></thead><tbody>';
+  let bHtml = `<table><thead><tr><th class="tg-b" colspan="${colCount+1}">B &#x2014; After</th></tr><tr><th class="tln">#</th>`;
+  for (const h of headers) bHtml += `<th title="${escHtml(h)}">${escHtml(h)}</th>`;
+  bHtml += '</tr></thead><tbody>';
+
+  for (const row of rows) {
+    if (row._sep) {
+      tHtml += '<tr><td class="tc-sep">&#x22EF;</td></tr>';
+      aHtml += `<tr class="tsep"><td colspan="${colCount+1}">&#x22EF; ${row.count} equal rows hidden &#x22EF;</td></tr>`;
+      bHtml += `<tr class="tsep"><td colspan="${colCount+1}">&#x22EF; ${row.count} equal rows hidden &#x22EF;</td></tr>`;
+      continue;
+    }
+    const d = row;
+    const cA = d.textA ? d.textA.split('\t') : [];
+    const cB = d.textB ? d.textB.split('\t') : [];
+
+    if (d.type === 'equal') {
+      tHtml += '<tr><td></td></tr>';
+      aHtml += `<tr><td class="tln">${d.lineA}</td>`;
+      for (let c = 0; c < colCount; c++) aHtml += `<td title="${escHtml(cA[c]||'')}">${escHtml(cA[c]||'')}</td>`;
+      aHtml += '</tr>';
+      bHtml += `<tr><td class="tln">${d.lineB}</td>`;
+      for (let c = 0; c < colCount; c++) bHtml += `<td title="${escHtml(cB[c]||cA[c]||'')}">${escHtml(cB[c]||cA[c]||'')}</td>`;
+      bHtml += '</tr>';
+
+    } else if (d.type === 'changed') {
+      tHtml += '<tr><td class="tc-chg">CHG</td></tr>';
+      aHtml += `<tr><td class="tln">${d.lineA||''}</td>`;
+      for (let c = 0; c < colCount; c++) {
+        const va = cA[c]||'', vb = cB[c]||'';
+        aHtml += `<td class="${va!==vb?'tc-del':''}" title="${escHtml(va)}">${escHtml(va)}</td>`;
+      }
+      aHtml += '</tr>';
+      bHtml += `<tr><td class="tln">${d.lineB||''}</td>`;
+      for (let c = 0; c < colCount; c++) {
+        const va = cA[c]||'', vb = cB[c]||'';
+        bHtml += `<td class="${va!==vb?'tc-ins':''}" title="${escHtml(vb)}">${escHtml(vb)}</td>`;
+      }
+      bHtml += '</tr>';
+
+    } else if (d.type === 'deleted') {
+      tHtml += '<tr><td class="tc-del">DEL</td></tr>';
+      aHtml += `<tr><td class="tln">${d.lineA||''}</td>`;
+      for (let c = 0; c < colCount; c++) aHtml += `<td class="tc-del" title="${escHtml(cA[c]||'')}">${escHtml(cA[c]||'')}</td>`;
+      aHtml += '</tr>';
+      bHtml += `<tr><td class="tln tc-dim"></td>`;
+      for (let c = 0; c < colCount; c++) bHtml += '<td class="tc-dim">&mdash;</td>';
+      bHtml += '</tr>';
+
+    } else if (d.type === 'added') {
+      tHtml += '<tr><td class="tc-add">ADD</td></tr>';
+      aHtml += `<tr><td class="tln tc-dim"></td>`;
+      for (let c = 0; c < colCount; c++) aHtml += '<td class="tc-dim">&mdash;</td>';
+      aHtml += '</tr>';
+      bHtml += `<tr><td class="tln">${d.lineB||''}</td>`;
+      for (let c = 0; c < colCount; c++) bHtml += `<td class="tc-ins" title="${escHtml(cB[c]||'')}">${escHtml(cB[c]||'')}</td>`;
+      bHtml += '</tr>';
+    }
+  }
+  tHtml += '</tbody></table>';
+  aHtml += '</tbody></table>';
+  bHtml += '</tbody></table>';
+
+  // --- Assemble ---
+  let html = `
+    <div class="cmp-detail-bar">
+      <button class="cmp-back" onclick="cmpBackToResults()">&#x2190; Back</button>
+      <span class="cmp-filename">${escHtml(name)}</span>
+    </div>
+    <div class="cmp-detail-stats">
+      <span style="color:var(--warn);">&#x25CF; Changed: ${changedCount}</span>
+      <span style="color:var(--success);">&#x25CF; Added: ${addedCount}</span>
+      <span style="color:var(--error);">&#x25CF; Deleted: ${deletedCount}</span>
+      <span>Lines: ${totalA} &#x2192; ${totalB}</span>
+    </div>
+    <div class="cmp-tsv-wrap">
+      <div class="cmp-tsv-tc" id="tsvTc">${tHtml}</div>
+      <div class="cmp-tsv-pn" id="tsvPnA">${aHtml}</div>
+      <div class="cmp-tsv-pn" id="tsvPnB">${bHtml}</div>
+    </div>`;
+  if (truncated) html += `<div class="cmp-diff-notice">&#x26A0; File truncated to first ${CMP_MAX_DIFF_LINES} lines (A: ${totalA} lines, B: ${totalB} lines)</div>`;
+  if (changedCount === 0 && addedCount === 0 && deletedCount === 0) html += '<div style="text-align:center; padding:40px; color:var(--text2);">Files are identical</div>';
+
+  document.getElementById('cmpDetail').innerHTML = html;
+
+  // --- Sync vertical scroll (A ↔ B ↔ Type column) ---
+  const tc = document.getElementById('tsvTc');
+  const pA = document.getElementById('tsvPnA');
+  const pB = document.getElementById('tsvPnB');
+  if (tc && pA && pB) {
+    let syncing = false;
+    const sync = (src) => {
+      if (syncing) return;
+      syncing = true;
+      const t = src.scrollTop;
+      if (src !== tc) tc.scrollTop = t;
+      if (src !== pA) pA.scrollTop = t;
+      if (src !== pB) pB.scrollTop = t;
+      requestAnimationFrame(() => syncing = false);
+    };
+    pA.addEventListener('scroll', () => sync(pA));
+    pB.addEventListener('scroll', () => sync(pB));
+  }
+}
+
+// ========== Init ==========
+window.addEventListener('DOMContentLoaded', () => {
+  // Hover effect: show "Disconnect" text when connected
+  const btn = document.getElementById('connBtn');
+  btn.addEventListener('mouseenter', () => {
+    if (isConnected) btn.textContent = 'Disconnect';
+  });
+  btn.addEventListener('mouseleave', () => {
+    if (isConnected) btn.textContent = 'Connected';
+  });
+
+  // ESC key: close modals only (no overlay to close)
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      // Close any open modal
+      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+    }
+  });
+
+  // Auto-connect
+  connect();
+});
+</script>
+</body>
+</html>
