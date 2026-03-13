@@ -1088,6 +1088,29 @@ class ConfluenceWikiClient:
             except Exception as e:
                 logger.debug(f"[wiki] CQL 결과 캐시 저장 실패 (무시): {e}")
 
+        # ── enrichment 데이터 추가 (summary/keywords 캐시 조회) ────────
+        summary = ""
+        keywords_list = []
+        if _CACHE_ENABLED and page_id:
+            try:
+                _node = _wiki_cache.get_node("wiki", page_id)
+                if _node:
+                    _content = _wiki_cache.get_content(_node["id"])
+                    if _content:
+                        summary = _content.get("summary") or ""
+                        _kw_raw = _content.get("keywords") or ""
+                        if _kw_raw:
+                            import json as _json
+                            try:
+                                keywords_list = _json.loads(_kw_raw)
+                            except (ValueError, TypeError):
+                                keywords_list = []
+            except Exception:
+                pass
+
         logger.debug(f"[wiki] 페이지 파싱: id={page_id}, title={page_title}, "
                      f"fetch_full={fetch_full}, text_len={len(str(text))}")
-        return {"id": page_id, "title": page_title, "url": page_url, "text": text}
+        return {
+            "id": page_id, "title": page_title, "url": page_url, "text": text,
+            "summary": summary, "keywords": keywords_list,
+        }

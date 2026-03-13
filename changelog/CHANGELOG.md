@@ -20,6 +20,31 @@
 
 ---
 
+## [1.6.3] - 2026-03-13
+
+### 추가
+- **Enrichment Pipeline** (`mcp-cache-layer/src/enrichment.py`)
+  - 캐시 DB 26,727개 노드에 summary/keywords 자동 생성 (로컬 추출, API 비용 0)
+  - Wiki: body 첫 3문장 요약 + labels 기반 키워드
+  - Jira: issue_type/status/priority 접두 + description 요약 + labels/components 키워드
+  - GDI: path 카테고리 + body 요약 + 경로 세그먼트 + 빈도 키워드
+  - CLI: `python -m src.enrichment --all|--wiki|--jira|--gdi [--force] [--stats]`
+
+### 수정
+- **Wiki 검색 답변 품질 향상** (`wiki_client.py`, `slack_bot.py`)
+  - `_cql_result_to_page_dict()`: summary/keywords를 캐시에서 조회하여 반환
+  - `_wiki_call_claude()`: enrichment 컨텍스트(요약+키워드)를 프롬프트 앞에 배치
+  - Claude가 페이지 맥락을 빠르게 파악 → 답변 정합성 향상
+- **GDI 로컬 검색 keywords 우선** (`gdi_client.py`)
+  - `_local_unified_search()`: keywords 칼럼 OR 본문 매칭으로 검색 범위 확대
+  - keywords 히트 결과를 body_text 히트보다 상위 정렬
+- **auto_sync 자동 enrichment** (`mcp-cache-layer/scripts/auto_sync.py`)
+  - Wiki/Jira/GDI 동기화 완료 후 enrichment 자동 실행 단계 추가
+- **Wiki 인덱스 export 보강** (`mcp-cache-layer/src/exporters.py`)
+  - `export_wiki_index()`: 각 entry에 summary/keywords 필드 포함
+
+---
+
 ## [1.6.2] - 2026-03-13
 
 ### 수정

@@ -545,20 +545,43 @@ class GdiClient:
             if not keywords:
                 return {"success": True, "results": [], "total_count": 0}, None
 
-            # WHERE 절: 모든 키워드가 body_text에 포함
-            where_clauses = []
+            # WHERE 절: keywords 또는 body_text에서 매칭
+            # keywords 칼럼 히트를 우선 정렬
+            kw_like_clauses = []
+            body_like_clauses = []
             params = []
             for kw in keywords:
-                where_clauses.append("dc.body_text LIKE ?")
+                kw_like_clauses.append("dc.keywords LIKE ?")
+                params.append(f"%{kw}%")
+                body_like_clauses.append("dc.body_text LIKE ?")
                 params.append(f"%{kw}%")
 
-            # game_name 필터 (path 예: "Chaoszero/TSV/20260225b/file.tsv")
-            if game_name:
-                where_clauses.append("LOWER(n.path) LIKE ?")
-                params.append(f"%{game_name.lower()}%")
+            # 키워드 매칭 OR 본문 매칭 (둘 중 하나만 충족해도 결과 포함)
+            kw_match = " AND ".join(kw_like_clauses)
+            body_match = " AND ".join(body_like_clauses)
+            content_filter = f"(({kw_match}) OR ({body_match}))"
 
-            where_sql = " AND ".join(where_clauses)
-            params.append(top_k)
+            # keywords 매칭 여부로 정렬 우선순위 결정
+            kw_rank_clauses = []
+            rank_params = []
+            for kw in keywords:
+                kw_rank_clauses.append("dc.keywords LIKE ?")
+                rank_params.append(f"%{kw}%")
+            kw_rank_expr = " AND ".join(kw_rank_clauses)
+
+            # game_name 필터 (path 예: "Chaoszero/TSV/20260225b/file.tsv")
+            game_filter = ""
+            game_params = []
+            if game_name:
+                game_filter = "AND LOWER(n.path) LIKE ?"
+                game_params.append(f"%{game_name.lower()}%")
+
+            all_params = (
+                params           # content_filter 파라미터
+                + game_params    # game_name 필터
+                + rank_params    # ORDER BY CASE 파라미터
+                + [top_k]        # LIMIT
+            )
 
             sql = f"""
                 SELECT n.title, n.path, n.node_type,
@@ -566,10 +589,13 @@ class GdiClient:
                 FROM nodes n
                 JOIN doc_content dc ON dc.node_id = n.id
                 WHERE n.source_type = 'gdi'
-                  AND {where_sql}
-                ORDER BY n.updated_at DESC
+                  AND {content_filter}
+                  {game_filter}
+                ORDER BY CASE WHEN ({kw_rank_expr}) THEN 0 ELSE 1 END,
+                         n.updated_at DESC
                 LIMIT ?
             """
+            params = all_params
             rows = conn.execute(sql, params).fetchall()
             conn.close()
 

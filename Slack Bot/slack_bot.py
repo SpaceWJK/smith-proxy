@@ -241,10 +241,14 @@ def _wiki_get_page(client, page_part: str, respond):
     respond(text=msg)
 
 
-def _wiki_call_claude(page_title: str, page_text: str, question: str):
+def _wiki_call_claude(page_title: str, page_text: str, question: str,
+                      summary: str = "", keywords: list | None = None):
     """
     Claude API 호출만 수행하고 답변 텍스트를 반환합니다.
     오류 시 None 반환.
+
+    summary/keywords가 제공되면 프롬프트 앞에 배치하여
+    Claude가 페이지 맥락을 빠르게 파악하도록 합니다.
     """
     import anthropic
 
@@ -257,8 +261,18 @@ def _wiki_call_claude(page_title: str, page_text: str, question: str):
     content   = page_text[:MAX_PAGE_CHARS] if truncated else page_text
     trunc_note = "\n*(내용이 길어 일부만 포함됨)*\n" if truncated else ""
 
+    # enrichment 컨텍스트 (summary/keywords가 있으면 프롬프트 앞에 배치)
+    enrich_ctx = ""
+    if summary:
+        enrich_ctx += f"[페이지 요약] {summary}\n"
+    if keywords:
+        enrich_ctx += f"[핵심 키워드] {', '.join(keywords[:8])}\n"
+    if enrich_ctx:
+        enrich_ctx += "\n"
+
     prompt = (
         f"다음은 Confluence 페이지 '{page_title}'의 내용입니다:\n\n"
+        f"{enrich_ctx}"
         f"{content}{trunc_note}\n\n"
         f"위 내용을 바탕으로 아래 질문에 한국어로 간결하게 답해주세요.\n\n"
         f"[답변 지침]\n"
@@ -382,12 +396,15 @@ def _log_answer_miss(*, user_id: str, user_name: str,
 
 def _wiki_ask_claude(page_title: str, page_text: str, page_url: str,
                      question: str, respond, wiki_client=None,
-                     display_question: str = ""):
+                     display_question: str = "",
+                     page_summary: str = "", page_keywords: list | None = None):
     """
     Claude API 를 사용해 페이지 내용 기반으로 질문에 답변.
 
     wiki_client 가 전달되면 '찾을 수 없습니다' 응답 시 하위 페이지를
     자동 검색하여 재질의합니다 (MCP fallback).
+
+    page_summary/page_keywords: enrichment 데이터 (있으면 프롬프트에 포함)
     """
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
@@ -397,7 +414,9 @@ def _wiki_ask_claude(page_title: str, page_text: str, page_url: str,
         ))
         return
 
-    answer = _wiki_call_claude(page_title, page_text, question)
+    answer = _wiki_call_claude(page_title, page_text, question,
+                               summary=page_summary,
+                               keywords=page_keywords)
     if answer is None:
         respond(text="❌ Claude API 호출에 실패했습니다.")
         return
@@ -1436,7 +1455,9 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     answer = "해당 페이지에서 관련 내용을 찾을 수 없습니다."
                 else:
                     answer = _wiki_call_claude(
-                        page["title"], page_text, question
+                        page["title"], page_text, question,
+                        summary=page.get("summary", ""),
+                        keywords=page.get("keywords"),
                     )
                     if answer is None:
                         respond(text="❌ Claude API 호출에 실패했습니다.")
