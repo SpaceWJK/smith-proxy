@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-03-25 (화) — 세션 25
+
+### 완료
+- **ISS-004 Brain 대시보드 Health Score 추가**: brain-metrics API에 health_score(0~100) 필드 추가, Brain 요약 카드에 Health Score/7일경험/7일일지/14일피드백 표시
+- **Brain 대시보드 레이아웃 개선**: max-width:1200px 가로 확장 제한, font-size/padding 가독성 향상, 반응형 900px 이하 1열 전환
+- **s3_admin.html과 s3_manager.html 동기**: Health Score + 레이아웃 변경을 s3_admin.html(실 운영 파일)에도 적용
+
+### 변경 파일
+- `tools/s3_server.py`: brain-metrics API에 health_score 추가 (brain_health.py SSOT 모듈 동적 로드)
+- `tools/s3_admin.html`: Health Score UI + 레이아웃 CSS 개선
+- `tools/s3_manager.html`: 동일 변경 적용
+
+---
+
+## 2026-03-16~17 (일~월) — 세션 24
+
+### 완료
+- **Sysops 대시보드 Brain 탭 완성** (`tools/s3_admin.html`, `tools/s3_manager.html`)
+  - Brain 상단 상태바 추가: Live dot (활성/비활성/오류 3색) + 마지막 활동 시간 + "Auto 30s" 라벨
+  - 보류/미완료 작업 카드 추가 (`pending_tasks` 테이블 → brain.db)
+  - brain-grid `overflow-y: auto` 스크롤 수정 (tab-panel overflow:hidden 충돌 해결)
+  - ThreadingHTTPServer 전환 (동시 API 요청 데드락 해결)
+
+- **Prompt Cultivation MCP 서버 통합** (전역)
+  - `~/.claude/settings.json`의 mcpServers는 Claude Code가 읽지 않는 것 확인
+  - `claude mcp add -s user` 명령으로 `~/.claude.json`에 정상 등록 → **Connected**
+  - `PYTHONIOENCODING=utf-8` 환경변수 추가
+  - 실패 MCP 서버 정리: jina, sequential-thinking 제거
+  - CLAUDE.md에 recall/reflect/feedback 3단계 루프 + MCP 도구명 명시
+
+- **s3_server 자동 시작** (`tools/run_s3_server_silent.vbs`)
+  - VBS 래퍼: pythonw.exe로 CMD 없이 실행
+  - 시작 프로그램 폴더에 바로가기 등록 (로그인 시 자동 시작)
+
+- **brain.db 스키마 확장**
+  - `pending_tasks` 테이블 추가 (id, title, description, status, priority, source, domain)
+  - SQLite timeout 5→30초 (`schema.py`)
+  - 보류 작업 5건 시드 (MCP_Process_Cleanup, GDI Phase 1, weekly_batch, Context7 중복, Atlassian MCP)
+
+- **Claude Desktop config 최적화**
+  - 모든 MCP 서버: npx → node 직접 실행 (CMD 창 제거)
+  - `coworkScheduledTasksEnabled: false`, `ccdScheduledTasksEnabled: false`
+  - 백업: `claude_desktop_config.backup.20260316.json`
+
+- **Task Scheduler 정리**
+  - 중복 삭제: MCP_AutoSync, MCP_AutoSync_4h (MCP-AutoSync-Delta만 유지)
+  - MCP_Process_Cleanup용 VBS 래퍼 생성 (`run_cleanup_silent.vbs`)
+
+- **CLAUDE.md 전역 워크플로우 추가**
+  - 8단계 개발 프로세스: 요구사항분석 → 설계 → 에이전트 검수 → 구현 → QA → 수정 → 재검수 → 완료
+
+### 미완료 / 후속
+- MCP_Process_Cleanup Task Scheduler를 VBS 래퍼로 전환 (관리자 권한 필요)
+- Context7 Claude Desktop 중복 인스턴스 제거 (수동)
+- Atlassian Cloud MCP 해제 (수동)
+
+---
+
 ## 2026-03-12 (수) — 세션 23
 
 ### 완료

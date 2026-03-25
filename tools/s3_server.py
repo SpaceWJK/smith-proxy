@@ -21,12 +21,31 @@ import mimetypes
 import sqlite3
 from datetime import datetime, timedelta
 from io import BytesIO
+try:
+    import boto3
+    _S3_CLIENT = boto3.client("s3", region_name="ap-northeast-2")
+    _S3_BUCKET = "game-doc-insight-resource"
+    _S3_AVAILABLE = True
+except ImportError:
+    _S3_AVAILABLE = False
 
 GDI_API = (
     "http://k8s-llmopsalbgroup-2f93202457-431440703"
     ".ap-northeast-1.elb.amazonaws.com/game-doc-insight-ui/api"
 )
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ── Admin 인증 ──────────────────────────────────────────────────
+ADMIN_PW = "qateam2025@"
+
+# ── 하트비트: 연결된 클라이언트 추적 (Admin 서버 전용) ───────────
+import threading
+import subprocess
+# Windows CMD 팝업 방지 — 모든 subprocess 호출에 creationflags=_NO_WINDOW 적용 필수
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+_connected_clients = {}       # {client_id: {user, ip, last_seen, status}}
+_clients_lock = threading.Lock()
+_disconnect_queue = set()     # 강제 종료 대상 client_id
 
 # ── Dashboard 데이터 소스 경로 ─────────────────────────────────
 _PROJECT_ROOT = os.path.normpath(os.path.join(STATIC_DIR, ".."))
@@ -35,6 +54,11 @@ _BOT_DATA = os.path.join(_BOT_SRC, "data")
 _LOGS_DIR = os.path.join(_PROJECT_ROOT, "logs")
 _CACHE_DB = os.path.normpath(
     os.path.join(_PROJECT_ROOT, "..", "QA Ops", "mcp-cache-layer", "cache", "mcp_cache.db")
+)
+_OPS_DB = os.path.join(_LOGS_DIR, "ops_metrics.db")
+_health_cache = {}  # DB 락 시 폴백용 캐시 (모듈 레벨 — 요청 간 유지)
+_BRAIN_DB = os.path.normpath(
+    os.path.join(_PROJECT_ROOT, "..", "Prompt Cultivation", "brain", "brain.db")
 )
 
 
@@ -48,13 +72,37 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/dashboard":
             self._handle_dashboard()
+        elif self.path == "/api/ops-metrics":
+            self._handle_ops_metrics()
+        elif self.path == "/api/admin/clients":
+            self._handle_admin_clients()
+        elif self.path == "/api/brain-metrics":
+            self._handle_brain_metrics()
+        elif self.path == "/s3_admin.html":
+            self._serve_admin_page()
+        elif self.path.startswith("/api/s3-list"):
+            self._handle_s3_list()
         elif self.path.startswith("/api/"):
             self._proxy_get()
         else:
             super().do_GET()
 
     def do_POST(self):
-        if self.path.startswith("/api/"):
+        if self.path == "/api/process/kill":
+            self._handle_process_kill()
+        elif self.path == "/api/process/cleanup":
+            self._handle_process_cleanup()
+        elif self.path == "/api/process/restart-bot":
+            self._handle_process_restart_bot()
+        elif self.path == "/api/server/shutdown":
+            self._handle_server_shutdown()
+        elif self.path == "/api/admin/heartbeat":
+            self._handle_admin_heartbeat()
+        elif self.path == "/api/admin/disconnect":
+            self._handle_admin_disconnect()
+        elif self.path == "/api/delete":
+            self._handle_s3_delete()
+        elif self.path.startswith("/api/"):
             self._proxy_post()
         else:
             self.send_error(405)
@@ -64,6 +112,38 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self._cors_headers()
         self.end_headers()
+
+    # ── Admin page ─────────────────────────────────────────────
+    def _serve_admin_page(self):
+        """s3_admin.html 물리 파일 서빙. 없으면 s3_manager.html에 config 주입."""
+        try:
+            # 1차: 물리 파일 s3_admin.html 존재 시 직접 서빙
+            admin_path = os.path.join(STATIC_DIR, "s3_admin.html")
+            if os.path.exists(admin_path):
+                with open(admin_path, "r", encoding="utf-8") as f:
+                    html = f.read()
+            else:
+                # 2차: s3_manager.html에 config injection (폴백)
+                html_path = os.path.join(STATIC_DIR, "s3_manager.html")
+                with open(html_path, "r", encoding="utf-8") as f:
+                    html = f.read()
+                config_script = (
+                    '<script>'
+                    'window.KIS_MODE="admin";'
+                    'window.KIS_ADMIN_PW="' + ADMIN_PW + '";'
+                    '</script>'
+                )
+                html = html.replace("<head>", f"<head>\n{config_script}", 1)
+
+            data = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", len(data))
+            self._cors_headers()
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:
+            self._error_json(500, f"Admin page load failed: {e}")
 
     # ── Proxy internals ─────────────────────────────────────
     def _proxy_get(self):
@@ -120,6 +200,184 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self._error_json(502, str(e))
 
+    # ── S3 직접 목록 조회 (GDI 캐시 우회) ──────────────────────
+    def _handle_s3_list(self):
+        """GET /api/s3-list?path=...&next_token=... — S3에서 직접 파일 목록 조회.
+
+        2단계 조회:
+        1) 첫 요청(next_token 없음): Delimiter='/' 로 폴더 목록 완전 수집
+        2) 모든 요청: Delimiter 없이 파일 조회 (실제 S3 키 반환, '//' 누락 방지)
+        """
+        if not _S3_AVAILABLE:
+            self._error_json(500, "boto3 not installed")
+            return
+
+        qs = urllib.parse.urlparse(self.path).query
+        params = urllib.parse.parse_qs(qs)
+        path = params.get("path", [""])[0]
+        next_token = params.get("next_token", [None])[0]
+        page_size = int(params.get("page_size", ["200"])[0])
+
+        prefix = path if path.endswith("/") else path + "/"
+        if prefix == "/":
+            prefix = ""
+
+        try:
+            # ── 1단계: 폴더 목록 (첫 요청에서만, Delimiter 사용) ──
+            folder_list = []
+            if not next_token:
+                folder_names = set()
+                dk = {"Bucket": _S3_BUCKET, "Prefix": prefix, "Delimiter": "/"}
+                while True:
+                    dr = _S3_CLIENT.list_objects_v2(**dk)
+                    for cp in dr.get("CommonPrefixes", []):
+                        raw_name = cp["Prefix"][len(prefix):].rstrip("/")
+                        # '//' 서브폴더 → name이 빈 문자열 → 스킵 (파일은 아래에서 처리)
+                        clean_name = raw_name.lstrip("/")
+                        if clean_name:
+                            folder_names.add(clean_name)
+                    if dr.get("IsTruncated"):
+                        dk["ContinuationToken"] = dr["NextContinuationToken"]
+                    else:
+                        break
+                folder_list = sorted([{
+                    "name": n, "type": "folder",
+                    "path": prefix + n + "/",
+                } for n in folder_names], key=lambda x: x["name"])
+
+            # ── 2단계: 파일 목록 (Delimiter 없이 — '//' 포함 실제 S3 키 반환) ──
+            kwargs = {
+                "Bucket": _S3_BUCKET,
+                "Prefix": prefix,
+                "MaxKeys": page_size,
+                # Delimiter 없음: '//' 파일 누락 방지
+            }
+            if next_token:
+                kwargs["ContinuationToken"] = next_token
+
+            resp = _S3_CLIENT.list_objects_v2(**kwargs)
+
+            files = []
+            for obj in resp.get("Contents", []):
+                key = obj["Key"]
+                if key == prefix:
+                    continue
+
+                relative = key[len(prefix):]
+                clean = relative.lstrip("/")
+
+                # 하위 폴더 파일은 스킵 (폴더 목록에서 이미 표시)
+                if "/" in clean:
+                    continue
+
+                files.append({
+                    "name": clean,
+                    "type": "file",
+                    "key": key,
+                    "path": key,
+                    "size": obj.get("Size", 0),
+                    "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else "",
+                })
+
+            # 파일명 기준 중복 제거
+            seen = set()
+            deduped = []
+            for f in files:
+                if f["name"] not in seen:
+                    seen.add(f["name"])
+                    deduped.append(f)
+
+            result = {
+                "success": True,
+                "folders": folder_list,
+                "files": deduped,
+                "current_path": path,
+                "next_token": resp.get("NextContinuationToken"),
+                "has_more": resp.get("IsTruncated", False),
+                "source": "s3-direct",
+            }
+            self._json_response(result)
+        except Exception as e:
+            self._error_json(500, f"S3 list failed: {e}")
+
+    # ── S3 직접 삭제 (GDI UI API delete가 동작하지 않아 boto3로 직접 삭제) ──
+    def _handle_s3_delete(self):
+        """POST /api/delete — boto3로 S3 객체 직접 삭제.
+
+        Quiet=False 사용: 실제 삭제된 키 목록을 S3가 반환하므로 정확한 카운트 가능.
+        '//' 변형 확장: GDI API가 '//'를 '/'로 정규화하는 버그 대응.
+        """
+        if not _S3_AVAILABLE:
+            self._error_json(500, "boto3 not installed — S3 direct delete unavailable")
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length else b""
+        try:
+            data = json.loads(body)
+        except Exception:
+            self._error_json(400, "Invalid JSON")
+            return
+
+        keys = data.get("keys", [])
+        if not keys:
+            self._json_response({"success": False, "error": "삭제할 파일이 선택되지 않았습니다."})
+            return
+
+        original_count = len(keys)
+
+        # GDI API '//' → '/' 정규화 버그 대응: 원본 + '//' 변형 모두 삭제
+        expanded = set()
+        for k in keys:
+            expanded.add(k)
+            idx = k.rfind("/")
+            if idx > 0:
+                variant = k[:idx] + "/" + k[idx:]  # 'a/file' → 'a//file'
+                expanded.add(variant)
+        all_keys = list(expanded)
+
+        # S3 delete_objects (Quiet=False → 실제 삭제된 키 반환)
+        actually_deleted = set()
+        total_errors = 0
+        error_details = []
+        BATCH = 1000
+        for i in range(0, len(all_keys), BATCH):
+            batch = all_keys[i:i + BATCH]
+            try:
+                resp = _S3_CLIENT.delete_objects(
+                    Bucket=_S3_BUCKET,
+                    Delete={"Objects": [{"Key": k} for k in batch], "Quiet": False}
+                )
+                # Quiet=False: Deleted 배열에 실제 삭제된 키 반환
+                for d in resp.get("Deleted", []):
+                    actually_deleted.add(d["Key"])
+                for e in resp.get("Errors", []):
+                    total_errors += 1
+                    error_details.append({"key": e.get("Key"), "error": e.get("Message")})
+            except Exception as e:
+                total_errors += len(batch)
+                error_details.append({"key": batch[0] if batch else "?", "error": str(e)})
+
+        # 원본 키 기준으로 실제 삭제된 수 계산 (// 변형은 제외)
+        real_deleted = 0
+        for k in keys:
+            idx = k.rfind("/")
+            variant = k[:idx] + "/" + k[idx:] if idx > 0 else None
+            if k in actually_deleted or (variant and variant in actually_deleted):
+                real_deleted += 1
+
+        result = {
+            "success": total_errors == 0 and real_deleted == original_count,
+            "deleted": real_deleted,
+            "requested": original_count,
+            "errors": total_errors,
+            "message": f"{real_deleted}/{original_count}개 삭제" + (f", {total_errors}개 에러" if total_errors else ""),
+        }
+        if error_details:
+            result["error_details"] = error_details[:10]
+
+        self._json_response(result)
+
     # ── Dashboard API (로컬 데이터 수집, 프록시 아님) ─────────
     def _handle_dashboard(self):
         """6개 섹션 데이터를 수집하여 JSON 응답 반환."""
@@ -146,23 +404,54 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     def _dash_health(self):
         try:
             # 봇 프로세스 확인 — PowerShell Get-CimInstance (wmic deprecated)
-            import subprocess
             out = subprocess.check_output(
                 ['powershell', '-NoProfile', '-Command',
                  "Get-CimInstance Win32_Process -Filter"
                  " \"name='python.exe' or name='pythonw.exe'\" |"
                  " Select-Object -ExpandProperty CommandLine"],
-                text=True, timeout=10,
+                text=True, timeout=10, creationflags=_NO_WINDOW,
             )
             bot_running = "slack_bot" in out.lower()
         except Exception:
             bot_running = False
 
-        # 최근 sync 기록 (SQLite)
+        # 소스별 최근 sync 기록 (SQLite) + enrichment
+        global _health_cache
+        sync_by_source = {}
         last_sync = None
         try:
-            conn = sqlite3.connect(f"file:{_CACHE_DB}?mode=ro", uri=True, timeout=3)
+            conn = sqlite3.connect(f"file:{_CACHE_DB}?mode=ro", uri=True, timeout=30)
             cur = conn.cursor()
+            # 소스별 최신 1건씩
+            for src in ("wiki", "jira", "gdi", "enrichment"):
+                cur.execute(
+                    "SELECT source_type, started_at, finished_at, status, "
+                    "pages_scanned, pages_updated, duration_sec, error_message "
+                    "FROM sync_log WHERE source_type = ? "
+                    "ORDER BY started_at DESC LIMIT 1",
+                    (src,),
+                )
+                row = cur.fetchone()
+                if row:
+                    sync_by_source[src] = {
+                        "source": row[0], "started_at": row[1],
+                        "finished_at": row[2], "status": row[3],
+                        "scanned": row[4], "updated": row[5],
+                        "duration": row[6], "error": row[7],
+                    }
+                else:
+                    # 초기 상태: sync_log 비어있음
+                    sync_by_source[src] = {
+                        "source": src, "started_at": None,
+                        "finished_at": None, "status": "unknown",
+                        "scanned": 0, "updated": 0,
+                        "duration": None, "error": None,
+                    }
+            # GDI enrichment은 N/A (원본 파일 기반이므로 enrichment 불필요)
+            if "gdi" in sync_by_source:
+                sync_by_source["gdi"]["enrichment_applicable"] = False
+
+            # 전체 최근 1건 (하위호환)
             cur.execute(
                 "SELECT source_type, started_at, status, duration_sec "
                 "FROM sync_log ORDER BY started_at DESC LIMIT 1"
@@ -170,12 +459,49 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             row = cur.fetchone()
             if row:
                 last_sync = {
-                    "source": row[0],
-                    "time": row[1],
-                    "status": row[2],
-                    "duration": row[3],
+                    "source": row[0], "time": row[1],
+                    "status": row[2], "duration": row[3],
                 }
             conn.close()
+            # DB 정상 조회 시 모듈 레벨 캐시 갱신
+            _health_cache = {"sync_by_source": sync_by_source, "last_sync": last_sync}
+        except Exception:
+            # DB 락 등 실패 시 캐시 폴백
+            sync_by_source = _health_cache.get("sync_by_source", {})
+            last_sync = _health_cache.get("last_sync")
+
+        # Task Scheduler 상태 (XML 1회 조회 — 로케일 독립, Enabled 파싱)
+        # CSV 1회로 NextRun 일괄 조회 (subprocess 최소화)
+        task_scheduler = {}
+        _task_names = ("MCP-AutoSync-Delta", "MCP-AutoSync-FullWiki", "MCP_Process_Cleanup")
+        try:
+            # 1) CSV로 NextRun 일괄 조회 (1회 호출)
+            csv_out = subprocess.check_output(
+                ['schtasks', '/query', '/fo', 'CSV', '/nh'],
+                text=True, timeout=10, creationflags=_NO_WINDOW,
+            )
+            next_runs = {}
+            for line in csv_out.strip().splitlines():
+                parts = line.split(',')
+                name = parts[0].strip('"').strip('\\') if parts else ""
+                for tn in _task_names:
+                    if tn in name:
+                        next_runs[tn] = parts[1].strip('"') if len(parts) > 1 else "N/A"
+            # 2) XML으로 Enabled 확인 (태스크당 1회, 총 3회)
+            for task_name in _task_names:
+                try:
+                    xml_out = subprocess.check_output(
+                        ['schtasks', '/query', '/tn', task_name, '/xml'],
+                        text=True, timeout=5, creationflags=_NO_WINDOW,
+                    )
+                    enabled_match = re.search(r'<Enabled>(true|false)</Enabled>', xml_out, re.IGNORECASE)
+                    enabled = enabled_match.group(1).lower() == 'true' if enabled_match else True
+                except Exception:
+                    enabled = True  # 조회 실패 시 기본 활성으로 간주
+                task_scheduler[task_name] = {
+                    "enabled": enabled,
+                    "next_run": next_runs.get(task_name, "N/A"),
+                }
         except Exception:
             pass
 
@@ -193,6 +519,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             "bot_process": bot_running,
             "scheduler_count": sched_count,
             "last_sync": last_sync,
+            "sync_by_source": sync_by_source,
+            "task_scheduler": task_scheduler,
         }
 
     # ── Dashboard: Section 2 — Cache Status ───────────────
@@ -533,84 +861,391 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     )
 
     def _dash_processes(self):
-        """관련 Python 프로세스 목록 반환 (조회만, Kill 불가)."""
+        """관련 Python 프로세스 목록 + 좀비/중복 판정 + 시스템 상태."""
         procs = []
         try:
-            import subprocess
-            # PowerShell로 python/pythonw 프로세스 정보 수집
-            # CreationDate를 문자열로 변환하여 반환
+            # PowerShell: 프로세스 정보 + CPU%
             ps_cmd = (
                 "Get-CimInstance Win32_Process "
                 "-Filter \"name='python.exe' or name='pythonw.exe'\" "
-                "| Select-Object ProcessId, Name, "
-                "@{N='MemMB';E={[math]::Round($_.WorkingSetSize/1MB,1)}}, "
-                "CommandLine, "
-                "@{N='Created';E={$_.CreationDate.ToString('yyyy-MM-dd HH:mm:ss')}} "
-                "| ConvertTo-Json -Compress"
+                "| ForEach-Object { "
+                "  $cpu = try { (Get-Process -Id $_.ProcessId -ErrorAction Stop).CPU } catch { 0 }; "
+                "  [pscustomobject]@{ "
+                "    ProcessId=$_.ProcessId; Name=$_.Name; "
+                "    MemMB=[math]::Round($_.WorkingSetSize/1MB,1); "
+                "    CPU=[math]::Round($cpu,1); "
+                "    CommandLine=$_.CommandLine; "
+                "    Created=$_.CreationDate.ToString('yyyy-MM-dd HH:mm:ss') "
+                "  } "
+                "} | ConvertTo-Json -Compress"
             )
             out = subprocess.check_output(
                 ['powershell', '-NoProfile', '-Command', ps_cmd],
-                text=True, timeout=10,
+                text=True, timeout=15, creationflags=_NO_WINDOW,
             ).strip()
             if not out:
-                return {"processes": [], "warnings": []}
+                return self._empty_processes()
 
             data = json.loads(out)
             if isinstance(data, dict):
                 data = [data]
 
             # 프로세스 분류
-            seen_types = {}  # type -> count
+            seen_types = {}     # type -> [proc_dicts]
+            my_pid = os.getpid()
+
             for p in data:
                 cmd = (p.get("CommandLine") or "").lower()
                 pid = p.get("ProcessId", 0)
                 mem_mb = p.get("MemMB", 0)
-                name = p.get("Name", "")
+                cpu = p.get("CPU", 0)
 
                 # 프로세스 유형 식별
                 if "slack_bot" in cmd:
-                    ptype = "slack_bot"
-                    label = "Slack Bot"
+                    ptype, label = "slack_bot", "Slack Bot"
                 elif "s3_server" in cmd:
-                    ptype = "s3_server"
-                    label = "KIS Server"
+                    ptype, label = "s3_server", "KIS Server"
                 elif "auto_sync" in cmd:
-                    ptype = "auto_sync"
-                    label = "Auto Sync"
+                    ptype, label = "auto_sync", "Auto Sync"
                 elif "enrichment" in cmd:
-                    ptype = "enrichment"
-                    label = "Enrichment"
+                    ptype, label = "enrichment", "Enrichment"
+                elif "init_brain" in cmd:
+                    ptype, label = "init_brain", "Init Brain"
+                elif "weekly_batch" in cmd:
+                    ptype, label = "weekly_batch", "Weekly Batch"
                 else:
-                    ptype = "other_python"
-                    label = "Python"
+                    ptype, label = "other_python", "Python"
 
                 # 커맨드라인 미리보기 — 민감 정보 마스킹
-                raw_cmd = (p.get("CommandLine") or "")[:120]
+                raw_cmd = (p.get("CommandLine") or "")[:200]
                 safe_cmd = self._SENSITIVE_RE.sub(r'\1****', raw_cmd)
 
-                seen_types[ptype] = seen_types.get(ptype, 0) + 1
-                procs.append({
+                # 스크립트명 추출: "python.exe xxx.py" → "xxx"
+                script_name = ""
+                import re as _re
+                m = _re.search(r'[\\/]?(\w+)\.py\b', raw_cmd)
+                if m:
+                    script_name = m.group(1)
+                elif "-c " in raw_cmd or '"-c"' in raw_cmd:
+                    script_name = "inline"
+
+                proc_info = {
                     "pid": pid,
-                    "name": name,
+                    "name": p.get("Name", ""),
                     "type": ptype,
                     "label": label,
                     "mem_mb": mem_mb,
+                    "cpu": cpu,
                     "created": p.get("Created", ""),
                     "cmd_preview": safe_cmd,
-                })
+                    "script": script_name,
+                    "is_self": pid == my_pid,
+                    "status": "normal",  # normal / duplicate / zombie
+                }
+                seen_types.setdefault(ptype, []).append(proc_info)
+                procs.append(proc_info)
 
-            # 경고 생성: 중복 프로세스 탐지
+            # ── 좀비 판정: 시스템 무관 Python + CPU 90%+ ──
+            zombies = []
+            for proc in procs:
+                if proc["type"] in ("other_python", "init_brain") and proc["cpu"] > 90:
+                    proc["status"] = "zombie"
+                    zombies.append(proc["pid"])
+
+            # ── 중복 판정 ──
+            # slack_bot: 부모+자식 2개가 정상, 3개+ → 중복
+            # s3_server: 관리자+사용자 각각 실행 가능 → 3개+ 일 때만 duplicate
+            duplicates = []
             warnings = []
-            for ptype, count in seen_types.items():
-                if ptype in ("slack_bot", "s3_server") and count > 1:
-                    label = "Slack Bot" if ptype == "slack_bot" else "KIS Server"
+            DUP_THRESHOLD = {"slack_bot": 2, "s3_server": 2}
+            for ptype, group in seen_types.items():
+                threshold = DUP_THRESHOLD.get(ptype)
+                if threshold and len(group) > threshold:
+                    label = group[0]["label"]
                     warnings.append(
-                        f"⚠️ {label} 중복 실행 감지 ({count}개) — 수동 확인 필요"
+                        f"⚠️ {label} 중복 실행 감지 ({len(group)}개)"
                     )
-            return {"processes": procs, "warnings": warnings}
+                    # created 기준 최신 threshold개만 normal, 나머지는 duplicate
+                    sorted_grp = sorted(group, key=lambda x: x["created"], reverse=True)
+                    for proc in sorted_grp[threshold:]:
+                        if not proc["is_self"]:
+                            proc["status"] = "duplicate"
+                            duplicates.append(proc["pid"])
+
+            # ── 시스템 상태 요약 ──
+            system_status = {}
+            for ptype in ("slack_bot", "s3_server", "auto_sync", "enrichment"):
+                group = seen_types.get(ptype, [])
+                normal = [p for p in group if p["status"] == "normal"]
+                system_status[ptype] = {
+                    "running": len(group) > 0,
+                    "count": len(group),
+                    "pid": normal[0]["pid"] if normal else None,
+                    "mem_mb": normal[0]["mem_mb"] if normal else 0,
+                }
+
+            return {
+                "processes": procs,
+                "warnings": warnings,
+                "system_status": system_status,
+                "zombies": zombies,
+                "duplicates": duplicates,
+            }
 
         except Exception as e:
-            return {"processes": [], "warnings": [f"프로세스 조회 실패: {str(e)}"]}
+            return self._empty_processes(str(e))
+
+    @staticmethod
+    def _empty_processes(error=None):
+        result = {
+            "processes": [], "warnings": [], "zombies": [], "duplicates": [],
+            "system_status": {
+                t: {"running": False, "count": 0, "pid": None, "mem_mb": 0}
+                for t in ("slack_bot", "s3_server", "auto_sync", "enrichment")
+            },
+        }
+        if error:
+            result["warnings"].append(f"프로세스 조회 실패: {error}")
+        return result
+
+    # ── Process Management API (Admin 인증 필요) ───────────
+    def _read_json_body(self):
+        """POST body를 JSON으로 파싱."""
+        length = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(length) if length else b"{}"
+        return json.loads(raw)
+
+    def _check_admin_pw(self, body):
+        """Admin 비밀번호 검증. 실패 시 403 응답하고 False 반환."""
+        if body.get("password") != ADMIN_PW:
+            self._error_json(403, "인증 실패")
+            return False
+        return True
+
+    def _is_python_process(self, pid):
+        """해당 PID가 python.exe/pythonw.exe인지 확인 (안전장치)."""
+        try:
+            out = subprocess.check_output(
+                ['powershell', '-NoProfile', '-Command',
+                 f"(Get-Process -Id {pid} -ErrorAction Stop).Name"],
+                text=True, timeout=5, creationflags=_NO_WINDOW,
+            ).strip().lower()
+            return out in ("python", "pythonw")
+        except Exception:
+            return False
+
+    def _handle_process_kill(self):
+        """POST /api/process/kill — 특정 PID Kill (Admin 전용)."""
+        body = self._read_json_body()
+        if not self._check_admin_pw(body):
+            return
+        pid = body.get("pid")
+        if not pid or pid == os.getpid():
+            return self._error_json(400, "유효하지 않은 PID (자기 자신은 Kill 불가)")
+        if not self._is_python_process(pid):
+            return self._error_json(400, f"PID {pid}는 Python 프로세스가 아닙니다")
+        try:
+            subprocess.run(
+                ['taskkill', '/pid', str(pid), '/f'],
+                capture_output=True, timeout=10, creationflags=_NO_WINDOW,
+            )
+            self._json_response({"success": True, "killed": pid})
+        except Exception as e:
+            self._error_json(500, f"Kill 실패: {e}")
+
+    def _handle_process_cleanup(self):
+        """POST /api/process/cleanup — 중복+좀비 일괄 정리 (Admin 전용)."""
+        body = self._read_json_body()
+        if not self._check_admin_pw(body):
+            return
+        proc_data = self._dash_processes()
+        targets = proc_data.get("zombies", []) + proc_data.get("duplicates", [])
+        # 자기 자신 제외
+        targets = [p for p in targets if p != os.getpid()]
+        killed = []
+        failed = []
+        for pid in targets:
+            try:
+                subprocess.run(
+                    ['taskkill', '/pid', str(pid), '/f'],
+                    capture_output=True, timeout=10, creationflags=_NO_WINDOW,
+                )
+                killed.append(pid)
+            except Exception:
+                failed.append(pid)
+        self._json_response({
+            "success": True,
+            "killed": killed,
+            "failed": failed,
+            "total_cleaned": len(killed),
+        })
+
+    def _handle_process_restart_bot(self):
+        """POST /api/process/restart-bot — Slack Bot 전체 종료 후 재실행 (Admin 전용)."""
+        body = self._read_json_body()
+        if not self._check_admin_pw(body):
+            return
+        # 1. 기존 slack_bot 프로세스 전부 Kill
+        proc_data = self._dash_processes()
+        bot_pids = [
+            p["pid"] for p in proc_data.get("processes", [])
+            if p["type"] == "slack_bot" and not p.get("is_self")
+        ]
+        for pid in bot_pids:
+            try:
+                subprocess.run(
+                    ['taskkill', '/pid', str(pid), '/f'],
+                    capture_output=True, timeout=10, creationflags=_NO_WINDOW,
+                )
+            except Exception:
+                pass
+
+        # 2. 재실행 (venv Python + 프로젝트 루트 cwd로 .env 로딩 보장)
+        bot_script = os.path.join(_BOT_SRC, "slack_bot.py")
+        if not os.path.exists(bot_script):
+            return self._error_json(404, f"slack_bot.py를 찾을 수 없음: {bot_script}")
+
+        venv_python = os.path.join(_PROJECT_ROOT, "venv", "Scripts", "python.exe")
+        python_exe = venv_python if os.path.exists(venv_python) else "python"
+
+        # .env는 프로젝트 루트에 위치 → cwd를 루트로 설정
+        # slack_bot.py 내부 load_dotenv()가 cwd 기준으로 .env 탐색
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+
+        try:
+            proc = subprocess.Popen(
+                [python_exe, bot_script, '--commands-only'],
+                cwd=_PROJECT_ROOT,  # .env가 있는 프로젝트 루트
+                env=env,
+                creationflags=_NO_WINDOW,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            import time
+            time.sleep(4)
+            # 재시작 확인: 새 프로세스가 살아있는지 + dashboard 조회
+            alive = proc.poll() is None
+            new_data = self._dash_processes()
+            bot_running = new_data["system_status"]["slack_bot"]["running"]
+            self._json_response({
+                "success": alive and bot_running,
+                "killed_pids": bot_pids,
+                "new_pid": proc.pid if alive else None,
+                "message": "봇 재시작 완료" if (alive and bot_running) else
+                           f"봇 프로세스 시작 실패 (exit={proc.returncode})" if not alive else
+                           "봇 재시작 실패 — 프로세스 확인 필요",
+            })
+        except Exception as e:
+            self._error_json(500, f"봇 재실행 실패: {e}")
+
+    def _handle_server_shutdown(self):
+        """POST /api/server/shutdown — 자기 서버 프로세스 종료 (localhost 전용)."""
+        # localhost에서만 허용
+        client_ip = self.client_address[0]
+        if client_ip not in ("127.0.0.1", "::1", "localhost"):
+            return self._error_json(403, "localhost에서만 종료 가능")
+        self._json_response({"success": True, "message": "서버를 종료합니다"})
+        # 응답 전송 후 종료
+        import time
+        def _delayed_exit():
+            time.sleep(0.5)
+            os._exit(0)
+        t = threading.Thread(target=_delayed_exit, daemon=True)
+        t.start()
+
+    # ── Heartbeat System (Admin 서버: 접속자 추적) ──────────
+    def _handle_admin_heartbeat(self):
+        """POST /api/admin/heartbeat — 클라이언트 상태 등록/갱신."""
+        body = self._read_json_body()
+        client_id = body.get("client_id", "")
+        if not client_id:
+            return self._error_json(400, "client_id 필수")
+
+        action = body.get("action", "heartbeat")
+        client_ip = self.client_address[0]
+
+        with _clients_lock:
+            if action == "disconnect":
+                _connected_clients.pop(client_id, None)
+                self._json_response({"action": "ack"})
+                return
+
+            _connected_clients[client_id] = {
+                "user": body.get("user_name", "Unknown"),
+                "ip": client_ip,
+                "last_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "active",
+            }
+
+            # 강제 종료 큐 확인
+            if client_id in _disconnect_queue:
+                _disconnect_queue.discard(client_id)
+                _connected_clients.pop(client_id, None)
+                self._json_response({"action": "shutdown"})
+                return
+
+        self._json_response({"action": "ack"})
+
+    def _handle_admin_clients(self):
+        """GET /api/admin/clients — 접속자 리스트."""
+        now = datetime.now()
+        clients = []
+        with _clients_lock:
+            for cid, info in list(_connected_clients.items()):
+                try:
+                    last = datetime.strptime(info["last_seen"], "%Y-%m-%d %H:%M:%S")
+                    age_sec = (now - last).total_seconds()
+                except Exception:
+                    age_sec = 9999
+                # 60초 이상 무응답이면 비활성
+                status = "active" if age_sec < 60 else "inactive"
+                # 5분 이상 무응답이면 자동 제거
+                if age_sec > 300:
+                    _connected_clients.pop(cid, None)
+                    continue
+                clients.append({
+                    "client_id": cid,
+                    "user": info["user"],
+                    "ip": info["ip"],
+                    "last_seen": info["last_seen"],
+                    "age_sec": int(age_sec),
+                    "status": status,
+                })
+        active = sum(1 for c in clients if c["status"] == "active")
+        self._json_response({
+            "clients": clients,
+            "active_count": active,
+            "inactive_count": len(clients) - active,
+            "total_count": len(clients),
+        })
+
+    def _handle_admin_disconnect(self):
+        """POST /api/admin/disconnect — 강제 연결 해제 시그널 (Admin 전용)."""
+        body = self._read_json_body()
+        if not self._check_admin_pw(body):
+            return
+        client_id = body.get("client_id")
+        if not client_id:
+            return self._error_json(400, "client_id 필수")
+        if client_id == "all":
+            with _clients_lock:
+                for cid in list(_connected_clients.keys()):
+                    _disconnect_queue.add(cid)
+            self._json_response({"success": True, "message": "전체 연결 해제 시그널 전송"})
+        else:
+            _disconnect_queue.add(client_id)
+            self._json_response({"success": True, "message": f"{client_id} 연결 해제 시그널 전송"})
+
+    def _json_response(self, data, code=200):
+        """JSON 응답 헬퍼."""
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", len(body))
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
 
     # ── Dashboard: Section 8 — Token Usage ─────────────────
     def _dash_token_usage(self):
@@ -695,24 +1330,502 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ── Ops Metrics API ────────────────────────────────────
+    def _handle_ops_metrics(self):
+        """시스템 운영 지표 JSON 응답."""
+        result = {
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "cache_efficiency": self._ops_cache_efficiency(),
+            "response_summary": self._ops_response_summary(),
+            "daily_trend": self._ops_daily_trend(),
+            "recent_failures": self._ops_recent_failures(),
+            "system_design_check": self._ops_design_check(),
+        }
+        body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", len(body))
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
+    # ── Brain Metrics API ──────────────────────────────────
+    def _handle_brain_metrics(self):
+        """Prompt Cultivation Brain 성장 메트릭스 JSON 응답."""
+        result = {
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "brain_available": False,
+        }
+        if not os.path.exists(_BRAIN_DB):
+            result["error"] = f"brain.db not found: {_BRAIN_DB}"
+            self._json_response(result)
+            return
+        try:
+            conn = sqlite3.connect(_BRAIN_DB, timeout=5)
+            conn.row_factory = sqlite3.Row
+            result["brain_available"] = True
+
+            # ── overview ──
+            overview = {}
+            overview["total_experiences"] = conn.execute(
+                "SELECT COUNT(*) FROM experiences"
+            ).fetchone()[0]
+            overview["active_experiences"] = conn.execute(
+                "SELECT COUNT(*) FROM experiences WHERE status='active'"
+            ).fetchone()[0]
+            overview["archived_experiences"] = conn.execute(
+                "SELECT COUNT(*) FROM experiences WHERE status='archived'"
+            ).fetchone()[0]
+            overview["personality_count"] = conn.execute(
+                "SELECT COUNT(*) FROM personality_memory WHERE status='active'"
+            ).fetchone()[0]
+            overview["audit_log_count"] = conn.execute(
+                "SELECT COUNT(*) FROM audit_log"
+            ).fetchone()[0]
+            row = conn.execute(
+                "SELECT AVG(importance) as v FROM experiences WHERE status='active'"
+            ).fetchone()
+            overview["avg_importance"] = round(row["v"], 3) if row["v"] else 0.0
+            row = conn.execute(
+                "SELECT AVG(effectiveness) as v FROM experiences WHERE status='active'"
+            ).fetchone()
+            overview["avg_effectiveness"] = round(row["v"], 3) if row["v"] else 0.0
+            result["overview"] = overview
+
+            # ── daily_accumulation (최근 30일) ──
+            rows = conn.execute(
+                "SELECT date(created_at) as d, COUNT(*) as cnt "
+                "FROM experiences GROUP BY d ORDER BY d DESC LIMIT 30"
+            ).fetchall()
+            result["daily_accumulation"] = [
+                {"date": r["d"], "count": r["cnt"]} for r in rows
+            ]
+
+            # ── effectiveness_distribution ──
+            rows = conn.execute(
+                "SELECT "
+                "  CASE "
+                "    WHEN applied_count = 0 THEN 'untested' "
+                "    WHEN effectiveness >= 0.7 THEN 'high' "
+                "    WHEN effectiveness >= 0.4 THEN 'medium' "
+                "    ELSE 'low' "
+                "  END as band, COUNT(*) as cnt "
+                "FROM experiences WHERE status='active' "
+                "GROUP BY band"
+            ).fetchall()
+            eff_dist = {"high": 0, "medium": 0, "low": 0, "untested": 0}
+            for r in rows:
+                eff_dist[r["band"]] = r["cnt"]
+            result["effectiveness_distribution"] = eff_dist
+
+            # ── category_breakdown ──
+            rows = conn.execute(
+                "SELECT category, COUNT(*) as cnt "
+                "FROM experiences WHERE status='active' "
+                "GROUP BY category ORDER BY cnt DESC"
+            ).fetchall()
+            result["category_breakdown"] = {r["category"]: r["cnt"] for r in rows}
+
+            # ── l1_synthesis ──
+            l1 = {}
+            rows_l1 = conn.execute(
+                "SELECT * FROM personality_memory WHERE status='active'"
+            ).fetchall()
+            l1["total_beliefs"] = len(rows_l1)
+            l1["active_beliefs"] = len(rows_l1)
+            if rows_l1:
+                l1["avg_confidence"] = round(
+                    sum(r["confidence"] for r in rows_l1) / len(rows_l1), 3
+                )
+                l1["avg_evidence_count"] = round(
+                    sum(r["evidence_count"] for r in rows_l1) / len(rows_l1), 1
+                )
+                domains = {}
+                for r in rows_l1:
+                    d = r["domain"] or "unknown"
+                    domains[d] = domains.get(d, 0) + 1
+                l1["domains"] = domains
+            else:
+                l1["avg_confidence"] = 0.0
+                l1["avg_evidence_count"] = 0.0
+                l1["domains"] = {}
+            result["l1_synthesis"] = l1
+
+            # ── weekly_batch ──
+            wb = {}
+            row = conn.execute(
+                "SELECT MAX(created_at) as last_at FROM audit_log "
+                "WHERE agent IN ('auditor','synthesizer')"
+            ).fetchone()
+            last_at = row["last_at"] if row and row["last_at"] else None
+            wb["last_run"] = last_at
+            if last_at:
+                try:
+                    last_dt = datetime.strptime(last_at[:19], "%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    try:
+                        last_dt = datetime.strptime(last_at[:19], "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        last_dt = None
+                if last_dt:
+                    days = (datetime.now() - last_dt).days
+                    wb["days_since_last_run"] = days
+                    wb["status"] = "ok" if days <= 7 else ("warning" if days <= 14 else "critical")
+                else:
+                    wb["days_since_last_run"] = -1
+                    wb["status"] = "unknown"
+            else:
+                wb["days_since_last_run"] = -1
+                wb["status"] = "unknown"
+
+            # 마지막 배치 결과
+            row = conn.execute(
+                "SELECT action, COUNT(*) as cnt FROM audit_log "
+                "WHERE agent='auditor' AND created_at >= date('now', '-7 days') "
+                "GROUP BY action"
+            ).fetchall()
+            wb["last_archived"] = sum(r["cnt"] for r in row if r["action"] == "archived")
+            row2 = conn.execute(
+                "SELECT COUNT(*) as cnt FROM audit_log "
+                "WHERE agent='synthesizer' AND created_at >= date('now', '-7 days')"
+            ).fetchone()
+            wb["last_synthesized"] = row2["cnt"] if row2 else 0
+            result["weekly_batch"] = wb
+
+            # ── recent_activity (최근 10건) ──
+            rows = conn.execute(
+                "SELECT created_at, agent, action, target_type, target_id, reason "
+                "FROM audit_log ORDER BY created_at DESC LIMIT 10"
+            ).fetchall()
+            result["recent_activity"] = [
+                {
+                    "at": r["created_at"],
+                    "agent": r["agent"],
+                    "action": r["action"],
+                    "target": f"{r['target_type']} #{r['target_id']}" if r["target_id"] else r["target_type"],
+                    "reason": r["reason"],
+                }
+                for r in rows
+            ]
+
+            # ── pending_tasks (미완료/보류 작업) ──
+            try:
+                rows = conn.execute(
+                    "SELECT id, title, description, status, priority, source, domain, "
+                    "created_at, updated_at FROM pending_tasks "
+                    "WHERE status IN ('pending', 'deferred') "
+                    "ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, "
+                    "created_at DESC"
+                ).fetchall()
+                result["pending_tasks"] = [
+                    {
+                        "id": r["id"],
+                        "title": r["title"],
+                        "description": r["description"],
+                        "status": r["status"],
+                        "priority": r["priority"],
+                        "source": r["source"],
+                        "domain": r["domain"],
+                        "created_at": r["created_at"],
+                    }
+                    for r in rows
+                ]
+            except sqlite3.OperationalError:
+                result["pending_tasks"] = []
+
+            # ── health_score (0~100) — brain_health.py SSOT ──
+            try:
+                import importlib.util
+                _health_spec = importlib.util.spec_from_file_location(
+                    "brain_health",
+                    os.path.join(
+                        os.environ.get("USERPROFILE", os.environ.get("HOME", "")),
+                        ".claude", "hooks", "brain_health.py",
+                    ),
+                )
+                _health_mod = importlib.util.module_from_spec(_health_spec)
+                _health_spec.loader.exec_module(_health_mod)
+                result["health"] = _health_mod.compute_health(conn)
+            except Exception:
+                # fallback: SSOT 모듈 로드 실패 시 빈 health
+                result["health"] = {"score": 0, "level": "Unknown"}
+
+            conn.close()
+        except Exception as e:
+            result["error"] = str(e)
+
+        self._json_response(result)
+
+    def _json_response(self, data):
+        """JSON 응답 헬퍼."""
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", len(body))
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _ops_cache_efficiency(self):
+        """캐시 히트/미스/폴백 비율."""
+        if not os.path.exists(_OPS_DB):
+            return {"overall": {"hit": 0, "miss": 0, "fallback": 0,
+                                "total": 0, "hit_rate": 0},
+                    "by_source": {}, "period_days": 7}
+        try:
+            conn = sqlite3.connect(_OPS_DB, timeout=5)
+            conn.row_factory = sqlite3.Row
+            date_from = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            rows = conn.execute(
+                "SELECT source, event_type, COUNT(*) as cnt "
+                "FROM cache_events WHERE date_key >= ? "
+                "GROUP BY source, event_type", (date_from,)
+            ).fetchall()
+            conn.close()
+
+            by_source = {}
+            overall = {"hit": 0, "miss": 0, "fallback": 0}
+            for r in rows:
+                src = r["source"]
+                if src not in by_source:
+                    by_source[src] = {"hit": 0, "miss": 0, "fallback": 0}
+                by_source[src][r["event_type"]] = r["cnt"]
+                overall[r["event_type"]] = overall.get(r["event_type"], 0) + r["cnt"]
+
+            for d in [overall] + list(by_source.values()):
+                total = d.get("hit", 0) + d.get("miss", 0) + d.get("fallback", 0)
+                d["total"] = total
+                d["hit_rate"] = round(d["hit"] / total * 100, 1) if total else 0
+            return {"overall": overall, "by_source": by_source, "period_days": 7}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _ops_response_summary(self):
+        """답변 성공/실패 요약."""
+        if not os.path.exists(_OPS_DB):
+            return {"overall": {"success": 0, "fail": 0, "partial": 0,
+                                "total": 0, "fail_rate": 0},
+                    "by_source": {}, "avg_elapsed_ms": {}}
+        try:
+            conn = sqlite3.connect(_OPS_DB, timeout=5)
+            conn.row_factory = sqlite3.Row
+            date_from = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+            rows = conn.execute(
+                "SELECT source, result, COUNT(*) as cnt "
+                "FROM response_events WHERE date_key >= ? "
+                "GROUP BY source, result", (date_from,)
+            ).fetchall()
+
+            by_source = {}
+            overall = {"success": 0, "fail": 0, "partial": 0}
+            for r in rows:
+                src = r["source"]
+                if src not in by_source:
+                    by_source[src] = {"success": 0, "fail": 0, "partial": 0}
+                by_source[src][r["result"]] = r["cnt"]
+                overall[r["result"]] = overall.get(r["result"], 0) + r["cnt"]
+
+            for d in [overall] + list(by_source.values()):
+                total = d.get("success", 0) + d.get("fail", 0) + d.get("partial", 0)
+                d["total"] = total
+                d["fail_rate"] = round(d["fail"] / total * 100, 1) if total else 0
+
+            elapsed_rows = conn.execute(
+                "SELECT source, AVG(elapsed_ms) as avg_ms "
+                "FROM response_events WHERE date_key >= ? AND elapsed_ms > 0 "
+                "GROUP BY source", (date_from,)
+            ).fetchall()
+            avg_elapsed = {r["source"]: round(r["avg_ms"]) for r in elapsed_rows}
+            conn.close()
+
+            return {"overall": overall, "by_source": by_source,
+                    "avg_elapsed_ms": avg_elapsed}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _ops_daily_trend(self):
+        """일별 캐시/응답 트렌드 (최근 7일)."""
+        if not os.path.exists(_OPS_DB):
+            return []
+        try:
+            conn = sqlite3.connect(_OPS_DB, timeout=5)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT date_key, source, metric, count FROM daily_stats "
+                "WHERE date_key >= date('now', '-7 days') "
+                "ORDER BY date_key DESC, source"
+            ).fetchall()
+            conn.close()
+
+            pivot = {}
+            for r in rows:
+                key = (r["date_key"], r["source"])
+                if key not in pivot:
+                    pivot[key] = {"date_key": r["date_key"], "source": r["source"]}
+                pivot[key][r["metric"]] = r["count"]
+            return list(pivot.values())
+        except Exception as e:
+            return [{"error": str(e)}]
+
+    def _ops_recent_failures(self):
+        """최근 답변 실패 내역 (최대 20건)."""
+        if not os.path.exists(_OPS_DB):
+            return []
+        try:
+            conn = sqlite3.connect(_OPS_DB, timeout=5)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT ts, source, query, result, fail_reason, "
+                "page_title, elapsed_ms, user_id "
+                "FROM response_events "
+                "WHERE result IN ('fail', 'partial') "
+                "ORDER BY id DESC LIMIT 20"
+            ).fetchall()
+            conn.close()
+            return [dict(r) for r in rows]
+        except Exception as e:
+            return [{"error": str(e)}]
+
+    def _ops_design_check(self):
+        """시스템 설계 정합성 검증."""
+        checks = []
+
+        # 1. 캐시 레이어 존재 확인
+        cache_exists = os.path.exists(_CACHE_DB)
+        checks.append({
+            "name": "캐시 DB 존재",
+            "status": "ok" if cache_exists else "fail",
+            "detail": _CACHE_DB if cache_exists else "파일 없음",
+        })
+
+        # 2. ops_metrics DB 존재
+        ops_exists = os.path.exists(_OPS_DB)
+        checks.append({
+            "name": "운영지표 DB 존재",
+            "status": "ok" if ops_exists else "warn",
+            "detail": "정상" if ops_exists else "아직 데이터 없음 (봇 재시작 필요)",
+        })
+
+        # 3. 캐시 적재율 (노드 수)
+        if cache_exists:
+            try:
+                conn = sqlite3.connect(_CACHE_DB, timeout=5)
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT source_type, COUNT(*) as cnt FROM nodes "
+                    "GROUP BY source_type"
+                ).fetchall()
+                node_counts = {r["source_type"]: r["cnt"] for r in rows}
+                conn.close()
+
+                for src, expected_min in [("wiki", 2500), ("jira", 5000), ("gdi", 10000)]:
+                    cnt = node_counts.get(src, 0)
+                    status = "ok" if cnt >= expected_min else "warn"
+                    checks.append({
+                        "name": f"{src.upper()} 노드 수",
+                        "status": status,
+                        "detail": f"{cnt:,}개 (최소 {expected_min:,} 권장)",
+                    })
+            except Exception as e:
+                checks.append({"name": "캐시 노드 수", "status": "fail",
+                               "detail": str(e)})
+
+        # 4. enrichment 비율
+        if cache_exists:
+            try:
+                conn = sqlite3.connect(_CACHE_DB, timeout=5)
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT n.source_type, "
+                    "COUNT(*) as total, "
+                    "SUM(CASE WHEN dc.summary IS NOT NULL AND dc.summary != '' THEN 1 ELSE 0 END) as enriched "
+                    "FROM nodes n LEFT JOIN doc_content dc ON dc.node_id = n.id "
+                    "GROUP BY n.source_type"
+                ).fetchall()
+                conn.close()
+                for r in rows:
+                    total = r["total"]
+                    enriched = r["enriched"] or 0
+                    rate = round(enriched / total * 100, 1) if total else 0
+                    status = "ok" if rate >= 80 else ("warn" if rate >= 50 else "fail")
+                    checks.append({
+                        "name": f"{r['source_type'].upper()} Enrichment",
+                        "status": status,
+                        "detail": f"{enriched:,}/{total:,} ({rate}%)",
+                    })
+            except Exception:
+                pass
+
+        # 5. 최근 캐시 히트율 (ops_metrics)
+        if ops_exists:
+            try:
+                conn = sqlite3.connect(_OPS_DB, timeout=5)
+                conn.row_factory = sqlite3.Row
+                date_from = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+                rows = conn.execute(
+                    "SELECT event_type, COUNT(*) as cnt "
+                    "FROM cache_events WHERE date_key >= ? "
+                    "GROUP BY event_type", (date_from,)
+                ).fetchall()
+                conn.close()
+                counts = {r["event_type"]: r["cnt"] for r in rows}
+                hit = counts.get("hit", 0)
+                total = hit + counts.get("miss", 0) + counts.get("fallback", 0)
+                if total > 0:
+                    rate = round(hit / total * 100, 1)
+                    status = "ok" if rate >= 60 else ("warn" if rate >= 30 else "fail")
+                    checks.append({
+                        "name": "24h 캐시 히트율",
+                        "status": status,
+                        "detail": f"{rate}% ({hit}/{total})",
+                    })
+            except Exception:
+                pass
+
+        return checks
+
     def log_message(self, format, *args):
-        # Quieter logging
-        if "/api/" in (args[0] if args else ""):
-            sys.stderr.write(f"[proxy] {args[0]}\n")
+        # Quieter logging — API 요청만 출력
+        first = str(args[0]) if args else ""
+        if "/api/" in first:
+            sys.stderr.write(f"[proxy] {first}\n")
+
+
+def _fix_pythonw_stdio():
+    """pythonw.exe 환경에서 stdout/stderr가 None일 때 파일로 리다이렉트.
+
+    pythonw.exe는 콘솔이 없어 sys.stdout/stderr가 None이 됨.
+    http.server의 log_request()가 stderr.write()를 호출하면 크래시 →
+    TCP 연결은 맺히지만 빈 응답(Empty reply) 반환하는 문제 발생.
+    """
+    log_dir = os.path.join(os.path.dirname(STATIC_DIR), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, "s3_server.log")
+
+    if sys.stdout is None:
+        sys.stdout = open(log_path, "a", encoding="utf-8", buffering=1)
+    if sys.stderr is None:
+        sys.stderr = open(log_path, "a", encoding="utf-8", buffering=1)
 
 
 def main():
+    _fix_pythonw_stdio()
+
     parser = argparse.ArgumentParser(description="GDI S3 File Manager")
     parser.add_argument("--port", type=int, default=9090)
+    parser.add_argument("--silent", action="store_true", help="브라우저 자동 열기 비활성화")
     args = parser.parse_args()
 
-    server = http.server.HTTPServer(("0.0.0.0", args.port), ProxyHandler)
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", args.port), ProxyHandler)
     print(f"GDI S3 File Manager → http://localhost:{args.port}/s3_manager.html")
     print(f"GDI API proxy       → http://localhost:{args.port}/api/*")
-    print("Press Ctrl+C to stop")
 
-    import webbrowser
-    webbrowser.open(f"http://localhost:{args.port}/s3_manager.html")
+    if not args.silent:
+        import webbrowser
+        webbrowser.open(f"http://localhost:{args.port}/s3_manager.html")
+    else:
+        print("Silent mode — browser not opened")
 
     try:
         server.serve_forever()
