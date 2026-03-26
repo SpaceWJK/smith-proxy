@@ -1344,7 +1344,7 @@ window.KIS_ADMIN_PW = "qateam2025@";
 
         <!-- Card 3: System Status -->
         <div class="dash-card" id="claudeSystemCard">
-          <h4>&#x1F6E1;&#xFE0F; System Status<span class="dash-tooltip">MCP 서버 헬스 (Wiki/GDI/Jira) · Bot/KIS/Claude Code 프로세스 상태</span></h4>
+          <h4>&#x1F6E1;&#xFE0F; System Status<span class="dash-tooltip">MCP 서버 (Wiki/GDI/Jira) · 로컬 서버 (KIS/Vite/Preview) · 프로세스 상태</span></h4>
           <div class="dash-card-body" id="claudeSystemBody">
             <div class="dash-loading"><div class="spinner"></div></div>
           </div>
@@ -1363,7 +1363,7 @@ window.KIS_ADMIN_PW = "qateam2025@";
 
         <!-- Card 5: Performance Risk -->
         <div class="dash-card" id="claudePerfCard">
-          <h4>&#x26A1; Performance Risk<span class="dash-tooltip">최근 7일 p99 응답시간 · 에러율 · 캐시 적중률 기반 종합 리스크 판정</span></h4>
+          <h4>&#x26A1; Performance Risk<span class="dash-tooltip">Claude 자체 성능 (토큰 트렌드 · 도구 에러율 · 세션 시간) + MCP 운영 (전체 소스 p99 · 에러율 · 캐시) 종합 리스크</span></h4>
           <div class="dash-card-body" id="claudePerfBody">
             <div class="dash-loading"><div class="spinner"></div></div>
           </div>
@@ -5198,6 +5198,8 @@ function renderClaudeTokenUsage(t) {
 function renderClaudeSystem(s) {
   const el = document.getElementById('claudeSystemBody');
   if (!el || !s) { if (el) el.innerHTML = '<span style="color:var(--text2);font-size:12px">데이터 없음</span>'; return; }
+
+  // ── MCP 서버 ──
   let html = '<div style="font-size:11px;color:var(--text2);margin-bottom:6px;font-weight:600;">MCP 서버 ' + (s.mcp_summary || '') + '</div>';
   for (const mcp of (s.mcp_servers || [])) {
     html += `<div class="claude-mcp-row">
@@ -5206,31 +5208,46 @@ function renderClaudeSystem(s) {
       <span class="claude-mcp-latency">${mcp.latency_ms}ms</span>
     </div>`;
   }
-  // 프로세스
+
+  // ── 로컬 서버 ──
+  const locals = s.local_servers || [];
+  if (locals.length > 0) {
+    html += '<div style="font-size:11px;color:var(--text2);margin:8px 0 6px;font-weight:600;">로컬 서버 ' + (s.local_summary || '') + '</div>';
+    for (const srv of locals) {
+      const optTag = srv.optional ? '<span style="color:var(--text2);font-size:10px;margin-left:4px;">(선택)</span>' : '';
+      html += `<div class="claude-mcp-row">
+        <span class="claude-mcp-dot ${srv.status}"></span>
+        <span class="claude-mcp-name">${escHtml(srv.name)}${optTag}</span>
+        <span class="claude-mcp-latency" title="${escHtml(srv.desc || '')}">${srv.status === 'up' ? srv.latency_ms + 'ms' : 'OFF'}</span>
+      </div>`;
+    }
+  }
+
+  // ── 프로세스 ──
   const pythonProcs = s.processes?.python || [];
   const ccProcs = s.processes?.claude_code || [];
   html += '<div class="claude-proc-section"><div class="claude-proc-title">프로세스</div>';
-  // Python
   const botProc = pythonProcs.find(p => p.type === 'slack_bot');
   const kisProc = pythonProcs.find(p => p.type === 's3_server');
   const syncProc = pythonProcs.find(p => p.type === 'auto_sync');
   const procItems = [
-    { name: 'Bot', proc: botProc },
-    { name: 'KIS', proc: kisProc },
-    { name: 'AutoSync', proc: syncProc },
+    { name: 'Bot', proc: botProc, desc: 'Slack QA Bot' },
+    { name: 'KIS', proc: kisProc, desc: 'KIS 대시보드 서버' },
+    { name: 'AutoSync', proc: syncProc, desc: 'MCP 캐시 동기화' },
   ];
   for (const item of procItems) {
     const running = !!item.proc;
     html += `<div class="claude-mcp-row">
       <span class="claude-mcp-dot ${running ? 'up' : 'down'}"></span>
-      <span class="claude-mcp-name">${item.name}</span>
+      <span class="claude-mcp-name" title="${escHtml(item.desc)}">${item.name}</span>
+      <span class="claude-mcp-latency" style="font-size:10px;color:var(--text2)">${escHtml(item.desc)}</span>
       <span class="claude-proc-count">${running ? item.proc.mem_mb + 'MB' : 'OFF'}</span>
     </div>`;
   }
-  // Claude Code node processes
   html += `<div class="claude-mcp-row">
     <span class="claude-mcp-dot ${ccProcs.length > 0 ? 'up' : 'down'}"></span>
-    <span class="claude-mcp-name">Claude Code</span>
+    <span class="claude-mcp-name" title="Claude Code CLI">CC</span>
+    <span class="claude-mcp-latency" style="font-size:10px;color:var(--text2)">Claude Code CLI</span>
     <span class="claude-proc-count">${ccProcs.length > 0 ? ccProcs.length + '개' : 'OFF'}</span>
   </div>`;
   html += '</div>';
@@ -5282,47 +5299,115 @@ function renderClaudePerformance(p) {
     }
     return val < thresholds.good ? 'good' : val < thresholds.warn ? 'warn' : 'crit';
   }
-
-  const p99Badge = riskBadge(p.p99_latency_ms, { good: 200, warn: 500 });
-  const errBadge = riskBadge(p.error_rate, { good: 1, warn: 5 });
-  const cacheBadge = riskBadge(p.cache_hit_rate, { good: 80, warn: 60, inverted: true });
-
   function barWidth(val, max) { return Math.min(100, Math.round(val / max * 100)); }
+  function fmtMs(ms) { return ms >= 1000 ? (ms/1000).toFixed(1)+'s' : ms+'ms'; }
 
-  let html = `
-    <div class="claude-risk-row">
-      <span class="claude-risk-label">p99 응답</span>
-      <span class="claude-risk-value">${p.p99_latency_ms}ms</span>
-      <div style="flex:1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;">
-        <div class="eff-bar-fill ${p99Badge === 'good' ? 'high' : p99Badge === 'warn' ? 'medium' : 'low'}" style="width:${barWidth(p.p99_latency_ms, 2000)}%;height:100%"></div>
-      </div>
-      <span class="claude-risk-badge ${p99Badge}">${p99Badge === 'good' ? 'NORMAL' : p99Badge === 'warn' ? 'WARN' : 'CRIT'}</span>
-    </div>
-    <div class="claude-risk-row">
-      <span class="claude-risk-label">에러율</span>
-      <span class="claude-risk-value">${p.error_rate}%</span>
-      <div style="flex:1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;">
-        <div class="eff-bar-fill ${errBadge === 'good' ? 'high' : errBadge === 'warn' ? 'medium' : 'low'}" style="width:${barWidth(p.error_rate, 10)}%;height:100%"></div>
-      </div>
-      <span class="claude-risk-badge ${errBadge}">${errBadge === 'good' ? 'NORMAL' : errBadge === 'warn' ? 'WARN' : 'CRIT'}</span>
-    </div>
-    <div class="claude-risk-row">
-      <span class="claude-risk-label">캐시 히트</span>
-      <span class="claude-risk-value">${p.cache_hit_rate}%</span>
-      <div style="flex:1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;">
-        <div class="eff-bar-fill ${cacheBadge === 'good' ? 'high' : cacheBadge === 'warn' ? 'medium' : 'low'}" style="width:${barWidth(p.cache_hit_rate, 100)}%;height:100%"></div>
-      </div>
-      <span class="claude-risk-badge ${cacheBadge}">${cacheBadge === 'good' ? 'GOOD' : cacheBadge === 'warn' ? 'WARN' : 'CRIT'}</span>
-    </div>`;
-
-  // Overall risk
+  // ── 종합 리스크 표시 ──
   const risk = p.risk_level || 'unknown';
-  html += `<div class="claude-overall-risk">
+  let html = `<div class="claude-overall-risk" style="margin-bottom:10px;">
     <span style="font-size:12px;color:var(--text2);">종합 리스크:</span>
     <span class="risk-text ${risk}">${risk.toUpperCase()}</span>
   </div>`;
-  if ((p.concerns || []).length > 0) {
-    html += `<div style="font-size:11px;color:var(--warn);margin-top:6px;">&#x26A0; ${p.concerns.join(', ')}</div>`;
+
+  // ── Claude 자체 성능 섹션 ──
+  const cs = p.claude_self || {};
+  const csRisk = cs.risk_level || 'unknown';
+  html += `<div style="font-size:11px;color:var(--text2);margin-bottom:4px;font-weight:600;">
+    Claude 자체 <span class="risk-text ${csRisk}" style="font-size:10px;">${csRisk.toUpperCase()}</span>
+    ${cs.confidence === 'insufficient' ? '<span style="color:var(--warn);font-size:10px;margin-left:4px;">데이터 부족</span>' : cs.confidence === 'no_data' ? '<span style="color:var(--text2);font-size:10px;margin-left:4px;">데이터 없음</span>' : ''}
+  </div>`;
+
+  // 토큰 트렌드
+  const trendVal = cs.token_trend_pct || 0;
+  const trendDir = trendVal > 0 ? '&#x2191;' : trendVal < 0 ? '&#x2193;' : '&#x2192;';
+  const trendBadge = Math.abs(trendVal) > 100 ? 'crit' : Math.abs(trendVal) > 50 ? 'warn' : 'good';
+  html += `<div class="claude-risk-row">
+    <span class="claude-risk-label">토큰 트렌드</span>
+    <span class="claude-risk-value">${trendDir} ${trendVal > 0 ? '+' : ''}${trendVal}%</span>
+    <span class="claude-risk-badge ${trendBadge}">${trendBadge === 'good' ? 'OK' : trendBadge === 'warn' ? 'WARN' : 'CRIT'}</span>
+  </div>`;
+
+  // 도구 에러율
+  const toolErr = cs.tool_error_rate || 0;
+  const toolBadge = riskBadge(toolErr, { good: 5, warn: 10 });
+  html += `<div class="claude-risk-row">
+    <span class="claude-risk-label">도구 에러율</span>
+    <span class="claude-risk-value">${toolErr}%</span>
+    <span class="claude-risk-badge ${toolBadge}">${toolBadge === 'good' ? 'OK' : toolBadge === 'warn' ? 'WARN' : 'CRIT'}</span>
+  </div>`;
+
+  // 세션 시간
+  const avgMin = cs.avg_session_min || 0;
+  const sessBadge = avgMin > 120 ? 'warn' : 'good';
+  html += `<div class="claude-risk-row">
+    <span class="claude-risk-label">평균 세션</span>
+    <span class="claude-risk-value">${avgMin}분</span>
+    <span class="claude-risk-badge ${sessBadge}">${sessBadge === 'good' ? 'OK' : 'WARN'}</span>
+  </div>`;
+
+  // ── MCP 운영 지표 섹션 ──
+  const mo = p.mcp_ops || {};
+  const moRisk = mo.risk_level || 'unknown';
+  html += `<div style="font-size:11px;color:var(--text2);margin:10px 0 4px;font-weight:600;border-top:1px solid var(--border);padding-top:8px;">
+    MCP 운영 <span class="risk-text ${moRisk}" style="font-size:10px;">${moRisk.toUpperCase()}</span>
+    <span style="font-size:10px;margin-left:4px;">(${mo.total_requests || 0}건)</span>
+  </div>`;
+
+  // p99
+  const p99 = mo.p99_latency_ms || 0;
+  const p99Badge = riskBadge(p99, { good: 3000, warn: 10000 });
+  html += `<div class="claude-risk-row">
+    <span class="claude-risk-label">p99 응답</span>
+    <span class="claude-risk-value">${fmtMs(p99)}</span>
+    <div style="flex:1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;">
+      <div class="eff-bar-fill ${p99Badge === 'good' ? 'high' : p99Badge === 'warn' ? 'medium' : 'low'}" style="width:${barWidth(p99, 30000)}%;height:100%"></div>
+    </div>
+    <span class="claude-risk-badge ${p99Badge}">${p99Badge === 'good' ? 'OK' : p99Badge === 'warn' ? 'WARN' : 'CRIT'}</span>
+  </div>`;
+
+  // 에러율
+  const errRate = mo.error_rate || 0;
+  const errBadge = riskBadge(errRate, { good: 3, warn: 10 });
+  html += `<div class="claude-risk-row">
+    <span class="claude-risk-label">에러율</span>
+    <span class="claude-risk-value">${errRate}%</span>
+    <div style="flex:1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;">
+      <div class="eff-bar-fill ${errBadge === 'good' ? 'high' : errBadge === 'warn' ? 'medium' : 'low'}" style="width:${barWidth(errRate, 20)}%;height:100%"></div>
+    </div>
+    <span class="claude-risk-badge ${errBadge}">${errBadge === 'good' ? 'OK' : errBadge === 'warn' ? 'WARN' : 'CRIT'}</span>
+  </div>`;
+
+  // 캐시 적중률
+  const cacheRate = mo.cache_hit_rate || 0;
+  const cacheBadge = riskBadge(cacheRate, { good: 60, warn: 40, inverted: true });
+  html += `<div class="claude-risk-row">
+    <span class="claude-risk-label">캐시 히트</span>
+    <span class="claude-risk-value">${cacheRate}%</span>
+    <div style="flex:1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;">
+      <div class="eff-bar-fill ${cacheBadge === 'good' ? 'high' : cacheBadge === 'warn' ? 'medium' : 'low'}" style="width:${barWidth(cacheRate, 100)}%;height:100%"></div>
+    </div>
+    <span class="claude-risk-badge ${cacheBadge}">${cacheBadge === 'good' ? 'OK' : cacheBadge === 'warn' ? 'WARN' : 'CRIT'}</span>
+  </div>`;
+
+  // 소스별 분류
+  const bySrc = mo.by_source || {};
+  if (Object.keys(bySrc).length > 0) {
+    html += '<div style="margin-top:6px;font-size:10px;color:var(--text2);">';
+    for (const [src, v] of Object.entries(bySrc)) {
+      const srcAvg = v.avg_latency_ms || 0;
+      const srcErr = v.error_rate || 0;
+      html += `<div style="display:flex;justify-content:space-between;padding:1px 0;">
+        <span style="text-transform:uppercase;font-weight:600;">${escHtml(src)}</span>
+        <span>${v.count}건 · avg ${fmtMs(srcAvg)} · err ${srcErr}%</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // 종합 우려사항
+  const concerns = p.concerns || [];
+  if (concerns.length > 0) {
+    html += `<div style="font-size:11px;color:var(--warn);margin-top:8px;">&#x26A0; ${concerns.join(', ')}</div>`;
   }
   el.innerHTML = html;
 }

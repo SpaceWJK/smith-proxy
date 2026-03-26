@@ -37,6 +37,7 @@ import gdi_client as gc
 import jira_client as jc
 import claim_handler as ch
 from safety_guard import detect_write_intent, format_block_message, READ_ONLY_INSTRUCTION
+from ops_tracker import get_tracker as _get_ops_tracker
 
 # ── 로그 설정 ──────────────────────────────────────────────────
 logging.basicConfig(
@@ -841,13 +842,16 @@ def _gdi_claude_call(prompt: str, source_label: str, question: str,
         ))
         return
 
+    _elapsed = 0
     try:
         client_ai = anthropic.Anthropic(api_key=api_key)
+        t0 = time.time()
         message   = client_ai.messages.create(
             model      = "claude-haiku-4-5-20251001",
             max_tokens = 1024,
             messages   = [{"role": "user", "content": prompt}],
         )
+        _elapsed = int((time.time() - t0) * 1000)
         # 토큰 사용량 로깅
         if hasattr(message, 'usage'):
             _log_token_usage("gdi", message.usage.input_tokens, message.usage.output_tokens)
@@ -856,6 +860,18 @@ def _gdi_claude_call(prompt: str, source_label: str, question: str,
         logger.error(f"[gdi] Claude API 오류: {e}")
         respond(text=f"❌ Claude API 오류\n```\n{e}\n```")
         return
+
+    # ── OpsTracker: GDI 답변 결과 기록 ────────────────────
+    try:
+        _ot = _get_ops_tracker()
+        if _is_not_found(answer):
+            _ot.response_fail("gdi", query=question, fail_reason="not_found",
+                              page_title=source_label, elapsed_ms=_elapsed)
+        else:
+            _ot.response_success("gdi", query=question,
+                                 page_title=source_label, elapsed_ms=_elapsed)
+    except Exception:
+        pass
 
     respond(text=format_ai_response(
         question=question,
@@ -1049,13 +1065,16 @@ def _jira_claude_call(prompt: str, source_label: str, question: str,
         ))
         return
 
+    _elapsed = 0
     try:
         client_ai = anthropic.Anthropic(api_key=api_key)
+        t0 = time.time()
         message   = client_ai.messages.create(
             model      = "claude-haiku-4-5-20251001",
             max_tokens = 1024,
             messages   = [{"role": "user", "content": prompt}],
         )
+        _elapsed = int((time.time() - t0) * 1000)
         # 토큰 사용량 로깅
         if hasattr(message, 'usage'):
             _log_token_usage("jira", message.usage.input_tokens, message.usage.output_tokens)
@@ -1064,6 +1083,18 @@ def _jira_claude_call(prompt: str, source_label: str, question: str,
         logger.error(f"[jira] Claude API 오류: {e}")
         respond(text=f":x: Claude API 오류\n```\n{e}\n```")
         return
+
+    # ── OpsTracker: Jira 답변 결과 기록 ───────────────────
+    try:
+        _ot = _get_ops_tracker()
+        if _is_not_found(answer):
+            _ot.response_fail("jira", query=question, fail_reason="not_found",
+                              page_title=source_label, elapsed_ms=_elapsed)
+        else:
+            _ot.response_success("jira", query=question,
+                                 page_title=source_label, elapsed_ms=_elapsed)
+    except Exception:
+        pass
 
     respond(text=format_ai_response(
         question=question,
@@ -1663,6 +1694,39 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                             level="ALL_MISS",
                         )
 
+                # ── OpsTracker: 운영 지표 기록 ──────────────
+                _elapsed = int((time.time() - t0) * 1000)
+                try:
+                    _ot = _get_ops_tracker()
+                    # 캐시 이벤트
+                    if fallback_stage == "cache":
+                        _ot.cache_hit("wiki", query=question,
+                                      detail="local_data", elapsed_ms=_elapsed)
+                    elif fallback_stage in ("descendant", "mcp_live", "mcp_search"):
+                        _ot.mcp_fallback("wiki", query=question,
+                                         detail=fallback_stage, elapsed_ms=_elapsed)
+                    elif fallback_stage == "all_failed":
+                        _ot.cache_miss("wiki", query=question,
+                                       detail="all_stages_failed", elapsed_ms=_elapsed)
+                    # 답변 결과
+                    if _is_not_found(answer):
+                        _ot.response_fail(
+                            "wiki", query=f"{page_part} \\ {question}",
+                            fail_reason=fallback_stage,
+                            page_title=source_label, elapsed_ms=_elapsed,
+                            user_id=user_id,
+                            channel=command.get("channel_id", ""),
+                        )
+                    else:
+                        _ot.response_success(
+                            "wiki", query=f"{page_part} \\ {question}",
+                            page_title=source_label, elapsed_ms=_elapsed,
+                            user_id=user_id,
+                            channel=command.get("channel_id", ""),
+                        )
+                except Exception as _ot_err:
+                    logger.debug(f"[OpsTracker] wiki 기록 실패: {_ot_err}")
+
                 respond(text=format_ai_response(
                     question=question,
                     raw_answer=answer,
@@ -1678,7 +1742,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                         f"페이지: {source_label} "
                         f"(fallback={fallback_stage})"
                     ),
-                    elapsed_ms=int((time.time() - t0) * 1000),
+                    elapsed_ms=_elapsed,
                 )
                 return
 

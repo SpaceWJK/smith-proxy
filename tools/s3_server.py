@@ -72,6 +72,24 @@ _MCP_ENDPOINTS = {
     "jira": "https://mcp.sginfra.net/confluence-jira-mcp/mcp",
 }
 
+# ── 로컬 서버 헬스체크 대상 ─────────────────────────────────
+_LOCAL_SERVERS = {
+    "KIS Dashboard": {"url": "http://localhost:9090", "desc": "KIS 대시보드 서버"},
+    "KIS Dashboard(Alt)": {"url": "http://localhost:9091", "desc": "KIS 대시보드 서버(Alt)"},
+    "Vite Dev": {"url": "http://localhost:5174", "desc": "프론트엔드 Dev 서버", "optional": True},
+    "Preview MCP": {"url": "http://localhost:9100", "desc": "Preview MCP 서버"},
+    "Preview(LAN)": {"url": "http://10.5.31.110:9100", "desc": "Preview MCP (내부망)", "optional": True},
+}
+
+# ── 프로세스 설명 자동 매핑 ──────────────────────────────────
+_PROCESS_DESC = {
+    "slack_bot": "Slack QA Bot",
+    "s3_server": "KIS 대시보드 서버",
+    "auto_sync": "MCP 캐시 동기화",
+    "claude_code": "Claude Code CLI",
+    "other": "Python 프로세스",
+}
+
 
 class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     """Static file server + GDI API reverse proxy."""
@@ -1603,7 +1621,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 "token_usage": self._build_token_usage(bot_tokens, cc_data),
                 "sessions": self._build_sessions(cc_data),
                 "system_status": self._claude_system_status(cfg),
-                "performance": self._claude_performance(),
+                "performance": self._claude_performance(cc_data),
                 "cost_budget": self._build_cost_budget(bot_tokens, cc_data, cfg),
             }
             self._json_response(result)
@@ -1742,6 +1760,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 "model": model,
                 "prompt_preview": prompt,
                 "tools": data.get("tool_counts", {}),
+                "tool_errors": data.get("tool_errors", 0),
+                "user_interruptions": data.get("user_interruptions", 0),
             })
 
             # 토큰 집계 — 모델별
@@ -1795,9 +1815,11 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
     # ── Claude: System Status ─────────────────────────────────
     def _claude_system_status(self, cfg):
-        """MCP 서버 ping (병렬) + Claude Code/Python 프로세스 탐지."""
+        """MCP 서버 ping + 로컬 HTTP 서버 헬스체크 (병렬) + 프로세스 탐지."""
         mcp_results = []
+        local_results = []
         ping_timeout = cfg.get("mcp_ping_timeout_sec", 3)
+        local_timeout = 2  # 로컬 서버 헬스체크 타임아웃
 
         def _ping_mcp(name, url):
             import time as _time
@@ -1810,30 +1832,79 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                     latency = int((_time.time() - start) * 1000)
                     status = "up" if resp.status < 400 else "degraded"
                     return {"name": name, "url": url, "status": status,
-                            "latency_ms": latency}
+                            "latency_ms": latency, "category": "mcp"}
             except Exception as e:
                 latency = int((_time.time() - start) * 1000)
                 return {"name": name, "url": url, "status": "down",
-                        "latency_ms": latency, "error": str(e)[:80]}
+                        "latency_ms": latency, "error": str(e)[:80],
+                        "category": "mcp"}
 
+        def _ping_local(name, info):
+            import time as _time
+            url = info["url"]
+            start = _time.time()
+            try:
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=local_timeout) as resp:
+                    latency = int((_time.time() - start) * 1000)
+                    status = "up" if resp.status < 400 else "degraded"
+                    return {"name": name, "url": url, "status": status,
+                            "latency_ms": latency, "desc": info["desc"],
+                            "optional": info.get("optional", False),
+                            "category": "local"}
+            except Exception as e:
+                latency = int((_time.time() - start) * 1000)
+                return {"name": name, "url": url, "status": "down",
+                        "latency_ms": latency, "error": str(e)[:80],
+                        "desc": info["desc"],
+                        "optional": info.get("optional", False),
+                        "category": "local"}
+
+        # MCP + 로컬 서버를 모두 병렬 처리 (max_workers=총 대상 수)
+        total_targets = len(_MCP_ENDPOINTS) + len(_LOCAL_SERVERS)
         try:
-            with ThreadPoolExecutor(max_workers=3) as ex:
-                futures = {ex.submit(_ping_mcp, name, url): name
-                           for name, url in _MCP_ENDPOINTS.items()}
-                for f in as_completed(futures, timeout=ping_timeout + 2):
+            with ThreadPoolExecutor(max_workers=total_targets) as ex:
+                futures = {}
+                for name, url in _MCP_ENDPOINTS.items():
+                    futures[ex.submit(_ping_mcp, name, url)] = ("mcp", name)
+                for name, info in _LOCAL_SERVERS.items():
+                    futures[ex.submit(_ping_local, name, info)] = ("local", name)
+
+                for f in as_completed(futures, timeout=max(ping_timeout, local_timeout) + 2):
                     try:
-                        mcp_results.append(f.result())
+                        result = f.result()
+                        if result["category"] == "mcp":
+                            mcp_results.append(result)
+                        else:
+                            local_results.append(result)
                     except Exception:
-                        name = futures[f]
-                        mcp_results.append({"name": name, "status": "timeout",
-                                            "latency_ms": ping_timeout * 1000})
+                        cat, name = futures[f]
+                        if cat == "mcp":
+                            mcp_results.append({"name": name, "status": "timeout",
+                                                "latency_ms": ping_timeout * 1000,
+                                                "category": "mcp"})
+                        else:
+                            info = _LOCAL_SERVERS.get(name, {})
+                            local_results.append({"name": name, "status": "timeout",
+                                                  "latency_ms": local_timeout * 1000,
+                                                  "desc": info.get("desc", ""),
+                                                  "optional": info.get("optional", False),
+                                                  "category": "local"})
         except Exception:
             # as_completed TimeoutError — 미완료 future 처리
-            completed_names = {r["name"] for r in mcp_results}
+            completed_names = {r["name"] for r in mcp_results + local_results}
             for name in _MCP_ENDPOINTS:
                 if name not in completed_names:
                     mcp_results.append({"name": name, "status": "timeout",
-                                        "latency_ms": ping_timeout * 1000})
+                                        "latency_ms": ping_timeout * 1000,
+                                        "category": "mcp"})
+            for name, info in _LOCAL_SERVERS.items():
+                if name not in completed_names:
+                    local_results.append({"name": name, "status": "timeout",
+                                          "latency_ms": local_timeout * 1000,
+                                          "desc": info["desc"],
+                                          "optional": info.get("optional", False),
+                                          "category": "local"})
 
         # 프로세스 탐지 — node.exe(Claude Code) + python.exe
         processes = {"claude_code": [], "python": []}
@@ -1881,6 +1952,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                             "pid": pid, "mem_mb": mem_mb,
                             "created": p.get("Created", ""),
                             "cmd_preview": safe_cmd,
+                            "desc": _PROCESS_DESC["claude_code"],
                         })
                     elif "python" in pname:
                         if "slack_bot" in cmd:
@@ -1895,16 +1967,23 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                             "pid": pid, "type": ptype, "mem_mb": mem_mb,
                             "created": p.get("Created", ""),
                             "cmd_preview": safe_cmd,
+                            "desc": _PROCESS_DESC.get(ptype, "Python 프로세스"),
                         })
         except Exception as e:
             warnings.append(f"프로세스 조회 실패: {str(e)[:60]}")
 
         mcp_up = sum(1 for m in mcp_results if m["status"] == "up")
         mcp_total = len(mcp_results)
+        # 로컬 서버: optional=True인 서버는 카운트에서 제외
+        local_required = [s for s in local_results if not s.get("optional")]
+        local_up = sum(1 for s in local_required if s["status"] == "up")
+        local_total = len(local_required)
 
         return {
             "mcp_servers": mcp_results,
             "mcp_summary": f"{mcp_up}/{mcp_total}",
+            "local_servers": local_results,
+            "local_summary": f"{local_up}/{local_total}",
             "processes": processes,
             "cc_process_count": len(processes["claude_code"]),
             "warnings": warnings,
@@ -1913,85 +1992,243 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     # ── Claude: Performance ───────────────────────────────────
     _RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
 
-    def _claude_performance(self):
-        """ops_metrics.db에서 성능 지표 + 리스크 판정."""
-        result = {"p99_latency_ms": 0, "error_rate": 0, "cache_hit_rate": 0,
-                  "risk_level": "unknown", "details": {}}
+    @staticmethod
+    def _raise_risk(current, new_level):
+        """리스크 레벨 상향 (unknown < low < medium < high).
+        unknown은 데이터 부재 상태로, low보다 낮은 우선순위."""
+        order = {"unknown": -1, "low": 0, "medium": 1, "high": 2}
+        return new_level if order.get(new_level, -1) > order.get(current, -1) else current
 
-        if os.path.exists(_OPS_DB):
-            try:
-                conn = sqlite3.connect(_OPS_DB, timeout=5)
-                conn.row_factory = sqlite3.Row
-                week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    def _claude_performance(self, cc_data=None):
+        """Claude 자체 성능 + MCP 운영 지표 → 종합 리스크 판정.
 
-                # p99: ASC 정렬 후 99번째 백분위 인덱스
-                rows = conn.execute(
-                    "SELECT elapsed_ms FROM response_events "
-                    "WHERE date_key >= ? ORDER BY elapsed_ms ASC",
-                    (week_ago,)
-                ).fetchall()
-                if rows:
-                    p99_idx = min(int(len(rows) * 0.99), len(rows) - 1)
-                    result["p99_latency_ms"] = rows[p99_idx]["elapsed_ms"]
-
-                # 에러율 — result 컬럼 기반 (기존 패턴 일치)
-                total_resp = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM response_events WHERE date_key >= ?",
-                    (week_ago,)
-                ).fetchone()
-                errors = conn.execute(
-                    "SELECT COUNT(*) as cnt FROM response_events "
-                    "WHERE date_key >= ? AND result IN ('fail','partial')",
-                    (week_ago,)
-                ).fetchone()
-                total_n = total_resp["cnt"] if total_resp else 0
-                error_n = errors["cnt"] if errors else 0
-                result["error_rate"] = round(error_n / total_n * 100, 2) if total_n else 0
-
-                # 캐시 히트율
-                cache_rows = conn.execute(
-                    "SELECT event_type, COUNT(*) as cnt FROM cache_events "
-                    "WHERE date_key >= ? GROUP BY event_type",
-                    (week_ago,)
-                ).fetchall()
-                cache_stats = {r["event_type"]: r["cnt"] for r in cache_rows}
-                cache_total = sum(cache_stats.values())
-                result["cache_hit_rate"] = round(
-                    cache_stats.get("hit", 0) / cache_total * 100, 1
-                ) if cache_total else 0
-
-                conn.close()
-            except Exception as e:
-                result["details"]["db_error"] = str(e)[:80]
-
-        # 리스크 레벨 판정 — 명시적 우선순위 비교
-        risk = "low"
-        concerns = []
-
-        def _raise_risk(current, new_level):
-            return new_level if self._RISK_ORDER.get(new_level, 0) > self._RISK_ORDER.get(current, 0) else current
-
-        if result["p99_latency_ms"] > 2000:
-            risk = _raise_risk(risk, "high")
-            concerns.append(f"p99={result['p99_latency_ms']}ms")
-        elif result["p99_latency_ms"] > 500:
-            risk = _raise_risk(risk, "medium")
-            concerns.append(f"p99={result['p99_latency_ms']}ms")
-
-        if result["error_rate"] > 5:
-            risk = _raise_risk(risk, "high")
-            concerns.append(f"에러율={result['error_rate']}%")
-        elif result["error_rate"] > 1:
-            risk = _raise_risk(risk, "medium")
-            concerns.append(f"에러율={result['error_rate']}%")
-
-        if 0 < result["cache_hit_rate"] < 60:
-            risk = _raise_risk(risk, "medium")
-            concerns.append(f"캐시={result['cache_hit_rate']}%")
-
-        result["risk_level"] = risk
-        result["concerns"] = concerns
+        두 영역을 분리하여 각각 독립 리스크 판정 후 max()로 종합.
+        - claude_self: session-meta 기반 (토큰 트렌드, 세션 시간, 도구 에러, 중단율)
+        - mcp_ops: ops_metrics.db 기반 (전체 소스 p99, 에러율, 캐시 적중률)
+        """
+        result = {
+            "claude_self": self._perf_claude_self(cc_data),
+            "mcp_ops": self._perf_mcp_ops(),
+        }
+        # 종합 리스크 = max(claude_self, mcp_ops); unknown은 무시하고 유효 레벨 우선
+        cr = result["claude_self"].get("risk_level", "unknown")
+        mr = result["mcp_ops"].get("risk_level", "unknown")
+        result["risk_level"] = self._raise_risk(cr, mr)
+        result["concerns"] = (result["claude_self"].get("concerns", [])
+                               + result["mcp_ops"].get("concerns", []))
         return result
+
+    def _perf_claude_self(self, cc_data=None):
+        """Claude 자체 성능 지표 — session-meta 기반 분석.
+
+        측정 항목:
+        - avg_tokens_per_session: 세션당 평균 토큰 (입력+출력)
+        - token_trend_pct: 최근 3일 vs 이전 4일 토큰 소모 증가율(%)
+        - avg_session_min: 평균 세션 시간(분)
+        - tool_error_rate: 도구 호출 대비 에러 비율(%)
+        - interruption_rate: 사용자 인터럽션 비율(%)
+        """
+        r = {"risk_level": "low", "concerns": [], "confidence": "normal",
+             "avg_tokens_per_session": 0, "token_trend_pct": 0,
+             "avg_session_min": 0, "tool_error_rate": 0,
+             "interruption_rate": 0, "sample_count": 0}
+
+        sessions = (cc_data or {}).get("sessions", [])
+        if not sessions:
+            r["confidence"] = "no_data"
+            r["risk_level"] = "unknown"
+            return r
+
+        r["sample_count"] = len(sessions)
+        if len(sessions) < 5:
+            r["confidence"] = "insufficient"
+
+        # ── 세션당 평균 토큰 ─────────────────────────
+        total_tokens = [(s["input_tokens"] + s["output_tokens"]) for s in sessions]
+        r["avg_tokens_per_session"] = round(sum(total_tokens) / len(total_tokens))
+
+        # ── 토큰 트렌드 (최근 3일 vs 이전 4일) ──────
+        now = datetime.now()
+        d3 = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+        d7 = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        recent = [t for s, t in zip(sessions, total_tokens)
+                  if (s.get("date") or "") >= d3]
+        older = [t for s, t in zip(sessions, total_tokens)
+                 if d7 <= (s.get("date") or "") < d3]
+        if recent and older:
+            avg_recent = sum(recent) / len(recent)
+            avg_older = sum(older) / len(older)
+            if avg_older > 0:
+                r["token_trend_pct"] = round(
+                    (avg_recent - avg_older) / avg_older * 100, 1)
+
+        # ── 평균 세션 시간 ───────────────────────────
+        durations = [s["duration_min"] for s in sessions if s["duration_min"] > 0]
+        r["avg_session_min"] = round(sum(durations) / len(durations), 1) if durations else 0
+
+        # ── 도구 에러율 ──────────────────────────────
+        total_tool_calls = 0
+        total_tool_errors = 0
+        for s in sessions:
+            tools = s.get("tools") or {}
+            total_tool_calls += sum(tools.values()) if isinstance(tools, dict) else 0
+            errs = s.get("tool_errors") or 0  # session-meta에 tool_errors 필드가 있음
+            if isinstance(errs, (int, float)):
+                total_tool_errors += errs
+        r["tool_error_rate"] = round(
+            total_tool_errors / total_tool_calls * 100, 2
+        ) if total_tool_calls > 0 else 0
+
+        # ── 사용자 인터럽션 비율 (인터럽션이 1회 이상 발생한 세션 비율) ──
+        sessions_with_interrupt = sum(
+            1 for s in sessions
+            if isinstance(s.get("user_interruptions"), (int, float))
+            and s.get("user_interruptions", 0) > 0
+        )
+        r["interruption_rate"] = round(
+            sessions_with_interrupt / len(sessions) * 100, 1
+        ) if sessions else 0
+
+        # ── 리스크 판정 (데이터 충분할 때만) ─────────
+        if r["confidence"] == "insufficient":
+            r["risk_level"] = "low"
+            r["concerns"].append("데이터 부족 (세션 5개 미만)")
+            return r
+
+        risk = "low"
+        # 토큰 트렌드 50% 이상 급증 → medium, 100% 이상 → high
+        if r["token_trend_pct"] > 100:
+            risk = self._raise_risk(risk, "high")
+            r["concerns"].append(f"토큰 증가 {r['token_trend_pct']}%")
+        elif r["token_trend_pct"] > 50:
+            risk = self._raise_risk(risk, "medium")
+            r["concerns"].append(f"토큰 증가 {r['token_trend_pct']}%")
+
+        # 도구 에러율 10% 이상 → high, 5% 이상 → medium
+        if r["tool_error_rate"] > 10:
+            risk = self._raise_risk(risk, "high")
+            r["concerns"].append(f"도구 에러율 {r['tool_error_rate']}%")
+        elif r["tool_error_rate"] > 5:
+            risk = self._raise_risk(risk, "medium")
+            r["concerns"].append(f"도구 에러율 {r['tool_error_rate']}%")
+
+        # 평균 세션 시간 120분 초과 → medium (컨텍스트 오버플로우 위험)
+        if r["avg_session_min"] > 120:
+            risk = self._raise_risk(risk, "medium")
+            r["concerns"].append(f"평균 세션 {r['avg_session_min']}분")
+
+        r["risk_level"] = risk
+        return r
+
+    def _perf_mcp_ops(self):
+        """MCP 운영 지표 — ops_metrics.db 전체 소스(wiki+jira+gdi) 통합.
+
+        측정 항목:
+        - p99_latency_ms: 전체 소스 통합 p99 (elapsed_ms > 0만)
+        - error_rate: 전체 응답 대비 실패율(%)
+        - cache_hit_rate: 캐시 적중률(%)
+        - by_source: 소스별 개별 통계
+        """
+        r = {"risk_level": "low", "concerns": [], "p99_latency_ms": 0,
+             "error_rate": 0, "cache_hit_rate": 0, "by_source": {},
+             "total_requests": 0, "details": {}}
+
+        if not os.path.exists(_OPS_DB):
+            r["risk_level"] = "unknown"
+            r["details"]["db_error"] = "ops_metrics.db 없음"
+            return r
+
+        conn = None
+        try:
+            conn = sqlite3.connect(_OPS_DB, timeout=5)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.row_factory = sqlite3.Row
+            week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+            # ── 전체 소스 통합 p99 (elapsed_ms > 0만) ─────────
+            rows = conn.execute(
+                "SELECT elapsed_ms FROM response_events "
+                "WHERE date_key >= ? AND elapsed_ms > 0 "
+                "ORDER BY elapsed_ms ASC",
+                (week_ago,)
+            ).fetchall()
+            if rows:
+                p99_idx = min(int(len(rows) * 0.99), len(rows) - 1)
+                r["p99_latency_ms"] = rows[p99_idx]["elapsed_ms"]
+
+            # ── 전체 에러율 ───────────────────────────────────
+            total_resp = conn.execute(
+                "SELECT COUNT(*) as cnt FROM response_events WHERE date_key >= ?",
+                (week_ago,)
+            ).fetchone()
+            errors = conn.execute(
+                "SELECT COUNT(*) as cnt FROM response_events "
+                "WHERE date_key >= ? AND result IN ('fail','partial')",
+                (week_ago,)
+            ).fetchone()
+            total_n = total_resp["cnt"] if total_resp else 0
+            error_n = errors["cnt"] if errors else 0
+            r["total_requests"] = total_n
+            r["error_rate"] = round(error_n / total_n * 100, 2) if total_n else 0
+
+            # ── 소스별 개별 통계 ──────────────────────────────
+            source_rows = conn.execute(
+                "SELECT source, COUNT(*) as cnt, "
+                "AVG(CASE WHEN elapsed_ms > 0 THEN elapsed_ms END) as avg_ms, "
+                "SUM(CASE WHEN result IN ('fail','partial') THEN 1 ELSE 0 END) as errs "
+                "FROM response_events WHERE date_key >= ? GROUP BY source",
+                (week_ago,)
+            ).fetchall()
+            for sr in source_rows:
+                src = sr["source"]
+                cnt = sr["cnt"]
+                avg = round(sr["avg_ms"]) if sr["avg_ms"] else 0
+                errs = sr["errs"] or 0
+                r["by_source"][src] = {
+                    "count": cnt,
+                    "avg_latency_ms": avg,
+                    "error_rate": round(errs / cnt * 100, 1) if cnt else 0,
+                }
+
+            # ── 캐시 적중률 ───────────────────────────────────
+            cache_rows = conn.execute(
+                "SELECT event_type, COUNT(*) as cnt FROM cache_events "
+                "WHERE date_key >= ? GROUP BY event_type",
+                (week_ago,)
+            ).fetchall()
+            cache_stats = {cr["event_type"]: cr["cnt"] for cr in cache_rows}
+            cache_total = sum(cache_stats.values())
+            r["cache_hit_rate"] = round(
+                cache_stats.get("hit", 0) / cache_total * 100, 1
+            ) if cache_total else 0
+        except Exception as e:
+            r["details"]["db_error"] = str(e)[:80]
+        finally:
+            if conn:
+                conn.close()
+
+        # ── MCP 리스크 판정 ───────────────────────────────
+        risk = "low"
+        if r["p99_latency_ms"] > 10000:
+            risk = self._raise_risk(risk, "high")
+            r["concerns"].append(f"p99={r['p99_latency_ms']}ms")
+        elif r["p99_latency_ms"] > 3000:
+            risk = self._raise_risk(risk, "medium")
+            r["concerns"].append(f"p99={r['p99_latency_ms']}ms")
+
+        if r["error_rate"] > 10:
+            risk = self._raise_risk(risk, "high")
+            r["concerns"].append(f"에러율={r['error_rate']}%")
+        elif r["error_rate"] > 3:
+            risk = self._raise_risk(risk, "medium")
+            r["concerns"].append(f"에러율={r['error_rate']}%")
+
+        if 0 < r["cache_hit_rate"] < 50:
+            risk = self._raise_risk(risk, "medium")
+            r["concerns"].append(f"캐시={r['cache_hit_rate']}%")
+
+        r["risk_level"] = risk
+        return r
 
     # ── Claude: 빌더 — Cost & Budget ──────────────────────────
     @staticmethod
