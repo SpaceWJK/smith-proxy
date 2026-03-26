@@ -1,0 +1,13 @@
+{
+  "monthly_limit_usd": 50,
+  "warn_threshold": 0.7,
+  "critical_threshold": 0.9,
+  "model_pricing": {
+    "haiku": { "input_per_m": 1.0, "output_per_m": 5.0 },
+    "sonnet": { "input_per_m": 3.0, "output_per_m": 15.0 },
+    "opus": { "input_per_m": 15.0, "output_per_m": 75.0 }
+  },
+  "refresh_interval_sec": 300,
+  "session_meta_max_days": 90,
+  "mcp_ping_timeout_sec": 3
+}

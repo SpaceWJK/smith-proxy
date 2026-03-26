@@ -41,6 +41,7 @@ ADMIN_PW = "qateam2025@"
 # ── 하트비트: 연결된 클라이언트 추적 (Admin 서버 전용) ───────────
 import threading
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 # Windows CMD 팝업 방지 — 모든 subprocess 호출에 creationflags=_NO_WINDOW 적용 필수
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
 _connected_clients = {}       # {client_id: {user, ip, last_seen, status}}
@@ -61,6 +62,16 @@ _BRAIN_DB = os.path.normpath(
     os.path.join(_PROJECT_ROOT, "..", "Prompt Cultivation", "brain", "brain.db")
 )
 
+# ── Claude Monitoring 데이터 소스 ────────────────────────────
+_CLAUDE_HOME = os.path.join(os.path.expanduser("~"), ".claude")
+_SESSION_META_DIR = os.path.join(_CLAUDE_HOME, "usage-data", "session-meta")
+_CLAUDE_CONFIG_PATH = os.path.join(STATIC_DIR, "claude_config.json")
+_MCP_ENDPOINTS = {
+    "wiki": "https://mcp.sginfra.net/confluence-wiki-mcp/mcp",
+    "gdi": "https://mcp-dev.sginfra.net/game-doc-insight-mcp/mcp",
+    "jira": "https://mcp.sginfra.net/confluence-jira-mcp/mcp",
+}
+
 
 class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     """Static file server + GDI API reverse proxy."""
@@ -78,6 +89,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_admin_clients()
         elif self.path == "/api/brain-metrics":
             self._handle_brain_metrics()
+        elif self.path == "/api/claude-metrics":
+            self._handle_claude_metrics()
         elif self.path == "/s3_admin.html":
             self._serve_admin_page()
         elif self.path.startswith("/api/s3-list"):
@@ -1401,6 +1414,23 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 {"date": r["d"], "count": r["cnt"]} for r in rows
             ]
 
+            # ── daily_journal (최근 30일 journal 기록 추적) ──
+            j_rows = conn.execute(
+                "SELECT date(date) as d, COUNT(*) as cnt "
+                "FROM dev_journal "
+                "WHERE date >= date('now', '-30 days') "
+                "GROUP BY d ORDER BY d ASC"
+            ).fetchall()
+            # 30일 캘린더 생성 (기록 있는 날 / 없는 날)
+            from datetime import date as _date
+            today = _date.today()
+            journal_map = {r["d"]: r["cnt"] for r in j_rows}
+            daily_journal = []
+            for i in range(29, -1, -1):
+                d = (today - timedelta(days=i)).isoformat()
+                daily_journal.append({"date": d, "count": journal_map.get(d, 0)})
+            result["daily_journal"] = daily_journal
+
             # ── effectiveness_distribution ──
             rows = conn.execute(
                 "SELECT "
@@ -1556,15 +1586,510 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
         self._json_response(result)
 
-    def _json_response(self, data):
-        """JSON 응답 헬퍼."""
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", len(body))
-        self._cors_headers()
-        self.end_headers()
-        self.wfile.write(body)
+    # ══════════════════════════════════════════════════════════════
+    # Claude Monitoring API
+    # ══════════════════════════════════════════════════════════════
+
+    def _handle_claude_metrics(self):
+        """Claude 모니터링 전체 메트릭 JSON 응답.
+        단일 파싱 원칙: config, bot_tokens, cc_data를 1회만 생성 후 재활용."""
+        cfg = self._load_claude_config()
+        bot_tokens = self._parse_bot_tokens()
+        cc_data = self._parse_all_session_meta(cfg)
+
+        result = {
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "token_usage": self._build_token_usage(bot_tokens, cc_data),
+            "sessions": self._build_sessions(cc_data),
+            "system_status": self._claude_system_status(cfg),
+            "performance": self._claude_performance(),
+            "cost_budget": self._build_cost_budget(bot_tokens, cc_data, cfg),
+        }
+        self._json_response(result)
+
+    # ── Claude: Bot 토큰 로그 파싱 (1회) ────────────────────
+    def _parse_bot_tokens(self):
+        """token_usage.log를 1회 파싱하여 기간별/소스별 집계 반환."""
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        month_str = now.strftime("%Y-%m")
+        week_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        r = {"today": {"input": 0, "output": 0, "calls": 0},
+             "month": {"input": 0, "output": 0, "calls": 0},
+             "week": {"input": 0, "output": 0, "calls": 0},
+             "by_source": {}, "by_date": {},
+             "today_str": today_str, "month_str": month_str}
+        log_path = os.path.join(_LOGS_DIR, "token_usage.log")
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = [p.strip() for p in line.split("|")]
+                    if len(parts) < 4:
+                        continue
+                    try:
+                        ts = parts[0]
+                        date_key = ts[:10]
+                        if not date_key.startswith(month_str):
+                            continue
+                        source = parts[1].strip()
+                        in_tok = int(parts[2].split("=")[1])
+                        out_tok = int(parts[3].split("=")[1])
+
+                        r["month"]["input"] += in_tok
+                        r["month"]["output"] += out_tok
+                        r["month"]["calls"] += 1
+
+                        if date_key == today_str:
+                            r["today"]["input"] += in_tok
+                            r["today"]["output"] += out_tok
+                            r["today"]["calls"] += 1
+                        if date_key >= week_ago:
+                            r["week"]["input"] += in_tok
+                            r["week"]["output"] += out_tok
+                            r["week"]["calls"] += 1
+
+                        r["by_source"].setdefault(source, {"input": 0, "output": 0, "calls": 0})
+                        r["by_source"][source]["input"] += in_tok
+                        r["by_source"][source]["output"] += out_tok
+                        r["by_source"][source]["calls"] += 1
+
+                        if date_key >= week_ago:
+                            r["by_date"].setdefault(date_key, {"input": 0, "output": 0, "calls": 0})
+                            r["by_date"][date_key]["input"] += in_tok
+                            r["by_date"][date_key]["output"] += out_tok
+                            r["by_date"][date_key]["calls"] += 1
+                    except (ValueError, IndexError):
+                        continue
+        except Exception:
+            pass
+        return r
+
+    # ── Claude: Session-meta 전체 파싱 (1회) ──────────────────
+    def _parse_all_session_meta(self, cfg):
+        """session-meta/*.json을 1회 파싱하여 토큰/세션/비용에 필요한 데이터 반환."""
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        month_str = now.strftime("%Y-%m")
+        week_ago = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        max_days = cfg.get("session_meta_max_days", 90)
+        cutoff_ts = (now - timedelta(days=max_days)).timestamp()
+
+        result = {
+            "sessions": [],  # 전체 세션 정보 목록 (파싱된 데이터)
+            "token_agg": {    # 토큰 집계
+                "today": {"input": 0, "output": 0, "sessions": 0},
+                "month": {"input": 0, "output": 0, "sessions": 0},
+                "week": {"input": 0, "output": 0, "sessions": 0},
+                "by_model": {}, "by_date": {},
+            },
+            "parse_errors": 0,
+        }
+
+        if not os.path.isdir(_SESSION_META_DIR):
+            return result
+
+        try:
+            entries = sorted(
+                [e for e in os.scandir(_SESSION_META_DIR)
+                 if e.is_file() and e.name.endswith(".json")
+                 and e.stat().st_mtime >= cutoff_ts],
+                key=lambda e: e.stat().st_mtime, reverse=True
+            )
+        except OSError:
+            return result
+
+        ta = result["token_agg"]
+
+        for entry in entries:
+            try:
+                with open(entry.path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                result["parse_errors"] += 1
+                continue
+
+            in_tok = data.get("input_tokens", 0) or 0
+            out_tok = data.get("output_tokens", 0) or 0
+            model = data.get("model", "unknown")
+            dur = data.get("duration_minutes", 0) or 0
+
+            # 날짜 추출
+            ts_field = data.get("timestamp") or data.get("first_interaction_timestamp")
+            if ts_field and isinstance(ts_field, str):
+                session_date = ts_field[:10]
+            else:
+                session_date = datetime.fromtimestamp(entry.stat().st_mtime).strftime("%Y-%m-%d")
+
+            # first_prompt 마스킹: 앞 30자만
+            raw_prompt = data.get("first_prompt") or ""
+            prompt = raw_prompt[:30] + ("..." if len(raw_prompt) > 30 else "")
+
+            # 세션 정보 저장
+            result["sessions"].append({
+                "id": entry.name.replace(".json", "")[:12],
+                "date": session_date,
+                "duration_min": round(dur, 1),
+                "input_tokens": in_tok,
+                "output_tokens": out_tok,
+                "model": model,
+                "prompt_preview": prompt,
+                "tools": data.get("tool_counts", {}),
+            })
+
+            # 토큰 집계 — 모델별
+            ta["by_model"].setdefault(model, {"input": 0, "output": 0, "sessions": 0})
+            ta["by_model"][model]["input"] += in_tok
+            ta["by_model"][model]["output"] += out_tok
+            ta["by_model"][model]["sessions"] += 1
+
+            # 기간별
+            if session_date and session_date.startswith(month_str):
+                ta["month"]["input"] += in_tok
+                ta["month"]["output"] += out_tok
+                ta["month"]["sessions"] += 1
+            if session_date == today_str:
+                ta["today"]["input"] += in_tok
+                ta["today"]["output"] += out_tok
+                ta["today"]["sessions"] += 1
+            if session_date and session_date >= week_ago:
+                ta["week"]["input"] += in_tok
+                ta["week"]["output"] += out_tok
+                ta["week"]["sessions"] += 1
+                ta["by_date"].setdefault(session_date, {"input": 0, "output": 0, "sessions": 0})
+                ta["by_date"][session_date]["input"] += in_tok
+                ta["by_date"][session_date]["output"] += out_tok
+                ta["by_date"][session_date]["sessions"] += 1
+
+        return result
+
+    # ── Claude: 빌더 — Token Usage ────────────────────────────
+    @staticmethod
+    def _build_token_usage(bot_tokens, cc_data):
+        return {"bot": bot_tokens, "cc": cc_data["token_agg"],
+                "disclaimer": "로컬 커맨드 기준 추정치 (Railway 제외)"}
+
+    # ── Claude: 빌더 — Sessions ───────────────────────────────
+    @staticmethod
+    def _build_sessions(cc_data):
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        sessions = cc_data["sessions"]
+        today_count = sum(1 for s in sessions if s["date"] == today_str)
+        durations = [s["duration_min"] for s in sessions if s["duration_min"] > 0]
+        avg_dur = round(sum(durations) / len(durations), 1) if durations else 0
+
+        return {
+            "active": 0,  # system_status.cc_process_count로 대체 (프론트에서 사용)
+            "today_count": today_count,
+            "avg_duration_min": avg_dur,
+            "recent": sessions[:10],
+            "parse_errors": cc_data["parse_errors"],
+        }
+
+    # ── Claude: System Status ─────────────────────────────────
+    def _claude_system_status(self, cfg):
+        """MCP 서버 ping (병렬) + Claude Code/Python 프로세스 탐지."""
+        mcp_results = []
+        ping_timeout = cfg.get("mcp_ping_timeout_sec", 3)
+
+        def _ping_mcp(name, url):
+            import time as _time
+            start = _time.time()
+            try:
+                req = urllib.request.Request(url, method="POST",
+                    headers={"Content-Type": "application/json"},
+                    data=b'{"jsonrpc":"2.0","method":"ping","id":1}')
+                with urllib.request.urlopen(req, timeout=ping_timeout) as resp:
+                    latency = int((_time.time() - start) * 1000)
+                    status = "up" if resp.status < 400 else "degraded"
+                    return {"name": name, "url": url, "status": status,
+                            "latency_ms": latency}
+            except Exception as e:
+                latency = int((_time.time() - start) * 1000)
+                return {"name": name, "url": url, "status": "down",
+                        "latency_ms": latency, "error": str(e)[:80]}
+
+        try:
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                futures = {ex.submit(_ping_mcp, name, url): name
+                           for name, url in _MCP_ENDPOINTS.items()}
+                for f in as_completed(futures, timeout=ping_timeout + 2):
+                    try:
+                        mcp_results.append(f.result())
+                    except Exception:
+                        name = futures[f]
+                        mcp_results.append({"name": name, "status": "timeout",
+                                            "latency_ms": ping_timeout * 1000})
+        except Exception:
+            # as_completed TimeoutError — 미완료 future 처리
+            completed_names = {r["name"] for r in mcp_results}
+            for name in _MCP_ENDPOINTS:
+                if name not in completed_names:
+                    mcp_results.append({"name": name, "status": "timeout",
+                                        "latency_ms": ping_timeout * 1000})
+
+        # 프로세스 탐지 — node.exe(Claude Code) + python.exe
+        processes = {"claude_code": [], "python": []}
+        warnings = []
+        try:
+            ps_cmd = (
+                "Get-CimInstance Win32_Process "
+                "-Filter \"name='node.exe' or name='python.exe' or name='pythonw.exe'\" "
+                "| ForEach-Object { "
+                "  $cpu = try { (Get-Process -Id $_.ProcessId -ErrorAction Stop).CPU } catch { 0 }; "
+                "  [pscustomobject]@{ "
+                "    ProcessId=$_.ProcessId; Name=$_.Name; "
+                "    MemMB=[math]::Round($_.WorkingSetSize/1MB,1); "
+                "    CPU=[math]::Round($cpu,1); "
+                "    CommandLine=$_.CommandLine; "
+                "    Created=$_.CreationDate.ToString('yyyy-MM-dd HH:mm:ss') "
+                "  } "
+                "} | ConvertTo-Json -Compress"
+            )
+            out = subprocess.check_output(
+                ['powershell', '-NoProfile', '-Command', ps_cmd],
+                text=True, timeout=10, creationflags=_NO_WINDOW,
+            ).strip()
+            if out:
+                data = json.loads(out)
+                if isinstance(data, dict):
+                    data = [data]
+                _sensitive_re = getattr(self, '_SENSITIVE_RE', None)
+                for p in data:
+                    cmd = (p.get("CommandLine") or "").lower()
+                    pname = (p.get("Name") or "").lower()
+                    pid = p.get("ProcessId", 0)
+                    mem_mb = p.get("MemMB", 0)
+
+                    raw_cmd = (p.get("CommandLine") or "")[:120]
+                    if _sensitive_re:
+                        safe_cmd = _sensitive_re.sub(r'\1****', raw_cmd)
+                    else:
+                        safe_cmd = re.sub(
+                            r'((?:--?)?(?:token|key|password|secret|api.?key)\s*[=:\s])\S+',
+                            r'\1****', raw_cmd, flags=re.IGNORECASE)
+
+                    if "node" in pname and ("claude" in cmd or ".claude" in cmd):
+                        processes["claude_code"].append({
+                            "pid": pid, "mem_mb": mem_mb,
+                            "created": p.get("Created", ""),
+                            "cmd_preview": safe_cmd,
+                        })
+                    elif "python" in pname:
+                        if "slack_bot" in cmd:
+                            ptype = "slack_bot"
+                        elif "s3_server" in cmd:
+                            ptype = "s3_server"
+                        elif "auto_sync" in cmd:
+                            ptype = "auto_sync"
+                        else:
+                            ptype = "other"
+                        processes["python"].append({
+                            "pid": pid, "type": ptype, "mem_mb": mem_mb,
+                            "created": p.get("Created", ""),
+                            "cmd_preview": safe_cmd,
+                        })
+        except Exception as e:
+            warnings.append(f"프로세스 조회 실패: {str(e)[:60]}")
+
+        mcp_up = sum(1 for m in mcp_results if m["status"] == "up")
+        mcp_total = len(mcp_results)
+
+        return {
+            "mcp_servers": mcp_results,
+            "mcp_summary": f"{mcp_up}/{mcp_total}",
+            "processes": processes,
+            "cc_process_count": len(processes["claude_code"]),
+            "warnings": warnings,
+        }
+
+    # ── Claude: Performance ───────────────────────────────────
+    _RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+    def _claude_performance(self):
+        """ops_metrics.db에서 성능 지표 + 리스크 판정."""
+        result = {"p99_latency_ms": 0, "error_rate": 0, "cache_hit_rate": 0,
+                  "risk_level": "unknown", "details": {}}
+
+        if os.path.exists(_OPS_DB):
+            try:
+                conn = sqlite3.connect(_OPS_DB, timeout=5)
+                conn.row_factory = sqlite3.Row
+                week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+                # p99: ASC 정렬 후 99번째 백분위 인덱스
+                rows = conn.execute(
+                    "SELECT response_ms FROM response_events "
+                    "WHERE date_key >= ? ORDER BY response_ms ASC",
+                    (week_ago,)
+                ).fetchall()
+                if rows:
+                    p99_idx = min(int(len(rows) * 0.99), len(rows) - 1)
+                    result["p99_latency_ms"] = rows[p99_idx]["response_ms"]
+
+                # 에러율 — result 컬럼 기반 (기존 패턴 일치)
+                total_resp = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM response_events WHERE date_key >= ?",
+                    (week_ago,)
+                ).fetchone()
+                errors = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM response_events "
+                    "WHERE date_key >= ? AND result IN ('fail','partial')",
+                    (week_ago,)
+                ).fetchone()
+                total_n = total_resp["cnt"] if total_resp else 0
+                error_n = errors["cnt"] if errors else 0
+                result["error_rate"] = round(error_n / total_n * 100, 2) if total_n else 0
+
+                # 캐시 히트율
+                cache_rows = conn.execute(
+                    "SELECT event_type, COUNT(*) as cnt FROM cache_events "
+                    "WHERE date_key >= ? GROUP BY event_type",
+                    (week_ago,)
+                ).fetchall()
+                cache_stats = {r["event_type"]: r["cnt"] for r in cache_rows}
+                cache_total = sum(cache_stats.values())
+                result["cache_hit_rate"] = round(
+                    cache_stats.get("hit", 0) / cache_total * 100, 1
+                ) if cache_total else 0
+
+                conn.close()
+            except Exception as e:
+                result["details"]["db_error"] = str(e)[:80]
+
+        # 리스크 레벨 판정 — 명시적 우선순위 비교
+        risk = "low"
+        concerns = []
+
+        def _raise_risk(current, new_level):
+            return new_level if self._RISK_ORDER.get(new_level, 0) > self._RISK_ORDER.get(current, 0) else current
+
+        if result["p99_latency_ms"] > 2000:
+            risk = _raise_risk(risk, "high")
+            concerns.append(f"p99={result['p99_latency_ms']}ms")
+        elif result["p99_latency_ms"] > 500:
+            risk = _raise_risk(risk, "medium")
+            concerns.append(f"p99={result['p99_latency_ms']}ms")
+
+        if result["error_rate"] > 5:
+            risk = _raise_risk(risk, "high")
+            concerns.append(f"에러율={result['error_rate']}%")
+        elif result["error_rate"] > 1:
+            risk = _raise_risk(risk, "medium")
+            concerns.append(f"에러율={result['error_rate']}%")
+
+        if 0 < result["cache_hit_rate"] < 60:
+            risk = _raise_risk(risk, "medium")
+            concerns.append(f"캐시={result['cache_hit_rate']}%")
+
+        result["risk_level"] = risk
+        result["concerns"] = concerns
+        return result
+
+    # ── Claude: 빌더 — Cost & Budget ──────────────────────────
+    @staticmethod
+    def _build_cost_budget(bot_tokens, cc_data, cfg):
+        """사전 파싱된 데이터로 비용 계산. 파일 I/O 없음."""
+        import calendar as _cal
+        pricing = cfg.get("model_pricing", {})
+        haiku_in = pricing.get("haiku", {}).get("input_per_m", 1.0)
+        haiku_out = pricing.get("haiku", {}).get("output_per_m", 5.0)
+        budget = cfg.get("monthly_limit_usd", 50)
+        warn_th = cfg.get("warn_threshold", 0.7)
+        crit_th = cfg.get("critical_threshold", 0.9)
+
+        # Bot 비용 (Haiku 기준)
+        bot_month_cost = (bot_tokens["month"]["input"] / 1_000_000 * haiku_in +
+                          bot_tokens["month"]["output"] / 1_000_000 * haiku_out)
+        bot_today_cost = (bot_tokens["today"]["input"] / 1_000_000 * haiku_in +
+                          bot_tokens["today"]["output"] / 1_000_000 * haiku_out)
+
+        # CC 비용 (모델별 단가 적용)
+        cc_month_cost = 0.0
+        cc_today_cost = 0.0
+        now = datetime.now()
+        month_str = now.strftime("%Y-%m")
+        today_str = now.strftime("%Y-%m-%d")
+
+        for sess in cc_data["sessions"]:
+            in_tok = sess["input_tokens"]
+            out_tok = sess["output_tokens"]
+            model_raw = (sess["model"] or "haiku").lower()
+
+            if "opus" in model_raw:
+                m_in = pricing.get("opus", {}).get("input_per_m", 15.0)
+                m_out = pricing.get("opus", {}).get("output_per_m", 75.0)
+            elif "sonnet" in model_raw:
+                m_in = pricing.get("sonnet", {}).get("input_per_m", 3.0)
+                m_out = pricing.get("sonnet", {}).get("output_per_m", 15.0)
+            else:
+                m_in = haiku_in
+                m_out = haiku_out
+
+            cost = in_tok / 1_000_000 * m_in + out_tok / 1_000_000 * m_out
+            sd = sess["date"] or ""
+            if sd.startswith(month_str):
+                cc_month_cost += cost
+            if sd == today_str:
+                cc_today_cost += cost
+
+        total_month = round(bot_month_cost + cc_month_cost, 2)
+        total_today = round(bot_today_cost + cc_today_cost, 2)
+        usage_pct = round(total_month / budget, 3) if budget > 0 else 0
+
+        if usage_pct >= crit_th:
+            alert = "critical"
+        elif usage_pct >= warn_th:
+            alert = "warning"
+        else:
+            alert = "normal"
+
+        day_of_month = now.day
+        daily_avg = total_month / day_of_month
+        days_in_month = _cal.monthrange(now.year, now.month)[1]
+        projected = round(daily_avg * days_in_month, 2)
+
+        return {
+            "today_usd": total_today,
+            "month_usd": total_month,
+            "budget_usd": budget,
+            "usage_pct": usage_pct,
+            "projected_month_usd": projected,
+            "remaining_usd": round(budget - total_month, 2),
+            "alert_level": alert,
+            "breakdown": {
+                "bot_month": round(bot_month_cost, 2),
+                "cc_month": round(cc_month_cost, 2),
+                "bot_today": round(bot_today_cost, 2),
+                "cc_today": round(cc_today_cost, 2),
+            },
+            "disclaimer": "로컬 커맨드 기준 추정치 (Railway 제외)",
+        }
+
+    # ── Claude: Config 로드 ───────────────────────────────────
+    @staticmethod
+    def _load_claude_config():
+        """claude_config.json 로드. 없으면 기본값."""
+        try:
+            with open(_CLAUDE_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {
+                "monthly_limit_usd": 50,
+                "warn_threshold": 0.7,
+                "critical_threshold": 0.9,
+                "model_pricing": {
+                    "haiku": {"input_per_m": 1.0, "output_per_m": 5.0},
+                    "sonnet": {"input_per_m": 3.0, "output_per_m": 15.0},
+                    "opus": {"input_per_m": 15.0, "output_per_m": 75.0},
+                },
+                "refresh_interval_sec": 300,
+                "session_meta_max_days": 90,
+                "mcp_ping_timeout_sec": 3,
+            }
 
     def _ops_cache_efficiency(self):
         """캐시 히트/미스/폴백 비율."""
