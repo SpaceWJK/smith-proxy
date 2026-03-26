@@ -793,7 +793,7 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 .claude-status-bar .status-chip.risk-unknown { border-left: 3px solid var(--text2); }
 #panelClaude { overflow-y: auto; overflow-x: hidden; }
 .claude-grid-top { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 16px; padding: 16px 24px 8px; }
-.claude-grid-bottom { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; padding: 8px 24px 16px; }
+.claude-grid-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 8px 24px 16px; }
 .claude-grid-top .dash-card, .claude-grid-bottom .dash-card { min-height: 200px; }
 .claude-kpi-row { display: flex; gap: 16px; margin-bottom: 12px; }
 .claude-kpi { text-align: center; flex: 1; padding: 10px; background: var(--surface2); border-radius: 8px; }
@@ -1328,7 +1328,7 @@ window.KIS_ADMIN_PW = "qateam2025@";
       <div class="claude-grid-top">
         <!-- Card 1: Cost & Budget -->
         <div class="dash-card" id="claudeCostCard">
-          <h4>&#x1F4B5; Cost & Budget</h4>
+          <h4>&#x1F4B5; Cost & Budget<span class="dash-tooltip">오늘/이번달 API 비용 · 월 예산 대비 사용률 · 월말 예상 비용</span></h4>
           <div class="dash-card-body" id="claudeCostBody">
             <div class="dash-loading"><div class="spinner"></div></div>
           </div>
@@ -1336,7 +1336,7 @@ window.KIS_ADMIN_PW = "qateam2025@";
 
         <!-- Card 2: API Token Usage (2col span) -->
         <div class="dash-card card-token-usage" id="claudeTokenCard">
-          <h4>&#x1F4B0; API Token Usage</h4>
+          <h4>&#x1F4B0; API Token Usage<span class="dash-tooltip">Slack Bot + Claude Code 토큰 소모량 · 소스별 분류 · 7일 추이 차트</span></h4>
           <div class="dash-card-body" id="claudeTokenBody">
             <div class="dash-loading"><div class="spinner"></div></div>
           </div>
@@ -1344,7 +1344,7 @@ window.KIS_ADMIN_PW = "qateam2025@";
 
         <!-- Card 3: System Status -->
         <div class="dash-card" id="claudeSystemCard">
-          <h4>&#x1F6E1;&#xFE0F; System Status</h4>
+          <h4>&#x1F6E1;&#xFE0F; System Status<span class="dash-tooltip">MCP 서버 헬스 (Wiki/GDI/Jira) · Bot/KIS/Claude Code 프로세스 상태</span></h4>
           <div class="dash-card-body" id="claudeSystemBody">
             <div class="dash-loading"><div class="spinner"></div></div>
           </div>
@@ -1355,7 +1355,7 @@ window.KIS_ADMIN_PW = "qateam2025@";
       <div class="claude-grid-bottom">
         <!-- Card 4: CC Sessions -->
         <div class="dash-card" id="claudeSessionCard">
-          <h4>&#x1F4BB; CC Sessions</h4>
+          <h4>&#x1F4BB; CC Sessions<span class="dash-tooltip">Claude Code 세션 현황 · 오늘/활성 세션 수 · 평균 세션 시간 · 최근 세션 목록</span></h4>
           <div class="dash-card-body" id="claudeSessionBody">
             <div class="dash-loading"><div class="spinner"></div></div>
           </div>
@@ -1363,7 +1363,7 @@ window.KIS_ADMIN_PW = "qateam2025@";
 
         <!-- Card 5: Performance Risk -->
         <div class="dash-card" id="claudePerfCard">
-          <h4>&#x26A1; Performance Risk</h4>
+          <h4>&#x26A1; Performance Risk<span class="dash-tooltip">최근 7일 p99 응답시간 · 에러율 · 캐시 적중률 기반 종합 리스크 판정</span></h4>
           <div class="dash-card-body" id="claudePerfBody">
             <div class="dash-loading"><div class="spinner"></div></div>
           </div>
