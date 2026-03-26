@@ -20,6 +20,25 @@
 
 ---
 
+## [1.7.0] - 2026-03-26
+
+### 추가
+- **Performance Risk 카드 분리 리디자인** (`s3_admin.html`)
+  - 기존 단일 카드를 "Claude 자체 성능" + "MCP 운영 지표" 2개 카드로 분리
+  - Wiki MCP 단독으로 HIGH 판정하던 오류 해소
+- **System Status 로컬 HTTP 서버 헬스체크** (`s3_server.py`, `s3_admin.html`)
+  - 로컬 서버 5개 헬스체크 추가 (9090/9091/5174/9100/10.5.31.110:9100)
+  - 프로세스 설명 자동 매핑 (Bot→Slack QA Bot, KIS→KIS 대시보드 서버 등)
+- **Jira/GDI 타이밍 코드** (`slack_bot.py`)
+  - jira/gdi 핸들러에 elapsed_ms 타이밍 측정 추가
+
+### 수정
+- **ops_metrics.db 쿼리 개선** (`s3_server.py`)
+  - elapsed_ms>0 필터 적용 (무효 데이터 제외)
+  - SQLite WAL 모드 적용으로 동시 읽기 성능 향상
+
+---
+
 ## [1.6.4] - 2026-03-13
 
 ### 수정 (Critical)

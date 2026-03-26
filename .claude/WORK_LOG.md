@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-03-26 (수) — 세션 26
+
+### 완료
+- **Claude 대시보드 고도화** (8단계 워크플로우 완료)
+  - Performance Risk 카드를 "Claude 자체 성능" + "MCP 운영 지표"로 분리 리디자인
+  - System Status에 로컬 HTTP 서버 5개 헬스체크 추가 (9090/9091/5174/9100/10.5.31.110:9100)
+  - 프로세스 설명 자동 매핑 (Bot→Slack QA Bot, KIS→KIS 대시보드 서버 등)
+  - slack_bot.py에 jira/gdi elapsed_ms 타이밍 코드 추가
+  - ops_metrics.db 쿼리에 elapsed_ms>0 필터, SQLite WAL 모드 적용
+- **QA 검수 이슈 7개 수정 완료**
+
+### 변경 파일
+- `Slack Bot/slack_bot.py`: jira/gdi elapsed_ms 타이밍 추가
+- `tools/s3_server.py`: 로컬 서버 헬스체크 + ops_metrics 쿼리 개선
+- `tools/s3_admin.html`: Performance Risk 분리 + System Status 로컬 서버 UI
+
+---
+
 ## 2026-03-25 (화) — 세션 25
 
 ### 완료
