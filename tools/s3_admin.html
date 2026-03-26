@@ -791,6 +791,7 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 .claude-status-bar .status-chip.risk-medium { border-left: 3px solid var(--warn); }
 .claude-status-bar .status-chip.risk-high { border-left: 3px solid var(--error); }
 .claude-status-bar .status-chip.risk-unknown { border-left: 3px solid var(--text2); }
+#panelClaude { overflow-y: auto; overflow-x: hidden; }
 .claude-grid-top { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 16px; padding: 16px 24px 8px; }
 .claude-grid-bottom { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; padding: 8px 24px 16px; }
 .claude-grid-top .dash-card, .claude-grid-bottom .dash-card { min-height: 200px; }
@@ -1302,7 +1303,6 @@ window.KIS_ADMIN_PW = "qateam2025@";
         <span class="dash-updated" id="dashUpdated"></span>
       </div>
     </div>
-  </div>
 
     <!-- Claude Panel (Admin Only — Claude Monitoring Dashboard) -->
     <div class="tab-panel" id="panelClaude">
@@ -1325,7 +1325,7 @@ window.KIS_ADMIN_PW = "qateam2025@";
       </div>
 
       <!-- Top Row: Cost | Token Usage | System Status -->
-      <div class="claude-grid-top" style="overflow-y:auto; flex:1;">
+      <div class="claude-grid-top">
         <!-- Card 1: Cost & Budget -->
         <div class="dash-card" id="claudeCostCard">
           <h4>&#x1F4B5; Cost & Budget</h4>
@@ -1349,10 +1349,9 @@ window.KIS_ADMIN_PW = "qateam2025@";
             <div class="dash-loading"><div class="spinner"></div></div>
           </div>
         </div>
+      </div>
 
       <!-- Bottom Row: Sessions | Performance Risk -->
-      <!-- (using same grid parent, switching to bottom grid via CSS) -->
-      </div>
       <div class="claude-grid-bottom">
         <!-- Card 4: CC Sessions -->
         <div class="dash-card" id="claudeSessionCard">
