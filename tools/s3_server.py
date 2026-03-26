@@ -1593,19 +1593,23 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     def _handle_claude_metrics(self):
         """Claude 모니터링 전체 메트릭 JSON 응답.
         단일 파싱 원칙: config, bot_tokens, cc_data를 1회만 생성 후 재활용."""
-        cfg = self._load_claude_config()
-        bot_tokens = self._parse_bot_tokens()
-        cc_data = self._parse_all_session_meta(cfg)
+        try:
+            cfg = self._load_claude_config()
+            bot_tokens = self._parse_bot_tokens()
+            cc_data = self._parse_all_session_meta(cfg)
 
-        result = {
-            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            "token_usage": self._build_token_usage(bot_tokens, cc_data),
-            "sessions": self._build_sessions(cc_data),
-            "system_status": self._claude_system_status(cfg),
-            "performance": self._claude_performance(),
-            "cost_budget": self._build_cost_budget(bot_tokens, cc_data, cfg),
-        }
-        self._json_response(result)
+            result = {
+                "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                "token_usage": self._build_token_usage(bot_tokens, cc_data),
+                "sessions": self._build_sessions(cc_data),
+                "system_status": self._claude_system_status(cfg),
+                "performance": self._claude_performance(),
+                "cost_budget": self._build_cost_budget(bot_tokens, cc_data, cfg),
+            }
+            self._json_response(result)
+        except Exception as e:
+            self._json_response({"error": str(e)[:200],
+                                 "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}, code=500)
 
     # ── Claude: Bot 토큰 로그 파싱 (1회) ────────────────────
     def _parse_bot_tokens(self):
@@ -1708,7 +1712,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 with open(entry.path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 result["parse_errors"] += 1
                 continue
 
@@ -1922,13 +1926,13 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
                 # p99: ASC 정렬 후 99번째 백분위 인덱스
                 rows = conn.execute(
-                    "SELECT response_ms FROM response_events "
-                    "WHERE date_key >= ? ORDER BY response_ms ASC",
+                    "SELECT elapsed_ms FROM response_events "
+                    "WHERE date_key >= ? ORDER BY elapsed_ms ASC",
                     (week_ago,)
                 ).fetchall()
                 if rows:
                     p99_idx = min(int(len(rows) * 0.99), len(rows) - 1)
-                    result["p99_latency_ms"] = rows[p99_idx]["response_ms"]
+                    result["p99_latency_ms"] = rows[p99_idx]["elapsed_ms"]
 
                 # 에러율 — result 컬럼 기반 (기존 패턴 일치)
                 total_resp = conn.execute(
