@@ -2533,6 +2533,53 @@ def _start_missed_items_timer(sender: SlackSender):
     return sched
 
 
+def _start_daily_recover_timer(sender: SlackSender, config_path: str):
+    """
+    로컬 봇 전용 — 매일 아침 누락 스케줄 자동 복구 타이머.
+
+    봇이 며칠간 재시작 없이 살아있어도, 매일 아침 09:35 / 10:05 에
+    오늘 누락된 스케줄을 감지하고 자동 재발송합니다.
+
+    09:35: 미션 (09:00~09:30 발송) + 09:00대 일반 스케줄 복구
+    10:05: 10:00대 일반 스케줄 복구 (일일 QA 체크리스트 등)
+    """
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    import pytz
+
+    _KST = pytz.timezone("Asia/Seoul")
+
+    def _recover_job():
+        try:
+            ns = NotificationScheduler(sender, config_path=config_path)
+            recovered = ns.recover_missed()
+            if recovered:
+                logger.info(f"[daily-recover] 누락 {len(recovered)}건 자동 복구 완료")
+            else:
+                logger.debug("[daily-recover] 누락 없음")
+        except Exception as e:
+            logger.error(f"[daily-recover] 복구 실패: {e}")
+
+    sched = BackgroundScheduler(timezone=_KST)
+    # 09:35 — 미션 + 09:00대 스케줄 복구
+    sched.add_job(
+        _recover_job,
+        trigger=CronTrigger(hour=9, minute=35, day_of_week="mon-fri", timezone=_KST),
+        id="daily_recover_0935",
+        name="누락 스케줄 복구 (09:35)",
+    )
+    # 10:05 — 10:00대 스케줄 복구
+    sched.add_job(
+        _recover_job,
+        trigger=CronTrigger(hour=10, minute=5, day_of_week="mon-fri", timezone=_KST),
+        id="daily_recover_1005",
+        name="누락 스케줄 복구 (10:05)",
+    )
+    sched.start()
+    logger.info("[daily-recover] 매일 누락 복구 타이머 등록: 평일 09:35, 10:05")
+    return sched
+
+
 def cmd_commands_only(sender: SlackSender, bolt_app: App, app_token: str):
     """
     Socket Mode 핸들러만 실행합니다 — 스케줄러 없음 (로컬 PC 전용 모드).
@@ -2540,11 +2587,26 @@ def cmd_commands_only(sender: SlackSender, bolt_app: App, app_token: str):
     Railway 스케줄러와 충돌하지 않습니다.
 
     추가: 전일 누락 항목 전송 타이머 (체크리스트 시각 +1분, 평일만)
+    추가: 시작 시 + 매일 아침 누락 스케줄 자동 복구
     """
     _ensure_single_instance()
 
+    _config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+    # 시작 시 오늘 누락 스케줄 즉시 복구
+    try:
+        ns = NotificationScheduler(sender, config_path=_config_path)
+        recovered = ns.recover_missed()
+        if recovered:
+            logger.info(f"[startup] 누락 스케줄 {len(recovered)}건 자동 복구 완료")
+    except Exception as e:
+        logger.warning(f"[startup] 누락 복구 중 오류 (무시): {e}")
+
     # 전일 누락 항목 타이머 등록
     missed_sched = _start_missed_items_timer(sender)
+
+    # 매일 아침 누락 스케줄 자동 복구 타이머 등록
+    recover_sched = _start_daily_recover_timer(sender, _config_path)
 
     logger.info("💬 커맨드 전용 모드 실행 중 — 스케줄러 없음 (로컬 PC)")
     logger.info("🔌 Socket Mode 연결 중... (종료: Ctrl+C)")
@@ -2554,6 +2616,8 @@ def cmd_commands_only(sender: SlackSender, bolt_app: App, app_token: str):
     except (KeyboardInterrupt, SystemExit):
         if missed_sched:
             missed_sched.shutdown(wait=False)
+        if recover_sched:
+            recover_sched.shutdown(wait=False)
         logger.info("봇이 정상 종료되었습니다.")
 
 

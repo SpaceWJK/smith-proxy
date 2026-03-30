@@ -563,7 +563,52 @@ class ConfluenceWikiClient:
         """
         sk  = space_key or self._space_key
 
-        # ── 1단계: 정확 일치 우선 ──────────────────────────────────────
+        # ── 0단계: 로컬 캐시 우선 조회 ────────────────────────────────
+        # MCP 호출 전에 SQLite 캐시에서 제목으로 먼저 조회 (밑줄→공백 포함)
+        if _CACHE_ENABLED:
+            cache_variants = [title.strip(), title.replace("_", " ").strip()]
+            seen = set()
+            for cv in cache_variants:
+                if cv.lower() in seen:
+                    continue
+                seen.add(cv.lower())
+                try:
+                    node = _wiki_cache.get_node_by_title(cv, "wiki", sk)
+                    if node:
+                        content = _wiki_cache.get_content(node["id"])
+                        if content and content.get("body_text"):
+                            page_id = node["source_id"]
+                            page_title = node.get("title", title)
+                            page_url = node.get("url") or \
+                                f"{self._wiki_url}/pages/viewpage.action?pageId={page_id}"
+                            # enrichment 데이터
+                            summary = content.get("summary") or ""
+                            kw_raw = content.get("keywords") or ""
+                            kw_list = []
+                            if kw_raw:
+                                try:
+                                    kw_list = json.loads(kw_raw)
+                                except (ValueError, TypeError):
+                                    kw_list = []
+                            logger.info(
+                                f"[wiki][캐시적중] 로컬 캐시에서 제목 발견: "
+                                f"'{page_title}' (id={page_id}, chars={content['char_count']})"
+                            )
+                            if _ops_log:
+                                _ops_log.cache_hit(
+                                    page_title, source="sqlite_title",
+                                    node_id=node["id"],
+                                )
+                            return {
+                                "id": page_id, "title": page_title,
+                                "url": page_url,
+                                "text": content["body_text"],
+                                "summary": summary, "keywords": kw_list,
+                            }, None
+                except Exception as e:
+                    logger.debug(f"[wiki] 로컬 캐시 제목 조회 실패 (무시): {e}")
+
+        # ── 1단계: MCP CQL 정확 일치 ──────────────────────────────────
         # 밑줄→공백 변환 버전도 시도 (Confluence 제목은 공백 기반)
         title_variants = [title]
         title_spaced = title.replace("_", " ").strip()
@@ -573,7 +618,7 @@ class ConfluenceWikiClient:
         for t_variant in title_variants:
             cql_exact = (f'title = "{t_variant}" AND space = "{sk}"'
                          f' AND type=page')
-            logger.info(f"[wiki] 제목 정확 검색 CQL: {cql_exact}")
+            logger.info(f"[wiki] 제목 정확 검색 CQL (MCP): {cql_exact}")
             raw, err = self._mcp.call_tool(
                 "cql_search",
                 {"cql": cql_exact, "limit": 1, "expand": "body.view"},
@@ -581,7 +626,11 @@ class ConfluenceWikiClient:
             if not err:
                 results = self._parse_cql_results(raw)
                 if results:
-                    logger.info(f"[wiki] 정확 일치 발견: {t_variant}")
+                    logger.info(f"[wiki] MCP 정확 일치 발견: {t_variant}")
+                    if _ops_log:
+                        _ops_log.cache_miss(
+                            t_variant, reason="title_not_in_cache",
+                        )
                     return self._cql_result_to_page_dict(
                         results[0], title, fetch_full=fetch_full
                     ), None
@@ -1144,3 +1193,4 @@ class ConfluenceWikiClient:
             "id": page_id, "title": page_title, "url": page_url, "text": text,
             "summary": summary, "keywords": keywords_list,
         }
+

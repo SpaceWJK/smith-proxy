@@ -483,6 +483,10 @@ class NotificationScheduler:
         except Exception as e:
             logger.warning(f"[startup] 재시작 알림 발송 실패: {e}")
 
+    def recover_missed(self):
+        """시작 시 오늘 누락된 스케줄을 감지하고 즉시 재발송 (스케줄러 없이 독립 실행 가능)"""
+        return sm.recover_missed_schedules(self.config, self.sender)
+
     def start(self):
         """스케줄 등록 후 백그라운드 실행 (논블로킹 — Bolt 와 공존 가능)"""
         self.setup()
@@ -490,6 +494,7 @@ class NotificationScheduler:
         logger.info("슬랙 알림 봇 스케줄러 시작 (백그라운드)")
         self.scheduler.start()
         self._notify_startup()   # Railway 재시작 알림 (monitor_alert_channel)
+        self.recover_missed()    # 시작 시 누락 스케줄 자동 복구
 
     def shutdown(self):
         """스케줄러 중지"""

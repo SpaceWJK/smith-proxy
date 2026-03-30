@@ -35,8 +35,8 @@ _BASE     = os.path.dirname(os.path.abspath(__file__))
 _LOG_FILE = os.path.join(_BASE, "data", "job_fire_log.json")
 _KST      = pytz.timezone("Asia/Seoul")
 
-# 복잡한 간격 타입은 당일 실행 여부 판단이 어려워 모니터링 제외
-_SKIP_TYPES = {"biweekly", "nweekly", "specific"}
+# 특수 타입은 당일 실행 여부 판단이 어려워 모니터링 제외
+_SKIP_TYPES = {"specific"}
 
 # 미션 job: 09:00 + jitter 최대 30분 + 여유 60분 = 11:00 이후 체크
 _MISSION_GRACE_HOUR   = 11
@@ -119,7 +119,7 @@ def should_fire_today(schedule: dict) -> bool:
     """
     오늘 이 스케줄이 실행되어야 하는지 판단합니다.
 
-    복잡한 간격 타입(biweekly / nweekly / specific)은 False 반환.
+    specific 타입만 제외하고, nweekly/biweekly도 start_date 기준으로 판단합니다.
     quarterly_first_monday 는 당일 날짜 조건을 직접 확인합니다.
     """
     stype   = schedule.get("type", "")
@@ -137,6 +137,24 @@ def should_fire_today(schedule: dict) -> bool:
         abbr  = _DAY_ABBR_MAP.get(raw.lower().strip(), "")
         target_wd = _DAY_WD_IDX.get(abbr, -1)
         return weekday == target_wd
+
+    if stype in ("biweekly", "nweekly"):
+        raw   = schedule.get("day_of_week", "")
+        abbr  = _DAY_ABBR_MAP.get(raw.lower().strip(), "")
+        target_wd = _DAY_WD_IDX.get(abbr, -1)
+        if weekday != target_wd:
+            return False
+        start_str = schedule.get("start_date", "")
+        if not start_str:
+            return False
+        try:
+            start_dt = datetime.strptime(start_str, "%Y-%m-%d")
+            week_interval = int(schedule.get("week_interval", 2))
+            days_diff = (today.date() - start_dt.date()).days
+            weeks_diff = days_diff // 7
+            return weeks_diff % week_interval == 0
+        except (ValueError, ZeroDivisionError):
+            return False
 
     if stype == "monthly":
         day_of_month = schedule.get("day_of_month", 1)
@@ -264,3 +282,130 @@ def check_and_alert(config: dict, slack_client):
         )
     except SlackApiError as e:
         logger.error(f"[monitor] 알림 전송 실패: {e.response['error']}")
+
+
+# ── 봇 시작 시 누락 스케줄 자동 복구 ─────────────────────────────────────────
+
+def recover_missed_schedules(config: dict, sender) -> list:
+    """
+    봇 시작 시 오늘 발송해야 했지만 누락된 스케줄을 감지하고 즉시 재발송합니다.
+
+    Parameters
+    ----------
+    config : config.json 전체 dict
+    sender : SlackSender 인스턴스
+
+    Returns
+    -------
+    list : 재발송된 스케줄 이름 목록
+    """
+    today = datetime.now(_KST)
+    if today.weekday() >= 5:
+        logger.info("[recover] 주말 → 복구 건너뜀")
+        return []
+
+    fired_today = get_fired_today()
+    recovered   = []
+
+    for s in config.get("schedules", []):
+        if not s.get("enabled", True):
+            continue
+        if not should_fire_today(s):
+            continue
+        # 예정 시각이 이미 지났는지 확인
+        stype_check = s.get("type", "")
+        if stype_check == "mission":
+            # 미션은 09:00~09:30 발송, 09:30 이후면 복구 대상
+            if today.hour < 9 or (today.hour == 9 and today.minute < 30):
+                continue
+        else:
+            if not scheduled_time_passed(s, grace_minutes=0):
+                continue
+        if s["id"] in fired_today:
+            continue
+
+        # 누락 감지 → 재발송
+        name = s.get("name", s["id"])
+        try:
+            msg_type = s.get("message_type", "")
+            stype    = s.get("type", "")
+
+            if msg_type == "interactive_checklist":
+                import interaction_handler as ih
+                import missed_tracker as mt
+
+                # 전일 누락 항목 (check_missed 스케줄만)
+                missed_items = None
+                if s.get("check_missed"):
+                    try:
+                        missed_items = mt.get_missed_items(sender.client)
+                        if not missed_items:
+                            missed_items = mt.get_missed_items_from_channel(
+                                slack_client=sender.client,
+                                channel=s["channel"],
+                                config_items=s.get("items", []),
+                            )
+                    except Exception:
+                        pass
+
+                ts = sender.send_interactive_checklist(
+                    channel=s["channel"],
+                    schedule=s,
+                    missed_items=missed_items,
+                )
+                if ts:
+                    ih.register(
+                        channel=s["channel"],
+                        ts=ts,
+                        schedule_id=s["id"],
+                        title=s.get("title", "📋 체크리스트"),
+                        items=s.get("items", []),
+                        schedule_type=stype,
+                    )
+                    # 전송 로그 기록
+                    if s.get("check_missed"):
+                        try:
+                            flat_items = mt.extract_flat_items(s.get("items", []))
+                            label      = mt.make_label(s)
+                            mt.log_sent(
+                                channel=s["channel"], ts=ts,
+                                schedule_id=s["id"], label=label,
+                                items=flat_items,
+                            )
+                        except Exception:
+                            pass
+
+            elif stype == "mission":
+                sender.send_mission_reminder(s)
+
+            else:
+                sender.send(channel=s["channel"], schedule=s)
+
+            log_fired(s["id"])
+            recovered.append(name)
+            logger.info(f"[recover] ✅ 재발송 완료: {name}")
+
+        except Exception as e:
+            logger.error(f"[recover] ❌ 재발송 실패: {name} → {e}")
+
+    if recovered:
+        # 복구 결과를 모니터링 채널에 알림
+        alert_channel = config.get("monitor_alert_channel")
+        if alert_channel:
+            try:
+                sender.client.chat_postMessage(
+                    channel=alert_channel,
+                    text=(
+                        f"🔄 *봇 시작 시 누락 스케줄 자동 복구* — "
+                        f"{today.strftime('%Y-%m-%d %H:%M')} KST\n"
+                        f"복구 {len(recovered)}건: {', '.join(recovered)}"
+                    ),
+                )
+            except Exception:
+                pass
+
+        logger.info(f"[recover] 누락 복구 완료: {len(recovered)}건 → {recovered}")
+    else:
+        logger.info("[recover] 누락 스케줄 없음 — 모든 스케줄 정상")
+
+    return recovered

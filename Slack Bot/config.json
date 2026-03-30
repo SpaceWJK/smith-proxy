@@ -122,22 +122,27 @@
       "items": [
         {
           "value": "item_0",
-          "text": "[에픽세븐] WiKi Game Service 1",
+          "text": "[에픽세븐] <https://wiki.smilegate.net/pages/viewpage.action?pageId=592785226|WiKi Game Service 1>",
           "mentions": ["U07H17HB4MD"]
         },
         {
           "value": "item_1",
-          "text": "[에픽세븐] Service QA Report 최신화",
+          "text": "[에픽세븐] <https://wiki.smilegate.net/display/QASGP/Service+Quality|Service QA Report 최신화>",
           "mentions": ["U07H17HB4MD"]
         },
         {
           "value": "item_2",
-          "text": "[에픽세븐] Dashboard DB 차수간 최신화",
+          "text": "[에픽세븐] <https://smilegate.sharepoint.com/:x:/s/QA439/IQC-FGLz316SSpKKaJ3cHwIBAUSTZPs2Ej6HCQt93rc5xYw?e=unhCJI|Dashboard DB 차수간 최신화>",
           "mentions": ["U07H17HB4MD"]
         },
         {
           "value": "item_3",
-          "text": "[에픽세븐] Status Board",
+          "text": "[에픽세븐] <https://wiki.smilegate.net/display/QASGP/%5BEP7%5D+Status+Board|Status Board>",
+          "mentions": ["U07H17HB4MD"]
+        },
+        {
+          "value": "item_4",
+          "text": "[에픽세븐] <https://smilegate.testrail.com/index.php?/projects/overview/28|테스트 레일 최신화>",
           "mentions": ["U07H17HB4MD"]
         }
       ],
@@ -160,22 +165,27 @@
       "items": [
         {
           "value": "item_0",
-          "text": "[카제나] WiKi Game Service 1",
+          "text": "[카제나] <https://wiki.smilegate.net/pages/viewpage.action?pageId=592785226|WiKi Game Service 1>",
           "mentions": ["U07HFLMSYKV"]
         },
         {
           "value": "item_1",
-          "text": "[카제나] Service QA Report 최신화",
+          "text": "[카제나] <https://wiki.smilegate.net/display/QASGP/CZ++%7C+Service+Quality|Service QA Report 최신화>",
           "mentions": ["U07HFLMSYKV"]
         },
         {
           "value": "item_2",
-          "text": "[카제나] Dashboard DB 차수간 최신화",
+          "text": "[카제나] <https://smilegate.sharepoint.com/:x:/s/QA439/IQC-FGLz316SSpKKaJ3cHwIBAUSTZPs2Ej6HCQt93rc5xYw?e=unhCJI|Dashboard DB 차수간 최신화>",
           "mentions": ["U07HFLMSYKV"]
         },
         {
           "value": "item_3",
-          "text": "[카제나] Status Board",
+          "text": "[카제나] <https://wiki.smilegate.net/display/QASGP/%5BCZ%5D+Status+Board|Status Board>",
+          "mentions": ["U07HFLMSYKV"]
+        },
+        {
+          "value": "item_4",
+          "text": "[카제나] <https://smilegate.testrail.com/index.php?/projects/overview/29|테스트 레일 최신화>",
           "mentions": ["U07HFLMSYKV"]
         }
       ],
@@ -335,23 +345,22 @@
     },
 
     {
-      "id": "biweekly-thursday-review",
-      "name": "격주 목요일 스토어 랭킹 리뷰",
-      "enabled": false,
-      "type": "biweekly",
+      "id": "weekly-thursday-review",
+      "name": "주간 목요일 스토어 랭킹 리뷰",
+      "enabled": true,
+      "type": "weekly",
       "day_of_week": "thursday",
       "time": "10:00",
-      "start_date": "2026-03-06",
       "channel": "C07PHCE4RCM",
       "message_type": "checklist",
-      "title": "🔄 격주 스토어 랭킹 리뷰",
+      "title": "🔄 주간 스토어 랭킹 리뷰",
       "items": [
-        "2주간 스토어 랭킹 데이터 수집",
+        "스토어 랭킹 데이터 수집",
         "국가별 변동사항 분석",
         "주요 이슈 및 트렌드 정리",
-        "다음 2주 모니터링 포인트 설정"
+        "다음 주 모니터링 포인트 설정"
       ],
-      "bot_name": "격주 알림봇",
+      "bot_name": "주간 알림봇",
       "bot_emoji": ":arrows_counterclockwise:"
     },
 
@@ -451,15 +460,14 @@
       "type": "mission",
       "channel": "C0AKGRX2BKJ",
       "mission": {
-        "mission_number": "M-03",
-        "name": "토론 진행 기획",
-        "target_date": "2026-03-27",
+        "mission_number": "M-08",
+        "name": "미정",
+        "target_date": "",
         "channel_name": "Roundtable",
         "sub_tasks": [
-          "주제 선정 기준",
-          "구성 및 진행 방식",
-          "이번 주제 선정",
-          "고도화 및 개선 방안(다음 미션) 논의"
+          "미정",
+          "미정",
+          "미정"
         ]
       }
     },
@@ -471,14 +479,14 @@
       "type": "mission",
       "channel": "C0AKGRTU36U",
       "mission": {
-        "mission_number": "M-02",
-        "name": "Testrail TC 업로드 자동화",
-        "target_date": "2026-03-27",
+        "mission_number": "M-07",
+        "name": "미정",
+        "target_date": "",
         "channel_name": "Tech Support",
         "sub_tasks": [
-          "Testrail 이슈 문의 건 처리 현황 정리",
-          "개선/고도화 방안 모색",
-          "사용 가이드 (WiKi)페이지 최신화"
+          "미정",
+          "미정",
+          "미정"
         ]
       }
     }
