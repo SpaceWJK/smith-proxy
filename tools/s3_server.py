@@ -21,9 +21,14 @@ import mimetypes
 import sqlite3
 from datetime import datetime, timedelta
 from io import BytesIO
+import socket
+import time
 try:
     import boto3
-    _S3_CLIENT = boto3.client("s3", region_name="ap-northeast-2")
+    from botocore.config import Config as _BotoConfig
+    _S3_CLIENT = boto3.client("s3", region_name="ap-northeast-2", config=_BotoConfig(
+        connect_timeout=5, read_timeout=10, retries={"max_attempts": 2}
+    ))
     _S3_BUCKET = "game-doc-insight-resource"
     _S3_AVAILABLE = True
 except ImportError:
@@ -58,6 +63,40 @@ _CACHE_DB = os.path.normpath(
 )
 _OPS_DB = os.path.join(_LOGS_DIR, "ops_metrics.db")
 _health_cache = {}  # DB 락 시 폴백용 캐시 (모듈 레벨 — 요청 간 유지)
+
+# ── 브라우저 세션 관리 (중앙 서버: 다중 사용자 추적) ─────────────
+_file_count_cache = {"total": 0, "updated": None}
+_SESSION_TIMEOUT_SEC = 90   # 이 이상 heartbeat 없으면 자동 오프라인
+_session_timeout_started = False
+_session_timeout_lock = threading.Lock()
+
+
+def _start_session_timeout_thread():
+    """90초 이상 heartbeat 없는 클라이언트 자동 제거 (60초 주기)."""
+    global _session_timeout_started
+    with _session_timeout_lock:
+        if _session_timeout_started:
+            return
+        _session_timeout_started = True
+
+    def _run():
+        while True:
+            time.sleep(60)
+            now = datetime.now()
+            with _clients_lock:
+                for cid in list(_connected_clients.keys()):
+                    try:
+                        last = datetime.strptime(
+                            _connected_clients[cid]["last_seen"],
+                            "%Y-%m-%d %H:%M:%S"
+                        )
+                        if (now - last).total_seconds() > _SESSION_TIMEOUT_SEC:
+                            _connected_clients.pop(cid, None)
+                    except Exception:
+                        pass
+    threading.Thread(target=_run, daemon=True, name="kis-session-timeout").start()
+
+_start_session_timeout_thread()
 _BRAIN_DB = os.path.normpath(
     os.path.join(_PROJECT_ROOT, "..", "Prompt Cultivation", "brain", "brain.db")
 )
@@ -111,6 +150,10 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_claude_metrics()
         elif self.path == "/s3_admin.html":
             self._serve_admin_page()
+        elif self.path.split("?")[0] in ("/", "/s3_manager.html"):
+            self._serve_manager_page()
+        elif self.path == "/api/count":
+            self._handle_count()
         elif self.path.startswith("/api/s3-list"):
             self._handle_s3_list()
         elif self.path.startswith("/api/"):
@@ -125,8 +168,14 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_process_cleanup()
         elif self.path == "/api/process/restart-bot":
             self._handle_process_restart_bot()
+        elif self.path == "/api/server/restart":
+            self._handle_server_restart()
         elif self.path == "/api/server/shutdown":
             self._handle_server_shutdown()
+        elif self.path == "/api/heartbeat":
+            self._handle_browser_heartbeat()
+        elif self.path == "/api/heartbeat/leave":
+            self._handle_browser_leave()
         elif self.path == "/api/admin/heartbeat":
             self._handle_admin_heartbeat()
         elif self.path == "/api/admin/disconnect":
@@ -143,6 +192,55 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self._cors_headers()
         self.end_headers()
+
+    # ── User page ──────────────────────────────────────────────
+    def _serve_manager_page(self):
+        """s3_manager.html 서빙. 브라우저 캐시 무효화로 항상 최신 버전 표시."""
+        try:
+            html_path = os.path.join(STATIC_DIR, "s3_manager.html")
+            with open(html_path, "r", encoding="utf-8") as f:
+                data = f.read().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", len(data))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
+            self._cors_headers()
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:
+            self._error_json(500, f"Manager page load failed: {e}")
+
+    # ── S3 파일 수 조회 (GDI API 우회, boto3 직접) ──────────────
+    def _handle_count(self):
+        """GET /api/count — S3 파일 수를 boto3로 직접 조회. 5분간 캐시."""
+        global _file_count_cache
+        if not _S3_AVAILABLE:
+            self._error_json(500, "boto3 not installed")
+            return
+        try:
+            # 캐시 히트 (5분 이내)
+            if _file_count_cache["updated"]:
+                age = (datetime.now() - _file_count_cache["updated"]).total_seconds()
+                if age < 300:
+                    self._json_response({"success": True, "total_files": _file_count_cache["total"]})
+                    return
+
+            # S3 직접 카운트 (페이지네이션)
+            total = 0
+            kwargs = {"Bucket": _S3_BUCKET}
+            while True:
+                resp = _S3_CLIENT.list_objects_v2(**kwargs)
+                total += resp.get("KeyCount", 0)
+                if resp.get("IsTruncated"):
+                    kwargs["ContinuationToken"] = resp["NextContinuationToken"]
+                else:
+                    break
+            _file_count_cache = {"total": total, "updated": datetime.now()}
+            self._json_response({"success": True, "total_files": total})
+        except Exception as e:
+            self._error_json(500, f"S3 connection failed: {e}")
 
     # ── Admin page ─────────────────────────────────────────────
     def _serve_admin_page(self):
@@ -446,15 +544,23 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             bot_running = False
 
-        # 소스별 최근 sync 기록 (SQLite) + enrichment
+        # 소스별 최근 sync 기록 — 동적 스캔 + 메타데이터 라벨링
+        # 새 동기화 소스 등록 시 _SYNC_META에만 라벨 추가하면 끝
+        # sync_log에 source_type이 추가되면 자동 표시 (메타 미정의는 source_type 그대로 라벨로 사용)
         global _health_cache
         sync_by_source = {}
         last_sync = None
         try:
             conn = sqlite3.connect(f"file:{_CACHE_DB}?mode=ro", uri=True, timeout=30)
             cur = conn.cursor()
-            # 소스별 최신 1건씩
-            for src in ("wiki", "jira", "gdi", "enrichment"):
+            # 1) DB에서 모든 source_type 동적 조회
+            cur.execute("SELECT DISTINCT source_type FROM sync_log")
+            db_sources = [r[0] for r in cur.fetchall() if r[0]]
+            # 2) 메타에 있지만 DB에 없는 소스도 포함 (초기 상태 표시용)
+            all_sources = set(db_sources) | set(self._SYNC_META.keys())
+
+            # 3) 소스별 최신 1건씩 조회
+            for src in sorted(all_sources):
                 cur.execute(
                     "SELECT source_type, started_at, finished_at, status, "
                     "pages_scanned, pages_updated, duration_sec, error_message "
@@ -463,12 +569,20 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                     (src,),
                 )
                 row = cur.fetchone()
+                meta = self._SYNC_META.get(src, {
+                    "label": src.replace("_", " ").title(),
+                    "category": "기타",
+                    "color": "#7a9ab8",
+                })
                 if row:
                     sync_by_source[src] = {
                         "source": row[0], "started_at": row[1],
                         "finished_at": row[2], "status": row[3],
                         "scanned": row[4], "updated": row[5],
                         "duration": row[6], "error": row[7],
+                        "label": meta["label"],
+                        "category": meta["category"],
+                        "color": meta["color"],
                     }
                 else:
                     # 초기 상태: sync_log 비어있음
@@ -477,6 +591,9 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                         "finished_at": None, "status": "unknown",
                         "scanned": 0, "updated": 0,
                         "duration": None, "error": None,
+                        "label": meta["label"],
+                        "category": meta["category"],
+                        "color": meta["color"],
                     }
             # GDI enrichment은 N/A (원본 파일 기반이므로 enrichment 불필요)
             if "gdi" in sync_by_source:
@@ -501,37 +618,59 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             sync_by_source = _health_cache.get("sync_by_source", {})
             last_sync = _health_cache.get("last_sync")
 
-        # Task Scheduler 상태 (XML 1회 조회 — 로케일 독립, Enabled 파싱)
-        # CSV 1회로 NextRun 일괄 조회 (subprocess 최소화)
+        # Task Scheduler 상태 — 동적 스캔 (MCP/Slack/Brain/KIS 키워드 자동 매칭)
+        # 새 태스크 등록 시 코드 수정 불필요 — 키워드만 맞으면 자동 표시
         task_scheduler = {}
-        _task_names = ("MCP-AutoSync-Delta", "MCP-AutoSync-FullWiki", "MCP_Process_Cleanup")
+        _TASK_KEYWORDS = ("MCP", "mcp", "Slack", "slack", "Brain", "brain", "KIS", "kis", "QA", "qa")
         try:
-            # 1) CSV로 NextRun 일괄 조회 (1회 호출)
+            # 1) CSV로 전체 태스크 + NextRun 조회
             csv_out = subprocess.check_output(
                 ['schtasks', '/query', '/fo', 'CSV', '/nh'],
                 text=True, timeout=10, creationflags=_NO_WINDOW,
+                encoding='utf-8', errors='replace',
             )
-            next_runs = {}
+            seen_tasks = set()
+            matched_tasks = []  # [(full_path, display_name, next_run)]
             for line in csv_out.strip().splitlines():
                 parts = line.split(',')
-                name = parts[0].strip('"').strip('\\') if parts else ""
-                for tn in _task_names:
-                    if tn in name:
-                        next_runs[tn] = parts[1].strip('"') if len(parts) > 1 else "N/A"
-            # 2) XML으로 Enabled 확인 (태스크당 1회, 총 3회)
-            for task_name in _task_names:
+                if not parts:
+                    continue
+                full_name = parts[0].strip().strip('"')
+                # 표시명: 마지막 \ 이후
+                display = full_name.rsplit('\\', 1)[-1] if '\\' in full_name else full_name.lstrip('\\')
+                if not display or display in seen_tasks:
+                    continue
+                if any(kw in display for kw in _TASK_KEYWORDS):
+                    next_run = parts[1].strip().strip('"') if len(parts) > 1 else "N/A"
+                    matched_tasks.append((full_name, display, next_run))
+                    seen_tasks.add(display)
+
+            # 2) 매칭된 태스크별 Enabled 확인 (XML 1회씩)
+            for full_name, display, next_run in matched_tasks:
                 try:
                     xml_out = subprocess.check_output(
-                        ['schtasks', '/query', '/tn', task_name, '/xml'],
+                        ['schtasks', '/query', '/tn', full_name.lstrip('\\'), '/xml'],
                         text=True, timeout=5, creationflags=_NO_WINDOW,
+                        encoding='utf-16', errors='replace',
                     )
                     enabled_match = re.search(r'<Enabled>(true|false)</Enabled>', xml_out, re.IGNORECASE)
                     enabled = enabled_match.group(1).lower() == 'true' if enabled_match else True
                 except Exception:
-                    enabled = True  # 조회 실패 시 기본 활성으로 간주
-                task_scheduler[task_name] = {
+                    enabled = True
+                # 메타 라벨 매칭 — 키워드 첫 매칭 적용, 없으면 schtasks 이름 그대로
+                label = display
+                category = "기타"
+                color = "#7a9ab8"
+                for key, lbl, cat, clr in self._TASK_META:
+                    if key in display:
+                        label, category, color = lbl, cat, clr
+                        break
+                task_scheduler[display] = {
                     "enabled": enabled,
-                    "next_run": next_runs.get(task_name, "N/A"),
+                    "next_run": next_run,
+                    "label": label,
+                    "category": category,
+                    "color": color,
                 }
         except Exception:
             pass
@@ -891,14 +1030,86 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         re.IGNORECASE,
     )
 
+    # ── 동기화 소스 메타데이터 (단일 진실 공급원) ──────────────────
+    # 새 sync source 추가 시 여기 한 줄 추가, 미정의 source는 자동으로 source_type 그대로 표시
+    _SYNC_META = {
+        "wiki":       {"label": "Wiki Sync",        "category": "MCP 캐시", "color": "#5b8a72"},
+        "jira":       {"label": "Jira Sync",        "category": "MCP 캐시", "color": "#7c5cbf"},
+        "gdi":        {"label": "GDI Sync",         "category": "MCP 캐시", "color": "#b8863b"},
+        "enrichment": {"label": "Enrichment",       "category": "MCP 캐시", "color": "#2a8a9e"},
+        # ── QA 대시보드 (5174) — quest_scheduler.py가 INSERT ──
+        "quest_weekly_backup":  {"label": "퀘스트 주간 백업",  "category": "QA 대시보드", "color": "#3b6ea5"},
+        "quest_monthly_backup": {"label": "퀘스트 월간 백업",  "category": "QA 대시보드", "color": "#3b6ea5"},
+        "quest_monthly_export": {"label": "퀘스트 월간 Export", "category": "QA 대시보드", "color": "#3b6ea5"},
+        "quest_backup_cleanup": {"label": "백업 정리",          "category": "QA 대시보드", "color": "#3b6ea5"},
+        "quest_wiki_export":    {"label": "퀘스트 Wiki Export", "category": "QA 대시보드", "color": "#3b6ea5"},
+        "guild_daily":          {"label": "길드 일일 작업",     "category": "QA 대시보드", "color": "#3b6ea5"},
+        "season_reset":         {"label": "시즌 리셋",          "category": "QA 대시보드", "color": "#3b6ea5"},
+    }
+
+    # ── Task Scheduler 메타데이터 (단일 진실 공급원) ──────────────
+    # 키워드 매칭으로 라벨 부여. 미매칭은 schtasks 이름 그대로 표시
+    # (key, label, category, color) 순서대로 첫 매칭 적용
+    _TASK_META = [
+        ("MCP-AutoSync-Delta",    "MCP 증분 동기화",   "MCP 캐시",   "#5b8a72"),
+        ("MCP-AutoSync-FullWiki", "Wiki 전체 동기화",  "MCP 캐시",   "#5b8a72"),
+        ("MCP_Process_Cleanup",   "프로세스 정리",     "유지보수",   "#9a8e7d"),
+        ("SlackQABot",            "Slack QA Bot",      "Slack Bot",  "#5b8a72"),
+        ("Quest_Weekly",          "퀘스트 주간 백업",  "QA 대시보드", "#3b6ea5"),
+        ("Quest_Monthly",         "퀘스트 월간 백업",  "QA 대시보드", "#3b6ea5"),
+        ("Quest_Export",          "Wiki Export",       "QA 대시보드", "#3b6ea5"),
+        ("Guild_Daily",           "길드 일일 작업",    "QA 대시보드", "#3b6ea5"),
+        ("Season_Reset",          "시즌 리셋",         "QA 대시보드", "#3b6ea5"),
+    ]
+
+    # ── 프로세스 타입 메타데이터 (단일 진실 공급원) ────────────────
+    # 새 프로세스 타입 추가 시 여기 한 곳만 수정하면 백엔드/프론트 동시 반영
+    _PROC_TYPE_META = {
+        "slack_bot":    {"color": "#5b8a72", "visible": True},
+        "s3_server":    {"color": "#7c5cbf", "visible": True},
+        "auto_sync":    {"color": "#5b8a72", "visible": True},
+        "enrichment":   {"color": "#b8863b", "visible": True},
+        "init_brain":   {"color": "#c45c4a", "visible": True},
+        "weekly_batch": {"color": "#2a8a9e", "visible": True},
+        "vite_dev":     {"color": "#1e7e6f", "visible": True},
+        "issue_backend": {"color": "#3b6ea5", "visible": True},
+        "other_python": {"color": "#9a8e7d", "visible": False},  # 좀비/중복일 때만 표시
+    }
+
     def _dash_processes(self):
-        """관련 Python 프로세스 목록 + 좀비/중복 판정 + 시스템 상태."""
+        """관련 Python/Node 프로세스 목록 + 좀비/중복 판정 + 시스템 상태."""
         procs = []
         try:
-            # PowerShell: 프로세스 정보 + CPU%
+            # ── Step 1: 리스닝 포트 → PID 매핑 (Vite 포트 식별용) ──
+            port_map = {}
+            try:
+                port_ps = (
+                    "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue "
+                    "| Select-Object OwningProcess,LocalPort "
+                    "| ConvertTo-Json -Compress"
+                )
+                port_out = subprocess.check_output(
+                    ['powershell', '-NoProfile', '-Command', port_ps],
+                    text=True, timeout=8, creationflags=_NO_WINDOW,
+                ).strip()
+                if port_out and port_out not in ("null", ""):
+                    raw_list = json.loads(port_out)
+                    if isinstance(raw_list, dict):
+                        raw_list = [raw_list]
+                    for entry in raw_list:
+                        ep = entry.get("OwningProcess")
+                        lp = entry.get("LocalPort")
+                        if ep and lp:
+                            pid_key = int(ep)
+                            existing = port_map.get(pid_key, "")
+                            port_map[pid_key] = (existing + "," + str(lp)).strip(",")
+            except Exception:
+                pass  # 포트 맵 실패해도 나머지 계속
+
+            # ── Step 2: Python + Node 프로세스 일괄 조회 ──
             ps_cmd = (
                 "Get-CimInstance Win32_Process "
-                "-Filter \"name='python.exe' or name='pythonw.exe'\" "
+                "-Filter \"name='python.exe' or name='pythonw.exe' or name='node.exe'\" "
                 "| ForEach-Object { "
                 "  $cpu = try { (Get-Process -Id $_.ProcessId -ErrorAction Stop).CPU } catch { 0 }; "
                 "  [pscustomobject]@{ "
@@ -921,45 +1132,90 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             if isinstance(data, dict):
                 data = [data]
 
+            # ── Vite 포트 → 라벨 매핑 ──
+            _VITE_PORTS = {
+                "5174": ("vite_dev", "QA 대시보드"),
+                "5175": ("vite_dev", "에이전트 팀"),
+                "5176": ("vite_dev", "QA Workflow"),
+            }
+            # 전체 정리에서 Vite/Node 화이트리스트 (절대 zombie/duplicate 판정 안 함)
+            _NODE_WHITELIST_CMD = ("claude", ".claude", "mcp-remote", "pdf-filler", "context7")
+
             # 프로세스 분류
             seen_types = {}     # type -> [proc_dicts]
             my_pid = os.getpid()
 
             for p in data:
                 cmd = (p.get("CommandLine") or "").lower()
+                pname = (p.get("Name") or "").lower()
                 pid = p.get("ProcessId", 0)
                 mem_mb = p.get("MemMB", 0)
                 cpu = p.get("CPU", 0)
+                pid_ports = port_map.get(pid, "")
 
-                # 프로세스 유형 식별
-                if "slack_bot" in cmd:
-                    ptype, label = "slack_bot", "Slack Bot"
-                elif "s3_server" in cmd:
-                    ptype, label = "s3_server", "KIS Server"
-                elif "auto_sync" in cmd:
-                    ptype, label = "auto_sync", "Auto Sync"
-                elif "enrichment" in cmd:
-                    ptype, label = "enrichment", "Enrichment"
-                elif "init_brain" in cmd:
-                    ptype, label = "init_brain", "Init Brain"
-                elif "weekly_batch" in cmd:
-                    ptype, label = "weekly_batch", "Weekly Batch"
+                # ── node.exe 분류 ──
+                if "node" in pname:
+                    # 화이트리스트: Claude/MCP 관련 → 목록에서 제외
+                    if any(w in cmd for w in _NODE_WHITELIST_CMD):
+                        continue
+                    # Vite 서버: 리스닝 포트 기반 식별
+                    vite_label = None
+                    for port, (vtype, vlabel) in _VITE_PORTS.items():
+                        if port in pid_ports:
+                            vite_label = vlabel
+                            ptype, label = vtype, vlabel
+                            break
+                    if vite_label is None:
+                        # 포트 미매핑 node: 알 수 없는 node → 목록 제외
+                        continue
                 else:
-                    ptype, label = "other_python", "Python"
+                    # ── python.exe / pythonw.exe 분류 ──
+                    if "slack_bot" in cmd:
+                        ptype, label = "slack_bot", "Slack Bot"
+                    elif "s3_server" in cmd:
+                        ptype, label = "s3_server", "KIS Server"
+                    elif "issue dashboard" in cmd and "server.py" in cmd:
+                        ptype, label = "issue_backend", "Issue Dashboard API"
+                    elif "auto_sync" in cmd:
+                        ptype, label = "auto_sync", "Auto Sync"
+                    elif "enrichment" in cmd:
+                        ptype, label = "enrichment", "Enrichment"
+                    elif "init_brain" in cmd:
+                        ptype, label = "init_brain", "Init Brain"
+                    elif "weekly_batch" in cmd:
+                        ptype, label = "weekly_batch", "Weekly Batch"
+                    else:
+                        ptype, label = "other_python", "Python"
 
                 # 커맨드라인 미리보기 — 민감 정보 마스킹
                 raw_cmd = (p.get("CommandLine") or "")[:200]
                 safe_cmd = self._SENSITIVE_RE.sub(r'\1****', raw_cmd)
 
-                # 스크립트명 추출: "python.exe xxx.py" → "xxx"
+                # 스크립트명 추출
                 script_name = ""
                 import re as _re
-                m = _re.search(r'[\\/]?(\w+)\.py\b', raw_cmd)
-                if m:
-                    script_name = m.group(1)
-                elif "-c " in raw_cmd or '"-c"' in raw_cmd:
-                    script_name = "inline"
+                if "node" in pname:
+                    script_name = label  # Vite 라벨을 script명으로
+                else:
+                    m = _re.search(r'[\\/]?(\w+)\.py\b', raw_cmd)
+                    if m:
+                        script_name = m.group(1)
+                    elif "-c " in raw_cmd or '"-c"' in raw_cmd:
+                        script_name = "inline"
 
+                meta = self._PROC_TYPE_META.get(ptype, {"color": "#9a8e7d", "visible": False})
+                # 재시작 target 자동 매핑: ptype 또는 vite_dev_<port>
+                # s3_server는 자기 자신 보호 위해 제외 (관리자가 KIS 서버를 재시작하면 이 핸들러가 죽음)
+                restart_target = None
+                if ptype == "vite_dev":
+                    for port in ("5174", "5175", "5176"):
+                        if port in pid_ports:
+                            restart_target = f"vite_dev_{port}"
+                            break
+                elif ptype == "slack_bot":
+                    restart_target = "slack_bot"
+                elif ptype == "issue_backend":
+                    restart_target = "issue_backend"
                 proc_info = {
                     "pid": pid,
                     "name": p.get("Name", ""),
@@ -972,11 +1228,14 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                     "script": script_name,
                     "is_self": pid == my_pid,
                     "status": "normal",  # normal / duplicate / zombie
+                    "color": meta["color"],         # 단일 진실 공급원 — 프론트가 그대로 사용
+                    "visible_default": meta["visible"],  # 정상 상태일 때 표시 여부
+                    "restart_target": restart_target,  # admin 재시작 버튼용 (null이면 미표시)
                 }
                 seen_types.setdefault(ptype, []).append(proc_info)
                 procs.append(proc_info)
 
-            # ── 좀비 판정: 시스템 무관 Python + CPU 90%+ ──
+            # ── 좀비 판정: python only, vite_dev는 절대 zombie 아님 ──
             zombies = []
             for proc in procs:
                 if proc["type"] in ("other_python", "init_brain") and proc["cpu"] > 90:
@@ -986,10 +1245,14 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             # ── 중복 판정 ──
             # slack_bot: 부모+자식 2개가 정상, 3개+ → 중복
             # s3_server: 관리자+사용자 각각 실행 가능 → 3개+ 일 때만 duplicate
+            # vite_dev: 중복 판정 제외 (각 포트별 독립 서버)
             duplicates = []
             warnings = []
             DUP_THRESHOLD = {"slack_bot": 2, "s3_server": 2}
+            _DUP_EXEMPT = {"vite_dev", "other_python"}  # 중복 판정 면제 타입
             for ptype, group in seen_types.items():
+                if ptype in _DUP_EXEMPT:
+                    continue
                 threshold = DUP_THRESHOLD.get(ptype)
                 if threshold and len(group) > threshold:
                     label = group[0]["label"]
@@ -1170,6 +1433,145 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self._error_json(500, f"봇 재실행 실패: {e}")
 
+    # ── 서버 재시작 메타데이터 (단일 진실 공급원) ─────────────────
+    # 새 서버 추가 시 여기 한 곳만 등록
+    _RESTART_TARGETS = {
+        "slack_bot": {
+            "label": "Slack Bot",
+            "kill_type": "slack_bot",
+            "exec": ["{venv_python}", "{root}/Slack Bot/slack_bot.py", "--commands-only"],
+            "cwd": "{root}",
+        },
+        "s3_server": {
+            "label": "KIS Server",
+            "kill_type": None,  # 자기 자신은 죽이지 않음 (요청자 PID 보호)
+            "exec": ["{venv_pythonw}", "{root}/tools/s3_server.py", "--port", "9091", "--silent"],
+            "cwd": "{root}/tools",
+        },
+        "vite_dev_5174": {
+            "label": "QA 대시보드",
+            "kill_port": 5174,
+            "exec": ["cmd", "/c", "npm", "run", "dev"],
+            "cwd": "D:/Vibe Dev/Issue Dashboard",
+        },
+        "vite_dev_5175": {
+            "label": "에이전트 팀",
+            "kill_port": 5175,
+            "exec": ["cmd", "/c", "npm", "run", "dev", "--", "--port", "5175"],
+            "cwd": "D:/Vibe Dev/QA Ops/agent-dashboard",
+        },
+        "vite_dev_5176": {
+            "label": "QA Workflow",
+            "kill_port": 5176,
+            "exec": ["cmd", "/c", "pm2", "restart", "all"],
+            "cwd": "D:/Vibe Dev/QA Workflow",
+        },
+        "issue_backend": {
+            "label": "Issue Dashboard API",
+            "kill_port": 9100,
+            "exec": ["{venv_pythonw}", "D:/Vibe Dev/Issue Dashboard/server/server.py", "--port", "9100"],
+            "cwd": "D:/Vibe Dev/Issue Dashboard",
+        },
+    }
+
+    def _handle_server_restart(self):
+        """POST /api/server/restart — 지정 서버 종료 후 재실행 (Admin 전용).
+
+        Body: {"password": "...", "target": "slack_bot" | "s3_server" | "vite_dev_5174" ...}
+        """
+        body = self._read_json_body()
+        if not self._check_admin_pw(body):
+            return
+        target = body.get("target", "")
+        cfg = self._RESTART_TARGETS.get(target)
+        if not cfg:
+            self._error_json(400, f"알 수 없는 target: {target}")
+            return
+
+        # slack_bot은 기존 전용 핸들러 위임 (검증된 경로 유지)
+        if target == "slack_bot":
+            return self._handle_process_restart_bot()
+
+        killed_pids = []
+
+        # ── Step 1: 종료 ──
+        if cfg.get("kill_port"):
+            try:
+                ps_kill = (
+                    f"Get-NetTCPConnection -State Listen -LocalPort {cfg['kill_port']} "
+                    "-ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique"
+                )
+                out = subprocess.check_output(
+                    ['powershell', '-NoProfile', '-Command', ps_kill],
+                    text=True, timeout=8, creationflags=_NO_WINDOW,
+                ).strip()
+                for line in out.splitlines():
+                    line = line.strip()
+                    if line.isdigit():
+                        pid_kill = int(line)
+                        try:
+                            subprocess.run(
+                                ['taskkill', '/pid', str(pid_kill), '/f', '/t'],
+                                capture_output=True, timeout=10, creationflags=_NO_WINDOW,
+                            )
+                            killed_pids.append(pid_kill)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        elif cfg.get("kill_type"):
+            proc_data = self._dash_processes()
+            for p in proc_data.get("processes", []):
+                if p["type"] == cfg["kill_type"] and not p.get("is_self"):
+                    try:
+                        subprocess.run(
+                            ['taskkill', '/pid', str(p["pid"]), '/f'],
+                            capture_output=True, timeout=10, creationflags=_NO_WINDOW,
+                        )
+                        killed_pids.append(p["pid"])
+                    except Exception:
+                        pass
+
+        # ── Step 2: 재실행 ──
+        venv_python = os.path.join(_PROJECT_ROOT, "venv", "Scripts", "python.exe")
+        venv_pythonw = os.path.join(_PROJECT_ROOT, "venv", "Scripts", "pythonw.exe")
+        substitutions = {
+            "venv_python": venv_python if os.path.exists(venv_python) else "python",
+            "venv_pythonw": venv_pythonw if os.path.exists(venv_pythonw) else "pythonw",
+            "root": _PROJECT_ROOT,
+        }
+
+        def _sub(s):
+            return s.format(**substitutions) if isinstance(s, str) else s
+
+        cmd_list = [_sub(c) for c in cfg["exec"]]
+        cwd = _sub(cfg["cwd"])
+
+        try:
+            # 서버 시작은 WMI 방식 (콘솔 창 없음, 부모-자식 분리)
+            ps_create = (
+                "$wmi = [wmiclass]'Win32_Process'; "
+                f"$r = $wmi.Create('{' '.join(cmd_list).replace(chr(39), chr(92)+chr(39))}', '{cwd.replace(chr(39), chr(92)+chr(39))}'); "
+                "$r.ProcessId"
+            )
+            out = subprocess.check_output(
+                ['powershell', '-NoProfile', '-Command', ps_create],
+                text=True, timeout=15, creationflags=_NO_WINDOW,
+            ).strip()
+            new_pid = int(out) if out.isdigit() else None
+        except Exception as e:
+            self._error_json(500, f"{cfg['label']} 재시작 실패: {e}")
+            return
+
+        self._json_response({
+            "success": new_pid is not None,
+            "target": target,
+            "label": cfg["label"],
+            "killed_pids": killed_pids,
+            "new_pid": new_pid,
+            "message": f"{cfg['label']} 재시작 완료 (PID: {new_pid})" if new_pid else f"{cfg['label']} 재시작 실패",
+        })
+
     def _handle_server_shutdown(self):
         """POST /api/server/shutdown — 자기 서버 프로세스 종료 (localhost 전용)."""
         # localhost에서만 허용
@@ -1184,6 +1586,43 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             os._exit(0)
         t = threading.Thread(target=_delayed_exit, daemon=True)
         t.start()
+
+    # ── 브라우저 heartbeat (중앙 서버: 사용자 식별) ──────────────────
+    def _handle_browser_heartbeat(self):
+        """POST /api/heartbeat — 브라우저에서 직접 heartbeat 수신."""
+        body = self._read_json_body()
+        client_id = body.get("client_id", "")
+        if not client_id:
+            self._error_json(400, "client_id 필수")
+            return
+        # XSS 방어: 이름 strip + 길이 제한
+        raw_name = body.get("user_name", "Unknown")
+        user_name = str(raw_name).strip()[:50] or "Unknown"
+        client_ip = self.client_address[0]
+        with _clients_lock:
+            _connected_clients[client_id] = {
+                "user": user_name,
+                "ip": client_ip,
+                "last_seen": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "active",
+            }
+            if client_id in _disconnect_queue:
+                _disconnect_queue.discard(client_id)
+                _connected_clients.pop(client_id, None)
+                self._json_response({"action": "shutdown"})
+                return
+        self._json_response({"action": "ack"})
+
+    def _handle_browser_leave(self):
+        """POST /api/heartbeat/leave — 탭 닫기/연결 해제 시 즉시 클라이언트 제거."""
+        body = self._read_json_body()
+        client_id = body.get("client_id", "")
+        if not client_id:
+            self._error_json(400, "client_id 필수")
+            return
+        with _clients_lock:
+            _connected_clients.pop(client_id, None)
+        self._json_response({"action": "ack"})
 
     # ── Heartbeat System (Admin 서버: 접속자 추적) ──────────
     def _handle_admin_heartbeat(self):
@@ -1231,8 +1670,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                     age_sec = 9999
                 # 60초 이상 무응답이면 비활성
                 status = "active" if age_sec < 60 else "inactive"
-                # 5분 이상 무응답이면 자동 제거
-                if age_sec > 300:
+                # _SESSION_TIMEOUT_SEC * 2 이상 무응답이면 자동 제거
+                if age_sec > _SESSION_TIMEOUT_SEC * 2:
                     _connected_clients.pop(cid, None)
                     continue
                 clients.append({
@@ -1911,6 +2350,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         warnings = []
         try:
             ps_cmd = (
+                "$portMap = @{}; "
+                "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object { $portMap[$_.OwningProcess] = ($portMap[$_.OwningProcess] + ',' + $_.LocalPort).TrimStart(',') }; "
                 "Get-CimInstance Win32_Process "
                 "-Filter \"name='node.exe' or name='python.exe' or name='pythonw.exe'\" "
                 "| ForEach-Object { "
@@ -1920,7 +2361,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 "    MemMB=[math]::Round($_.WorkingSetSize/1MB,1); "
                 "    CPU=[math]::Round($cpu,1); "
                 "    CommandLine=$_.CommandLine; "
-                "    Created=$_.CreationDate.ToString('yyyy-MM-dd HH:mm:ss') "
+                "    Created=$_.CreationDate.ToString('yyyy-MM-dd HH:mm:ss'); "
+                "    Ports=($portMap[$_.ProcessId] -join ',') "
                 "  } "
                 "} | ConvertTo-Json -Compress"
             )
@@ -1938,6 +2380,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                     pname = (p.get("Name") or "").lower()
                     pid = p.get("ProcessId", 0)
                     mem_mb = p.get("MemMB", 0)
+                    ports = str(p.get("Ports") or "")
 
                     raw_cmd = (p.get("CommandLine") or "")[:120]
                     if _sensitive_re:
@@ -1953,6 +2396,20 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                             "created": p.get("Created", ""),
                             "cmd_preview": safe_cmd,
                             "desc": _PROCESS_DESC["claude_code"],
+                        })
+                    elif "node" in pname and any(pt in ports for pt in ("5174", "5175", "5176")):
+                        # Vite dev 서버: 실제 리스닝 포트 기반 라벨링
+                        if "5175" in ports:
+                            vdesc = "에이전트 팀 (5175)"
+                        elif "5176" in ports:
+                            vdesc = "QA Workflow (5176)"
+                        else:
+                            vdesc = "QA 대시보드 (5174)"
+                        processes["python"].append({
+                            "pid": pid, "type": "vite_dev", "mem_mb": mem_mb,
+                            "created": p.get("Created", ""),
+                            "cmd_preview": safe_cmd,
+                            "desc": vdesc,
                         })
                     elif "python" in pname:
                         if "slack_bot" in cmd:
