@@ -1132,11 +1132,13 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             if isinstance(data, dict):
                 data = [data]
 
-            # ── Vite 포트 → 라벨 매핑 ──
+            # ── 서비스 포트 → 라벨/pm2 앱명 매핑 ──
+            # pm2 로 관리되는 dev 서버들. restart target 은 pm2 앱명(문자열).
             _VITE_PORTS = {
-                "5174": ("vite_dev", "QA 대시보드"),
-                "5175": ("vite_dev", "에이전트 팀"),
-                "5176": ("vite_dev", "QA Workflow"),
+                "5174": ("vite_dev", "QA 대시보드", "issue-dashboard"),
+                "5175": ("vite_dev", "에이전트 팀", "agent-dashboard"),
+                "5176": ("vite_dev", "QA Workflow Client", "qa-workflow-client"),
+                "4000": ("vite_dev", "QA Workflow API", "qa-workflow-server"),
             }
             # 전체 정리에서 Vite/Node 화이트리스트 (절대 zombie/duplicate 판정 안 함)
             _NODE_WHITELIST_CMD = ("claude", ".claude", "mcp-remote", "pdf-filler", "context7")
@@ -1160,10 +1162,12 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                         continue
                     # Vite 서버: 리스닝 포트 기반 식별
                     vite_label = None
-                    for port, (vtype, vlabel) in _VITE_PORTS.items():
+                    pm2_app_name = None
+                    for port, (vtype, vlabel, pm2_name) in _VITE_PORTS.items():
                         if port in pid_ports:
                             vite_label = vlabel
                             ptype, label = vtype, vlabel
+                            pm2_app_name = pm2_name
                             break
                     if vite_label is None:
                         # 포트 미매핑 node: 알 수 없는 node → 목록 제외
@@ -1208,10 +1212,9 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 # s3_server는 자기 자신 보호 위해 제외 (관리자가 KIS 서버를 재시작하면 이 핸들러가 죽음)
                 restart_target = None
                 if ptype == "vite_dev":
-                    for port in ("5174", "5175", "5176"):
-                        if port in pid_ports:
-                            restart_target = f"vite_dev_{port}"
-                            break
+                    # pm2 앱명을 그대로 restart target 으로 사용 — 이름 기반 단일 진실.
+                    # 프로세스가 사라져도 pm2 list 에는 남아있으므로 다른 곳에서 복구 가능.
+                    restart_target = pm2_app_name
                 elif ptype == "slack_bot":
                     restart_target = "slack_bot"
                 elif ptype == "issue_backend":
@@ -1277,6 +1280,60 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                     "pid": normal[0]["pid"] if normal else None,
                     "mem_mb": normal[0]["mem_mb"] if normal else 0,
                 }
+
+            # ── pm2 관리 앱 placeholder 주입 ──
+            # 프로세스가 실제로 살아있지 않아도(크래시/일시 중단 등) pm2 list 에
+            # 등록된 앱은 목록에 선언형으로 노출해서 "재시작" 버튼을 항상 제공한다.
+            # 이렇게 하면 "서버가 죽으면 목록에서 사라져 복구 불가" 문제가 해소된다.
+            try:
+                pm2_apps = self._pm2_list()  # [(name, status, pid)]
+                # s3_server 타입(KIS Server)도 pm2 관리되므로 placeholder 중복 방지
+                _PM2_TYPE_MAP = {"s3_server": "kis-server"}
+                live_names = set()
+                for proc in procs:
+                    rt = proc.get("restart_target")
+                    if rt:
+                        live_names.add(rt)
+                    # type 기반으로도 live 처리 (kis-server 의 경우 restart_target=None)
+                    pm2_alias = _PM2_TYPE_MAP.get(proc.get("type"))
+                    if pm2_alias:
+                        live_names.add(pm2_alias)
+                # pm2_apps 중복 제거 (regex 파싱이 2번 매칭하는 경우 방지)
+                seen_names = set()
+                deduped_apps = []
+                for entry in pm2_apps:
+                    if entry[0] not in seen_names:
+                        seen_names.add(entry[0])
+                        deduped_apps.append(entry)
+                pm2_apps = deduped_apps
+                # live 가 아닌 pm2 앱은 placeholder 로 추가
+                for (name, status, pid) in pm2_apps:
+                    if name in live_names:
+                        continue
+                    # pm2 앱명 → 라벨 역매핑 (포트 매핑에서 찾아본다)
+                    display_label = name
+                    for _p, (_vt, vlabel, pm2_name) in _VITE_PORTS.items():
+                        if pm2_name == name:
+                            display_label = vlabel
+                            break
+                    procs.append({
+                        "pid": pid or 0,
+                        "name": "pm2-managed",
+                        "type": "vite_dev",
+                        "label": f"{display_label} ({status})",
+                        "mem_mb": 0,
+                        "cpu": 0,
+                        "created": "",
+                        "cmd_preview": f"pm2 app: {name}",
+                        "script": display_label,
+                        "is_self": False,
+                        "status": "normal" if status == "online" else "offline",
+                        "color": self._PROC_TYPE_META.get("vite_dev", {}).get("color", "#9a8e7d"),
+                        "visible_default": True,
+                        "restart_target": name,  # pm2 앱명
+                    })
+            except Exception:
+                pass  # pm2 조회 실패해도 기본 기능 유지
 
             return {
                 "processes": procs,
@@ -1346,6 +1403,61 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             self._json_response({"success": True, "killed": pid})
         except Exception as e:
             self._error_json(500, f"Kill 실패: {e}")
+
+    # ── pm2 헬퍼 ────────────────────────────────────────────
+    _PM2_CMD = r"C:\Users\es-wjkim\AppData\Roaming\npm\pm2.cmd"
+
+    def _pm2_list(self):
+        """pm2 jlist 를 호출하여 [(name, status, pid), ...] 리턴.
+
+        pm2 jlist 는 username/USERNAME 등 중복 키가 있는 JSON 을 내뱉어
+        파이썬 json.loads 가 WARN 을 찍을 수 있지만 파싱 자체는 가능.
+        실패 시 regex fallback 으로 name/status/pid 만 추출.
+        """
+        if not os.path.exists(self._PM2_CMD):
+            return []
+        try:
+            out = subprocess.check_output(
+                [self._PM2_CMD, 'jlist'],
+                text=True, timeout=8, creationflags=_NO_WINDOW,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception:
+            return []
+        if not out or out in ('null', '[]'):
+            return []
+        # Regex fallback (중복 키 회피)
+        import re as _re
+        results = []
+        # 각 앱 객체 경계: "pid":N ... "name":"..." ... "status":"..."
+        for match in _re.finditer(
+            r'"name"\s*:\s*"([^"]+)".*?"pm2_env"\s*:\s*\{[^}]*?"status"\s*:\s*"([^"]+)"[^}]*?\}[^}]*?"pid"\s*:\s*(\d+)',
+            out, _re.DOTALL,
+        ):
+            results.append((match.group(1), match.group(2), int(match.group(3))))
+        # 위 패턴이 실패하면 단순 패턴 재시도
+        if not results:
+            names = _re.findall(r'"name"\s*:\s*"([^"]+)"', out)
+            statuses = _re.findall(r'"status"\s*:\s*"([^"]+)"', out)
+            pids = _re.findall(r'"pid"\s*:\s*(\d+)', out)
+            for i, name in enumerate(names):
+                st = statuses[i] if i < len(statuses) else 'unknown'
+                pid = int(pids[i]) if i < len(pids) else 0
+                results.append((name, st, pid))
+        return results
+
+    def _pm2_restart(self, app_name):
+        """pm2 restart <name> 호출. (ok, message) 리턴."""
+        if not os.path.exists(self._PM2_CMD):
+            return (False, "pm2 가 설치되어 있지 않습니다")
+        try:
+            subprocess.run(
+                [self._PM2_CMD, 'restart', app_name],
+                capture_output=True, timeout=20, creationflags=_NO_WINDOW,
+            )
+            return (True, f"pm2 restart {app_name} 실행")
+        except Exception as e:
+            return (False, f"pm2 restart 실패: {e}")
 
     def _handle_process_cleanup(self):
         """POST /api/process/cleanup — 중복+좀비 일괄 정리 (Admin 전용)."""
@@ -1448,24 +1560,33 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             "exec": ["{venv_pythonw}", "{root}/tools/s3_server.py", "--port", "9091", "--silent"],
             "cwd": "{root}/tools",
         },
-        "vite_dev_5174": {
-            "label": "QA 대시보드",
-            "kill_port": 5174,
-            "exec": ["cmd", "/c", "npm", "run", "dev"],
-            "cwd": "D:/Vibe Dev/Issue Dashboard",
+        # pm2 관리 앱들 — pm2_name 지정 시 _handle_server_restart 가
+        # kill/spawn 대신 `pm2 restart <name>` 을 호출한다.
+        "issue-dashboard": {
+            "label": "QA 대시보드 (Issue Dashboard)",
+            "pm2_name": "issue-dashboard",
         },
-        "vite_dev_5175": {
-            "label": "에이전트 팀",
-            "kill_port": 5175,
-            "exec": ["cmd", "/c", "npm", "run", "dev", "--", "--port", "5175"],
-            "cwd": "D:/Vibe Dev/QA Ops/agent-dashboard",
+        "agent-dashboard": {
+            "label": "에이전트 팀 (Agent Dashboard)",
+            "pm2_name": "agent-dashboard",
         },
-        "vite_dev_5176": {
-            "label": "QA Workflow",
-            "kill_port": 5176,
-            "exec": ["cmd", "/c", "pm2", "restart", "all"],
-            "cwd": "D:/Vibe Dev/QA Workflow",
+        "qa-workflow-client": {
+            "label": "QA Workflow Client",
+            "pm2_name": "qa-workflow-client",
         },
+        "qa-workflow-server": {
+            "label": "QA Workflow API",
+            "pm2_name": "qa-workflow-server",
+        },
+        "kis-server": {
+            "label": "KIS Server (pm2)",
+            "pm2_name": "kis-server",
+        },
+        # 구(舊) 키 호환 — 프론트가 vite_dev_5174 등으로 호출해도 동작
+        "vite_dev_5174": {"label": "QA 대시보드", "pm2_name": "issue-dashboard"},
+        "vite_dev_5175": {"label": "에이전트 팀", "pm2_name": "agent-dashboard"},
+        "vite_dev_5176": {"label": "QA Workflow Client", "pm2_name": "qa-workflow-client"},
+        "vite_dev_4000": {"label": "QA Workflow API", "pm2_name": "qa-workflow-server"},
         "issue_backend": {
             "label": "Issue Dashboard API",
             "kill_port": 9100,
@@ -1491,6 +1612,31 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         # slack_bot은 기존 전용 핸들러 위임 (검증된 경로 유지)
         if target == "slack_bot":
             return self._handle_process_restart_bot()
+
+        # pm2 관리 앱: 네이티브 pm2 restart 로 위임 (kill/spawn 경합 방지)
+        if cfg.get("pm2_name"):
+            ok, msg = self._pm2_restart(cfg["pm2_name"])
+            # 재시작 후 상태 확인
+            import time as _t
+            _t.sleep(2)
+            pm2_apps = self._pm2_list()
+            new_pid = 0
+            new_status = "unknown"
+            for (name, status, pid) in pm2_apps:
+                if name == cfg["pm2_name"]:
+                    new_pid = pid
+                    new_status = status
+                    break
+            self._json_response({
+                "success": ok and new_status == "online",
+                "target": target,
+                "label": cfg["label"],
+                "killed_pids": [],
+                "new_pid": new_pid,
+                "pm2_status": new_status,
+                "message": msg + f" · 상태: {new_status}" + (f" (PID {new_pid})" if new_pid else ""),
+            })
+            return
 
         killed_pids = []
 
