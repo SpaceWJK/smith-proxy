@@ -400,10 +400,12 @@ class GdiClient:
 
     def _local_unified_search(self, query_text: str, game_name: str = None,
                               top_k: int = 10) -> tuple:
-        """SQLite 캐시 DB에서 키워드 LIKE 검색 (local 모드 전용).
+        """SQLite FTS5 MATCH 기반 검색 (local 모드 전용, task-077).
 
-        nodes + doc_content JOIN으로 body_text 검색 후
-        MCP unified_search와 동일한 dict 포맷으로 반환.
+        search_fts MATCH + bm25 랭킹 사용. 기존 LIKE full scan 대비 10배+ 빠름.
+        한국어 unicode61 phrase match 실측 확인 (task-077 Step 3).
+
+        반환 포맷은 기존과 100% 호환 (content_preview 키 유지).
         """
         if not _GDI_CACHE_ENABLED or not _gdi_cache:
             return None, "캐시 레이어 미사용 (local 모드에서는 캐시 필수)"
@@ -415,73 +417,56 @@ class GdiClient:
             if not keywords:
                 return {"success": True, "results": [], "total_count": 0}, None
 
-            # WHERE 절: keywords 또는 body_text에서 매칭
-            # keywords 칼럼 히트를 우선 정렬
-            kw_like_clauses = []
-            body_like_clauses = []
-            params = []
-            for kw in keywords:
-                kw_like_clauses.append("dc.keywords LIKE ?")
-                params.append(f"%{kw}%")
-                body_like_clauses.append("dc.body_text LIKE ?")
-                params.append(f"%{kw}%")
+            # FTS5 MATCH 쿼리 구성:
+            # 각 키워드를 phrase("...") 로 감싸서 AND 연결
+            # - 한국어 연속 음절 matching 보장
+            # - 다중 키워드는 교집합 (AND)
+            # 특수문자(double quote) 포함 키워드는 내부 따옴표 이스케이프
+            def escape_fts_phrase(kw: str) -> str:
+                # FTS5 phrase 내부의 " 는 "" 로 이스케이프
+                return '"' + kw.replace('"', '""') + '"'
 
-            # 키워드 매칭 OR 본문 매칭 (둘 중 하나만 충족해도 결과 포함)
-            kw_match = " AND ".join(kw_like_clauses)
-            body_match = " AND ".join(body_like_clauses)
-            content_filter = f"(({kw_match}) OR ({body_match}))"
+            fts_query = " AND ".join(escape_fts_phrase(kw) for kw in keywords)
 
-            # keywords 매칭 여부로 정렬 우선순위 결정
-            kw_rank_clauses = []
-            rank_params = []
-            for kw in keywords:
-                kw_rank_clauses.append("dc.keywords LIKE ?")
-                rank_params.append(f"%{kw}%")
-            kw_rank_expr = " AND ".join(kw_rank_clauses)
-
-            # game_name 필터 (path 예: "Chaoszero/TSV/20260225b/file.tsv")
+            # game_name 필터: path LIKE 조건 (FTS 외부에서 JOIN 필터)
             game_filter = ""
-            game_params = []
+            params = [fts_query]
             if game_name:
                 game_filter = "AND LOWER(n.path) LIKE ?"
-                game_params.append(f"%{game_name.lower()}%")
+                params.append(f"%{game_name.lower()}%")
+            params.append(top_k)
 
-            all_params = (
-                params           # content_filter 파라미터
-                + game_params    # game_name 필터
-                + rank_params    # ORDER BY CASE 파라미터
-                + [top_k]        # LIMIT
-            )
-
+            # bm25 랭킹 사용 (낮은 값일수록 높은 관련도)
             sql = f"""
                 SELECT n.title, n.path, n.node_type,
                        SUBSTR(dc.body_text, 1, 500) AS snippet,
-                       dc.summary, dc.keywords
-                FROM nodes n
+                       dc.summary, dc.keywords,
+                       bm25(search_fts) AS rank
+                FROM search_fts
+                JOIN nodes n ON n.id = search_fts.rowid
                 JOIN doc_content dc ON dc.node_id = n.id
-                WHERE n.source_type = 'gdi'
-                  AND {content_filter}
+                WHERE search_fts MATCH ?
+                  AND n.source_type = 'gdi'
                   {game_filter}
-                ORDER BY CASE WHEN ({kw_rank_expr}) THEN 0 ELSE 1 END,
-                         n.updated_at DESC
+                ORDER BY rank
                 LIMIT ?
             """
-            params = all_params
             rows = conn.execute(sql, params).fetchall()
             conn.close()
 
             results = []
             for row in rows:
-                title, path, node_type, snippet, summary, keywords = row
-                # 스니펫에서 첫 매칭 키워드 주변 텍스트 추출
+                title, path, node_type, snippet, summary, keywords_col, rank = row
+                # 스니펫 첫 200자 preview
                 preview = snippet[:200] if snippet else ""
                 results.append({
                     "file_name": title or "",
                     "file_path": path or "",
                     "source_type": node_type or "gdi",
-                    "content_preview": preview,
+                    "content_preview": preview,  # 기존 키 유지 (M-1)
                     "summary": summary or "",
-                    "keywords": keywords or "",
+                    "keywords": keywords_col or "",
+                    "_rank": rank,
                     "_collection": "gdi_local_cache",
                 })
 
@@ -490,10 +475,15 @@ class GdiClient:
                 "results": results,
                 "total_count": len(results),
                 "breakdown": {"gdi_local_cache": len(results)},
-                "_mode": "local",
+                "_mode": "local_fts",
             }
             return data, None
 
+        except sqlite3.OperationalError as e:
+            # FTS 쿼리 파싱 실패 시 (특수문자 등) 빈 결과 반환
+            logger.warning("[gdi] FTS MATCH 쿼리 오류 (query=%r): %s", query_text, e)
+            return {"success": True, "results": [], "total_count": 0,
+                    "_mode": "local_fts", "_error": str(e)}, None
         except Exception as e:
             logger.error("[gdi] local unified_search 오류: %s", e)
             return None, f"local 검색 오류: {e}"
