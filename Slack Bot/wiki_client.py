@@ -496,9 +496,83 @@ class ConfluenceWikiClient:
             )
 
         # ── 4차 폴백: 일반 제목 검색 ─────────────────────────────
-        return self.get_page_by_title(
+        page, err = self.get_page_by_title(
             title, space_key=space_key, fetch_full=fetch_full
         )
+        if not err and page:
+            return page, None
+
+        # ── 5차 폴백: 로컬 캐시 본문 FTS 검색 (task-088) ─────────
+        # MCP cql_search + 제목 매칭 모두 실패 시 캐시 본문에서 직접 검색.
+        # Wiki 검색 fallback=all_failed 16% 회복 목적.
+        fts_page = self._fts_fallback_search(title, question, sk, fetch_full)
+        if fts_page:
+            return fts_page, None
+
+        # 모든 폴백 실패
+        return page, err
+
+    def _fts_fallback_search(self, title: str, question: str,
+                             space_key: str, fetch_full: bool) -> "dict | None":
+        """로컬 캐시 FTS 본문 검색 폴백 (task-088).
+
+        cache_manager.search_content() MATCH로 본문 키워드 매칭. 결과 있으면
+        get_page_by_id로 상세 조회. 실패 시 None 반환 (완전 실패는 호출자 처리).
+        """
+        if not _CACHE_ENABLED or not _wiki_cache:
+            return None
+        try:
+            # 검색 쿼리: title + question 결합
+            query_parts = [title.strip()]
+            if question:
+                query_parts.append(question.strip())
+            query_text = " ".join(p for p in query_parts if p)
+            if not query_text:
+                return None
+
+            results = _wiki_cache.search_content(
+                query_text=query_text,
+                source_type="wiki",
+                space_key=space_key,
+                limit=3,
+            )
+            if not results:
+                return None
+
+            best = results[0]
+            logger.info(
+                f"[wiki][FTS폴백] 본문 검색 매칭: '{best['title']}' "
+                f"(node_id={best['node_id']}, rank={best['rank']:.2f}, query={query_text[:40]!r})"
+            )
+
+            # 제목 기반 상세 조회로 본문 확보
+            if best.get("source_id"):
+                page, err = self.get_page_by_id(
+                    best["source_id"], fetch_full=fetch_full
+                ) if hasattr(self, "get_page_by_id") else (None, "get_page_by_id 미구현")
+                if not err and page:
+                    page["_fallback"] = "fts_content"
+                    return page
+
+            # ID 조회 실패 → 제목으로 재시도
+            page, err = self.get_page_by_title(
+                best["title"], space_key=space_key, fetch_full=fetch_full
+            )
+            if not err and page:
+                page["_fallback"] = "fts_content"
+                return page
+
+            # 캐시만 있고 MCP 실패한 경우: snippet으로 최소 정보 구성
+            return {
+                "title": best["title"],
+                "url": best.get("url"),
+                "text": best.get("snippet", ""),
+                "_fallback": "fts_snippet_only",
+                "_node_id": best["node_id"],
+            }
+        except Exception as e:
+            logger.warning(f"[wiki][FTS폴백] 실행 실패: {e}")
+            return None
 
     def _try_smart_cql(self, cql: str, year: str, title: str,
                        fetch_full: bool) -> "dict | None":
