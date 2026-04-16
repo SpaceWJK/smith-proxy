@@ -1,6 +1,6 @@
 # 🤖 퍼블리싱QA1팀 Slack 알림 봇 (QA Supporter)
 
-**현재 버전: `v1.6.1`** | [변경 이력 →](./changelog/CHANGELOG.md)
+**현재 버전: `v1.6.4`** | [변경 이력 →](./changelog/CHANGELOG.md)
 
 > **SGP 퍼블리싱QA1팀** 전용 Slack 자동화 봇
 > 일일 업무 헤더, QA 체크리스트, 주간 보고, 업데이트 차수 점검, 월간·분기 체크리스트를 자동 발송하고 담당자가 직접 체크할 수 있는 인터랙티브 메시지를 제공합니다.
@@ -79,7 +79,11 @@ D:\Vibe Dev\Slack Bot\              ← 프로젝트 루트
 │   ├── jira_keyword_rules.json    ← ★ Jira 키워드→JQL 매핑 (hot reload)
 │   └── wiki_keyword_rules.json    ← ★ Wiki 키워드→페이지 매핑 (hot reload)
 ├── tools/                          ← 운영 도구
-│   └── s3_manager.html            ← GDI S3 파일 업로드/다운로드 매니저
+│   ├── s3_server.py               ← Sysops 대시보드 서버 (port 9091, 로그인 시 자동 시작)
+│   ├── s3_manager.html            ← Knowledge Integration System (사용자용)
+│   ├── s3_admin.html              ← Knowledge Integration System (관리자용, Brain 탭 포함)
+│   ├── run_s3_server_silent.vbs   ← 서버 자동 시작 VBS 래퍼 (CMD 없음)
+│   └── run_cleanup_silent.vbs     ← MCP 프로세스 정리 VBS 래퍼
 ├── .env                            ← 환경변수 (비공개)
 ├── requirements.txt                ← 의존 패키지
 ├── Procfile                        ← Railway 실행 명령

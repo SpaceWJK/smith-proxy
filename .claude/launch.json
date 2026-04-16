@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kis-admin",
+      "runtimeExecutable": "D:/Vibe Dev/Slack Bot/venv/Scripts/python.exe",
+      "runtimeArgs": ["tools/s3_server.py", "--port", "9092"],
+      "port": 9092
+    },
+    {
+      "name": "s3-admin-9091",
+      "runtimeExecutable": "D:/Vibe Dev/Slack Bot/venv/Scripts/python.exe",
+      "runtimeArgs": ["tools/s3_server.py", "--port", "9091"],
+      "port": 9091
+    }
+  ]
+}

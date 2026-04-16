@@ -1,0 +1,88 @@
+{
+  "_description": "스케줄 설정 예시 템플릿. 운영 config.json에 복사하여 사용. 이 파일은 봇이 읽지 않음.",
+
+  "examples": [
+    {
+      "id": "daily-morning-checklist",
+      "name": "일일 아침 체크리스트",
+      "enabled": true,
+      "type": "daily",
+      "time": "09:00",
+      "channel": "채널ID",
+      "message_type": "checklist",
+      "title": "📋 오늘의 체크리스트",
+      "items": [
+        "업무 시작 확인",
+        "메일 및 메시지 확인",
+        "오늘 일정 검토",
+        "우선순위 업무 정리"
+      ],
+      "bot_name": "일일 알림봇",
+      "bot_emoji": ":memo:"
+    },
+
+    {
+      "id": "weekly-meeting-example",
+      "name": "주간 회의 알림 예시",
+      "enabled": true,
+      "type": "weekly",
+      "day_of_week": "monday",
+      "time": "09:00",
+      "channel": "채널ID",
+      "message_type": "text",
+      "message": "🗓️ *주간 팀 회의 안내*\n오늘 오전 10시에 팀 회의가 있습니다.",
+      "bot_name": "주간 알림봇",
+      "bot_emoji": ":calendar:"
+    },
+
+    {
+      "id": "monthly-report-example",
+      "name": "월간 보고 체크리스트 예시",
+      "enabled": true,
+      "type": "monthly",
+      "day_of_month": 1,
+      "time": "09:00",
+      "channel": "채널ID",
+      "message_type": "checklist",
+      "title": "📊 이번 달 보고 체크리스트",
+      "items": [
+        "월간 보고서 작성",
+        "KPI 집계 및 분석"
+      ],
+      "bot_name": "월간 알림봇",
+      "bot_emoji": ":bar_chart:"
+    },
+
+    {
+      "id": "biweekly-review-example",
+      "name": "격주 리뷰 예시",
+      "enabled": true,
+      "type": "biweekly",
+      "day_of_week": "thursday",
+      "time": "10:00",
+      "start_date": "2026-01-02",
+      "channel": "채널ID",
+      "message_type": "checklist",
+      "title": "🔄 격주 리뷰",
+      "items": [
+        "항목 1",
+        "항목 2"
+      ],
+      "bot_name": "격주 알림봇",
+      "bot_emoji": ":arrows_counterclockwise:"
+    },
+
+    {
+      "id": "specific-event-example",
+      "name": "특정 날짜 이벤트 예시",
+      "enabled": true,
+      "type": "specific",
+      "datetime": "2026-12-25 10:00",
+      "channel": "채널ID",
+      "message_type": "text",
+      "message": "🎯 *이벤트 알림*\n오늘 이벤트가 있습니다.",
+      "bot_name": "이벤트 알림봇",
+      "bot_emoji": ":bell:"
+    }
+  ]
+}
