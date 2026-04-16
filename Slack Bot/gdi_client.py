@@ -79,6 +79,26 @@ try:
 except Exception as _te:
     logger.info("[gdi] 폴더 택소노미 미사용: %s", _te)
 
+# ── GDI 청크 재조합 공통 모듈 (task-075) ─────────────────────────────────
+# mcp-cache-layer/scripts/reconstructors.py 를 import하여 load_gdi.py와 로직 단일화
+# scripts_path는 이미 위의 캐시 레이어 블록에서 sys.path에 추가되었음
+try:
+    from reconstructors import reconstruct_body as _reconstruct_body_shared
+    _HAS_RECONSTRUCTORS = True
+    logger.info("[gdi] reconstructors 공통 모듈 로드 완료")
+except Exception as _re_err:
+    _HAS_RECONSTRUCTORS = False
+    logger.info("[gdi] reconstructors 미사용 (fallback): %s", _re_err)
+
+    # Fallback: 메타 접두사만 제거 후 단순 결합 (MAJOR-4 반영)
+    _FALLBACK_META_RE = re.compile(
+        r"^(?:index_mode|file_type|content_type): .+\n?", re.MULTILINE
+    )
+
+    def _reconstruct_body_shared(chunks, source_type):  # noqa: F811
+        cleaned = [_FALLBACK_META_RE.sub("", c).strip() for c in chunks]
+        return "\n".join(c for c in cleaned if c)
+
 # ── GDI MCP 읽기 전용 허용 도구 (쓰기/삭제 원천 차단) ──────────────────
 # MCP는 공유 서버 → 데이터 변경 경로 완전 차단
 # S3 데이터 변경은 로컬 AWS CLI 직접 접근으로만 가능
@@ -171,161 +191,11 @@ def _clean_any_chunk(text: str) -> str:
     return text.strip()
 
 
-# ── 파서: 파일 형식별 재구성 (사람이 보는 형태) ──────────────────────────
+# ── 파일 형식별 재구성 로직은 reconstructors.py로 이동 (task-075) ────────
+# _parse_xlsx_chunk, _reconstruct_xlsx/pptx/tsv/body 제거 — load_gdi.py와 통합
+# 대신 상단 _reconstruct_body_shared(chunks, source_type) 사용 ─ reconstructors.reconstruct_body
+# (fallback: import 실패 시 _clean_chunk_text 로직 포함)
 
-def _parse_xlsx_chunk(text: str):
-    """XLSX 청크 → (sheet, row_num, {col: val})"""
-    lines = text.split("\n")
-    first_line = lines[0]
-
-    if not first_line.startswith(_XLSX_PREFIX):
-        return None, -1, {}
-
-    parts = first_line.split(" > ")
-    sheet = ""
-    row_num = -1
-    data_start = 0
-
-    for i, part in enumerate(parts):
-        if part.startswith("Sheet: "):
-            sheet = part[7:]
-        elif part.startswith("Row: "):
-            try:
-                row_num = int(part[5:])
-            except ValueError:
-                pass
-            data_start = i + 1
-            break
-
-    cols = {}
-    data_parts = parts[data_start:]
-    for j, part in enumerate(data_parts):
-        idx = part.find(": ")
-        if idx > 0:
-            key = part[:idx].strip()
-            val = part[idx + 2:].strip()
-            if j == len(data_parts) - 1 and len(lines) > 1:
-                extra = " ".join(l.strip() for l in lines[1:] if l.strip())
-                if extra:
-                    val += " " + extra
-            cols[key] = val
-
-    return sheet, row_num, cols
-
-
-def _reconstruct_xlsx(chunks: list[str]) -> str:
-    """XLSX 청크 → 시트별 마크다운 테이블."""
-    from collections import OrderedDict
-
-    sheets = OrderedDict()
-    sheet_headers = OrderedDict()
-
-    for chunk in chunks:
-        sheet, row_num, cols = _parse_xlsx_chunk(chunk)
-        if sheet is None or not cols:
-            continue
-        if sheet not in sheets:
-            sheets[sheet] = []
-            sheet_headers[sheet] = list(cols.keys())
-        else:
-            for k in cols.keys():
-                if k not in sheet_headers[sheet]:
-                    sheet_headers[sheet].append(k)
-        sheets[sheet].append(cols)
-
-    if not sheets:
-        return "\n".join(chunks)
-
-    result = []
-    for sheet_name, rows in sheets.items():
-        headers = sheet_headers[sheet_name]
-        result.append(f"## Sheet: {sheet_name}\n")
-        result.append("| " + " | ".join(headers) + " |")
-        result.append("|" + "|".join("---" for _ in headers) + "|")
-        for i, row in enumerate(rows):
-            if i >= MAX_TABLE_ROWS:
-                result.append(f"\n_(... 외 {len(rows) - MAX_TABLE_ROWS}행 생략)_")
-                break
-            vals = [row.get(h, "").replace("|", "\\|").replace("\n", " ")
-                    for h in headers]
-            result.append("| " + " | ".join(vals) + " |")
-        result.append("")
-
-    return "\n".join(result)
-
-
-def _reconstruct_pptx(chunks: list[str]) -> str:
-    """PPTX 청크 → 슬라이드별 정제 문서."""
-    parts = []
-    for chunk in chunks:
-        m = _PPTX_PREFIX_RE.match(chunk)
-        if m:
-            slide_num = m.group(1)
-            content = chunk[m.end():]
-        else:
-            content = chunk
-            slide_num = None
-        content = _PPTX_EMPTY_NOTES_RE.sub("", content).strip()
-        if not content:
-            continue
-        if slide_num:
-            parts.append(f"## Slide {slide_num}\n{content}")
-        else:
-            parts.append(content)
-    return "\n\n".join(parts)
-
-
-def _reconstruct_tsv(chunks: list[str]) -> str:
-    """TSV 청크 → 마크다운 테이블."""
-    all_rows = []
-    all_headers = []
-
-    for chunk in chunks:
-        cleaned = _CHUNK_META_RE.sub("", chunk).strip()
-        if not cleaned:
-            continue
-        cols = {}
-        for line in cleaned.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            idx = line.find(": ")
-            if idx > 0:
-                key = line[:idx]
-                val = line[idx + 2:]
-                cols[key] = val
-                if key not in all_headers:
-                    all_headers.append(key)
-        if cols:
-            all_rows.append(cols)
-
-    if not all_rows or not all_headers:
-        return "\n".join(chunks)
-
-    result = []
-    result.append("| " + " | ".join(all_headers) + " |")
-    result.append("|" + "|".join("---" for _ in all_headers) + "|")
-    for i, row in enumerate(all_rows):
-        if i >= MAX_TABLE_ROWS:
-            result.append(f"\n_(... 외 {len(all_rows) - MAX_TABLE_ROWS}행 생략)_")
-            break
-        vals = [row.get(h, "").replace("|", "\\|").replace("\n", " ")
-                for h in all_headers]
-        result.append("| " + " | ".join(vals) + " |")
-    return "\n".join(result)
-
-
-def _reconstruct_body(chunks: list[str], source_type: str) -> str:
-    """파일 형식에 맞게 청크를 사람이 보는 형태로 재구성."""
-    if not chunks:
-        return ""
-    if source_type == "generic_xlsx":
-        return _reconstruct_xlsx(chunks)
-    elif source_type == "generic_pptx":
-        return _reconstruct_pptx(chunks)
-    elif source_type == "generic_tsv":
-        return _reconstruct_tsv(chunks)
-    return "\n".join(_clean_chunk_text(c) for c in chunks if c.strip())
 
 # ── GDI 조회 전용 로거 (logs/gdi_query.log) ──────────────────────────────
 _gdi_query_logger: "logging.Logger | None" = None
@@ -890,7 +760,7 @@ def get_file_content_text(data: dict) -> str:
 
     # 형식별 재구성
     if source_type and raw_chunks:
-        return _reconstruct_body(raw_chunks, source_type)
+        return _reconstruct_body_shared(raw_chunks, source_type)
 
     # 폴백: 단순 정제
     return "\n".join(_clean_chunk_text(t) for t in raw_chunks if t.strip())
@@ -985,8 +855,8 @@ def get_file_content_full(file_name: str, game_name: str = "",
         elif _PPTX_PREFIX_RE.match(first):
             source_type = "generic_pptx"
 
-    # 형식별 재구성
-    return _reconstruct_body(raw_chunks, source_type)
+    # 형식별 재구성 (task-075: reconstructors.py 공통 모듈 사용)
+    return _reconstruct_body_shared(raw_chunks, source_type)
 
 
 # ── 폴더 택소노미 검색 ──────────────────────────────────────────────────
