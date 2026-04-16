@@ -233,7 +233,7 @@ def get_missed_items_from_channel(
     if not flat_config:
         return []
 
-    search_dates = [date_str] if date_str else _prev_weekday_dates(max_days=3)
+    search_dates = [date_str] if date_str else _prev_weekday_dates(max_days=1)
 
     for target in search_dates:
         try:
@@ -424,7 +424,8 @@ def get_missed_items_from_local_state() -> list:
         logger.info("[missed-local] checklist_state.json 비어있음 → 건너뜀")
         return []
 
-    prev_dates = set(_prev_weekday_dates(max_days=3))
+    # 전일(직전 평일) 1일만 대상 — 며칠치 누적 발송은 스팸이 됨
+    prev_dates = set(_prev_weekday_dates(max_days=1))
     missed_groups: list = []
 
     for key, entry in all_state.items():

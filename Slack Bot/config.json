@@ -292,92 +292,6 @@
     },
 
     {
-      "id": "daily-morning-checklist",
-      "name": "일일 아침 체크리스트",
-      "enabled": false,
-      "type": "daily",
-      "time": "09:00",
-      "channel": "C07PHCE4RCM",
-      "message_type": "checklist",
-      "title": "📋 오늘의 체크리스트",
-      "items": [
-        "업무 시작 확인",
-        "메일 및 메시지 확인",
-        "오늘 일정 검토",
-        "우선순위 업무 정리"
-      ],
-      "bot_name": "일일 알림봇",
-      "bot_emoji": ":memo:"
-    },
-
-    {
-      "id": "weekly-monday-meeting",
-      "name": "주간 월요일 회의 알림",
-      "enabled": false,
-      "type": "weekly",
-      "day_of_week": "monday",
-      "time": "09:00",
-      "channel": "C07PHCE4RCM",
-      "message_type": "text",
-      "message": "🗓️ *주간 팀 회의 안내*\n오늘 오전 10시에 팀 회의가 있습니다.\n회의 자료와 안건을 미리 확인해주세요.",
-      "bot_name": "주간 알림봇",
-      "bot_emoji": ":calendar:"
-    },
-
-    {
-      "id": "monthly-report-first",
-      "name": "월간 보고 체크리스트",
-      "enabled": false,
-      "type": "monthly",
-      "day_of_month": 1,
-      "time": "09:00",
-      "channel": "C07PHCE4RCM",
-      "message_type": "checklist",
-      "title": "📊 이번 달 보고 체크리스트",
-      "items": [
-        "월간 보고서 작성",
-        "KPI 집계 및 분석",
-        "팀 성과 정리",
-        "다음 달 목표 수립"
-      ],
-      "bot_name": "월간 알림봇",
-      "bot_emoji": ":bar_chart:"
-    },
-
-    {
-      "id": "weekly-thursday-review",
-      "name": "주간 목요일 스토어 랭킹 리뷰",
-      "enabled": true,
-      "type": "weekly",
-      "day_of_week": "thursday",
-      "time": "10:00",
-      "channel": "C07PHCE4RCM",
-      "message_type": "checklist",
-      "title": "🔄 주간 스토어 랭킹 리뷰",
-      "items": [
-        "스토어 랭킹 데이터 수집",
-        "국가별 변동사항 분석",
-        "주요 이슈 및 트렌드 정리",
-        "다음 주 모니터링 포인트 설정"
-      ],
-      "bot_name": "주간 알림봇",
-      "bot_emoji": ":arrows_counterclockwise:"
-    },
-
-    {
-      "id": "specific-event-example",
-      "name": "특정 이벤트 알림 예시",
-      "enabled": false,
-      "type": "specific",
-      "datetime": "2026-03-15 10:00",
-      "channel": "C07PHCE4RCM",
-      "message_type": "text",
-      "message": "🎯 *중요 이벤트 알림*\n오늘 오전 10시에 중요한 일정이 있습니다!\n관련 자료를 미리 준비해주세요.",
-      "bot_name": "이벤트 알림봇",
-      "bot_emoji": ":bell:"
-    },
-
-    {
       "id": "mission-ai-driven-qa",
       "name": "미션 진행 현황 - AI-Driven QA Efficiency",
       "enabled": true,
@@ -386,7 +300,7 @@
       "mission": {
         "mission_number": "M-01",
         "name": "Slack QA - Supporter 활용 가이드",
-        "target_date": "2026-03-27",
+        "target_date": "2026-04-24",
         "channel_name": "AI-Driven QA Efficiency",
         "sub_tasks": [
           "활용 예제 탐색 및 프롬프트 설계 → 활용 프롬프트 작성",

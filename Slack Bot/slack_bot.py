@@ -2561,22 +2561,29 @@ def _start_daily_recover_timer(sender: SlackSender, config_path: str):
             logger.error(f"[daily-recover] 복구 실패: {e}")
 
     sched = BackgroundScheduler(timezone=_KST)
-    # 09:35 — 미션 + 09:00대 스케줄 복구
+    # 09:35 — 미션 (09:00~09:30 발송) + 09:00대 일반 스케줄 복구
     sched.add_job(
         _recover_job,
         trigger=CronTrigger(hour=9, minute=35, day_of_week="mon-fri", timezone=_KST),
         id="daily_recover_0935",
         name="누락 스케줄 복구 (09:35)",
     )
-    # 10:05 — 10:00대 스케줄 복구
+    # 10:05 — 10:00대 스케줄 복구 (일일 QA 체크리스트 등)
     sched.add_job(
         _recover_job,
         trigger=CronTrigger(hour=10, minute=5, day_of_week="mon-fri", timezone=_KST),
         id="daily_recover_1005",
         name="누락 스케줄 복구 (10:05)",
     )
+    # 14:00 — 오후 최종 복구 (오전에 PC 꺼져있었을 경우 대비)
+    sched.add_job(
+        _recover_job,
+        trigger=CronTrigger(hour=14, minute=0, day_of_week="mon-fri", timezone=_KST),
+        id="daily_recover_1400",
+        name="누락 스케줄 복구 (14:00)",
+    )
     sched.start()
-    logger.info("[daily-recover] 매일 누락 복구 타이머 등록: 평일 09:35, 10:05")
+    logger.info("[daily-recover] 매일 누락 복구 타이머 등록: 평일 09:35, 10:05, 14:00")
     return sched
 
 
