@@ -221,6 +221,7 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 .dash-proc-type.other_python { background: #9a8e7d; }
 .dash-proc-type.init_brain { background: #c45c4a; }
 .dash-proc-type.weekly_batch { background: #2a8a9e; }
+.dash-proc-type.vite_dev { background: #1e7e6f; }
 .dash-proc-pid { min-width: 50px; font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace; font-size: 11px; color: var(--text2); }
 .dash-proc-mem { min-width: 55px; text-align: right; font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace; font-size: 11px; color: var(--text); }
 .dash-proc-cpu { min-width: 45px; text-align: right; font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace; font-size: 11px; }
@@ -234,6 +235,8 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 .dash-proc-status.zombie { background: rgba(196,92,74,0.2); color: var(--error); }
 .dash-proc-kill { background: none; border: 1px solid rgba(196,92,74,0.4); color: var(--error); padding: 1px 8px; border-radius: 3px; font-size: 10px; cursor: pointer; transition: all 0.15s; }
 .dash-proc-kill:hover { background: var(--error); color: white; }
+.dash-proc-restart { background: none; border: 1px solid rgba(74,138,196,0.4); color: #2a6a9a; padding: 1px 8px; border-radius: 3px; font-size: 10px; cursor: pointer; transition: all 0.15s; margin-right: 4px; }
+.dash-proc-restart:hover { background: #2a6a9a; color: white; }
 
 /* System Status Row */
 .sys-status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
@@ -420,6 +423,11 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
 .modal-overlay.show { display: flex; }
 .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; min-width: 400px; }
+/* 사용자 이름 모달 */
+#userNameModal .modal { min-width: 360px; }
+#userNameModal .subtitle { font-size: 13px; color: var(--text-dim); margin-bottom: 12px; }
+#userNameModal .name-change { font-size: 11px; color: var(--text-dim); text-align: right; margin-top: 4px; cursor: pointer; }
+#userNameModal .name-change:hover { color: var(--accent); }
 .modal h3 { margin-bottom: 16px; }
 .modal input { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 10px 14px; border-radius: 8px; font-size: 14px; margin-bottom: 16px; }
 .modal .btns { display: flex; gap: 8px; justify-content: flex-end; }
@@ -699,10 +707,15 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 @keyframes blink-dot { 0%,100%{opacity:1} 50%{opacity:0.4} }
 .brain-last-event { font-size:10px; color:var(--text2); opacity:0.7; }
 .brain-auto-label { font-size:10px; color:var(--text2); background:var(--bg1); padding:2px 6px; border-radius:3px; }
-.brain-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px 40px; overflow-y: auto; flex: 1; }
-.brain-grid .dash-card { min-height: 120px; }
+.brain-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; padding: 18px 24px; overflow-y: auto; flex: 1; width: 100%; box-sizing: border-box; }
+.brain-grid .dash-card { min-height: 180px; line-height: 1.7; padding: 14px 18px; }
+.brain-grid .dash-card h4 { margin-bottom: 10px; font-size: 14px; }
+.brain-grid .span-2 { grid-column: span 2; }
 .brain-grid .full-width { grid-column: 1 / -1; }
-.brain-stat-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 12px; border-bottom: 1px solid rgba(180,170,155,0.15); }
+.brain-stat-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; line-height: 1.6; border-bottom: 1px solid rgba(180,170,155,0.15); }
+@media (max-width: 1200px) { .brain-grid { grid-template-columns: 1fr 1fr; } .brain-grid .span-2 { grid-column: span 2; } }
+@media (max-width: 768px) { .brain-grid { grid-template-columns: 1fr; padding: 12px 16px; } .brain-grid .span-2 { grid-column: span 1; } }
+@media (min-width: 1800px) { .brain-grid { max-width: 960px; } }
 .brain-stat-row:last-child { border-bottom: none; }
 .brain-stat-label { color: var(--text2); }
 .brain-stat-value { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -710,9 +723,9 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 .brain-stat-value.warn { color: var(--warn); }
 .brain-stat-value.crit { color: var(--error); }
 /* Effectiveness bar */
-.eff-bar-wrap { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 11px; }
-.eff-bar-label { min-width: 60px; color: var(--text2); }
-.eff-bar { flex: 1; height: 14px; background: var(--surface2); border-radius: 4px; overflow: hidden; position: relative; }
+.eff-bar-wrap { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 12px; }
+.eff-bar-label { min-width: 65px; color: var(--text2); }
+.eff-bar { flex: 1; height: 16px; background: var(--surface2); border-radius: 4px; overflow: hidden; position: relative; }
 .eff-bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
 .eff-bar-fill.high { background: var(--success); }
 .eff-bar-fill.medium { background: var(--primary); }
@@ -720,17 +733,17 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 .eff-bar-fill.untested { background: var(--text2); opacity: 0.4; }
 .eff-bar-count { min-width: 24px; text-align: right; color: var(--text); font-weight: 600; font-size: 11px; }
 /* Daily chart */
-.daily-chart { display: flex; align-items: flex-end; gap: 2px; height: 80px; padding-top: 4px; }
+.daily-chart { display: flex; align-items: flex-end; gap: 2px; height: 120px; padding-top: 8px; }
 .daily-bar { flex: 1; min-width: 4px; background: var(--primary); border-radius: 2px 2px 0 0; transition: height 0.3s ease; position: relative; cursor: default; }
 .daily-bar:hover { opacity: 0.8; }
-.daily-bar[data-tip]:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 2px 6px; border-radius: 4px; font-size: 10px; white-space: nowrap; z-index: 10; }
+.daily-bar[data-tip]:not([data-tip=""]):hover::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); background: var(--bg1); border: 1px solid var(--border); color: var(--text); padding: 3px 8px; border-radius: 4px; font-size: 10px; white-space: nowrap; z-index: 10; pointer-events: none; }
 /* Category pills */
 .cat-pills { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
 .cat-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: 11px; background: var(--surface2); color: var(--text); }
 .cat-pill .cat-cnt { font-weight: 700; color: var(--primary); }
 /* Activity log */
-.brain-log { font-size: 11px; }
-.brain-log-row { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid rgba(180,170,155,0.1); }
+.brain-log { font-size: 12px; }
+.brain-log-row { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid rgba(180,170,155,0.1); }
 .brain-log-row:last-child { border-bottom: none; }
 .brain-log-time { color: var(--text2); min-width: 50px; font-variant-numeric: tabular-nums; }
 .brain-log-agent { min-width: 70px; font-weight: 600; }
@@ -740,6 +753,12 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 .brain-log-agent.human { color: #9b5ba8; }
 .brain-log-detail { color: var(--text); flex: 1; }
 .brain-unavail { color: var(--text2); font-size: 12px; padding: 20px; text-align: center; }
+.journal-heatmap { display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; }
+.journal-cell { aspect-ratio: 1; border-radius: 3px; min-width: 0; }
+.journal-cell.level-0 { background: var(--surface2); }
+.journal-cell.level-1 { background: rgba(91,138,114,0.35); }
+.journal-cell.level-2 { background: rgba(91,138,114,0.6); }
+.journal-cell.level-3 { background: var(--success); }
 .sysops-cards .dash-card { min-height: 0; padding: 8px 12px; }
 .sysops-cards .dash-card h4 { font-size: 11px; margin-bottom: 6px; padding-bottom: 4px; }
 .sysops-cards .dash-card-body { padding: 0; }
@@ -1107,6 +1126,12 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
             <span style="color:var(--text2);font-size:11px">로딩 중...</span>
           </div>
         </div>
+        <div class="dash-card" id="brainJournal">
+          <h4>&#x1F4DD; 일별 작업 기록 <span style="font-size:10px;color:var(--text2);">(최근 30일)</span></h4>
+          <div class="dash-card-body" id="brainJournalBody">
+            <span style="color:var(--text2);font-size:11px">로딩 중...</span>
+          </div>
+        </div>
         <!-- Card 3: Effectiveness 분포 -->
         <div class="dash-card" id="brainEffectiveness">
           <h4>&#x1F3AF; Effectiveness 분포</h4>
@@ -1122,7 +1147,7 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
           </div>
         </div>
         <!-- Card 5: 최근 Brain 활동 (전체 너비) -->
-        <div class="dash-card full-width" id="brainActivity">
+        <div class="dash-card" id="brainActivity">
           <h4>&#x1F4CB; 최근 Brain 활동</h4>
           <div class="dash-card-body" id="brainActivityBody">
             <span style="color:var(--text2);font-size:11px">로딩 중...</span>
@@ -1254,6 +1279,20 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
   </div>
 </div>
 
+<!-- 사용자 이름 모달 -->
+<div class="modal-overlay" id="userNameModal">
+  <div class="modal">
+    <h3>&#x1F44B; 이름을 입력해주세요</h3>
+    <p class="subtitle">접속 현황 표시를 위해 사용됩니다.</p>
+    <input type="text" id="userNameInput" placeholder="예: 홍길동" maxlength="30"
+           onkeydown="if(event.key==='Enter') confirmUserName()">
+    <div class="btns">
+      <button class="primary" onclick="confirmUserName()">확인</button>
+    </div>
+    <div class="name-change" onclick="resetUserName()">이름 변경</div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div class="toast" id="toast"></div>
 
@@ -1265,6 +1304,9 @@ let treeData = {};
 let expandedFolders = new Set(['']);
 let loadingFolders = new Set();
 let isConnected = false;
+let _heartbeatTimer = null;
+let _kisClientId = localStorage.getItem('kis_client_id') || null;
+let _kisUserName = localStorage.getItem('kis_user_name') || null;
 let isAdminMode = false;
 let pendingDeleteKey = '';
 let pendingDeleteName = '';
@@ -1364,6 +1406,87 @@ async function apiFetch(endpoint, options = {}) {
   return res.json();
 }
 
+// ========== 사용자 식별 + Heartbeat ==========
+function _genUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+function _escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showUserNameModal(prefill) {
+  const input = document.getElementById('userNameInput');
+  if (prefill) input.value = prefill;
+  input.style.borderColor = '';
+  document.getElementById('userNameModal').classList.add('show');
+  setTimeout(() => input.focus(), 100);
+}
+
+function confirmUserName() {
+  const input = document.getElementById('userNameInput');
+  const name = input.value.trim();
+  if (!name) {
+    input.style.borderColor = 'var(--error)';
+    return;
+  }
+  _kisUserName = _escHtml(name).substring(0, 30);
+  if (!_kisClientId) _kisClientId = _genUUID();
+  localStorage.setItem('kis_user_name', _kisUserName);
+  localStorage.setItem('kis_client_id', _kisClientId);
+  document.getElementById('userNameModal').classList.remove('show');
+  startHeartbeat();   // 이름 확정 즉시 heartbeat 시작 (S3 연결 여부 무관)
+  connect();
+}
+
+function resetUserName() {
+  // 이름 변경: 현재 값 유지하면서 다시 모달 표시
+  document.getElementById('userNameModal').classList.remove('show');
+  localStorage.removeItem('kis_user_name');
+  _kisUserName = null;
+  showUserNameModal(localStorage.getItem('kis_user_name') || '');
+}
+
+function startHeartbeat() {
+  if (_heartbeatTimer) return;   // 중복 방지
+  _sendHeartbeat();              // 즉시 1회 전송
+  _heartbeatTimer = setInterval(_sendHeartbeat, 30000);
+}
+
+function stopHeartbeat() {
+  if (_heartbeatTimer) {
+    clearInterval(_heartbeatTimer);
+    _heartbeatTimer = null;
+  }
+}
+
+async function _sendHeartbeat() {
+  if (!_kisClientId || !_kisUserName) return;
+  try {
+    await fetch('/api/heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: _kisClientId, user_name: _kisUserName, action: 'heartbeat' })
+    });
+  } catch (_) {}
+}
+
+function _sendLeave() {
+  if (!_kisClientId) return;
+  // keepalive:true → Content-Length 정상 전송 보장 (sendBeacon 대신)
+  try {
+    fetch('/api/heartbeat/leave', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: _kisClientId }),
+      keepalive: true
+    });
+  } catch (_) {}
+}
+
 function toggleConnection() {
   if (isConnected) {
     disconnect();
@@ -1373,6 +1496,12 @@ function toggleConnection() {
 }
 
 async function connect() {
+  // 이름 미설정 시 모달 표시 후 중단 (confirmUserName()이 connect() 재호출)
+  if (!_kisUserName) {
+    if (!_kisClientId) _kisClientId = _genUUID();
+    showUserNameModal();
+    return;
+  }
   const btn = document.getElementById('connBtn');
   const el = document.getElementById('connStatus');
   btn.textContent = 'Connecting...';
@@ -1387,6 +1516,7 @@ async function connect() {
     btn.disabled = false;
     el.textContent = `${(data.total_files || 0).toLocaleString()} files`;
     el.className = 'status ok';
+    startHeartbeat();   // 연결 성공 후 heartbeat 시작
     loadTree();
     loadFiles('');
   } catch (e) {
@@ -1399,6 +1529,8 @@ async function connect() {
 }
 
 function disconnect() {
+  stopHeartbeat();
+  _sendLeave();
   isConnected = false;
   // Exit admin mode on disconnect
   if (isAdminMode) exitAdminMode();
@@ -3384,13 +3516,20 @@ window.addEventListener('DOMContentLoaded', () => {
   // ESC key: close modals only (no overlay to close)
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-      // Close any open modal
-      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      // Close any open modal (userNameModal은 ESC로 닫지 않음)
+      document.querySelectorAll('.modal-overlay.show').forEach(m => {
+        if (m.id !== 'userNameModal') m.classList.remove('show');
+      });
     }
   });
 
-  // Auto-connect
+  // Auto-connect: 이름이 이미 있으면 heartbeat 즉시 시작
+  if (_kisUserName) startHeartbeat();
   connect();
+
+  window.addEventListener('beforeunload', () => {
+    if (isConnected) _sendLeave();
+  });
 
   // Admin 페이지: 자동 Admin 모드 진입
   if (IS_ADMIN_PAGE) {
@@ -4045,72 +4184,90 @@ function renderSysSystemStatus(procData, healthData) {
   }
   html += '</div>';
 
-  // 배치 이력 기반 동기화 상태
+  // 배치 이력 기반 동기화 상태 — 백엔드 메타데이터 기반 동적 렌더링
+  // 새 source 추가 시 백엔드 _SYNC_META에만 등록하면 자동 표시됨
   const syncData = healthData?.sync_by_source || {};
-  const syncItems = [
-    { key: 'wiki', label: 'Wiki Sync' },
-    { key: 'jira', label: 'Jira Sync' },
-    { key: 'gdi', label: 'GDI Sync' },
-    { key: 'enrichment', label: 'Enrichment' },
-  ];
+  const syncByCategory = {};
+  for (const [key, s] of Object.entries(syncData)) {
+    const cat = s.category || '기타';
+    (syncByCategory[cat] = syncByCategory[cat] || []).push([key, s]);
+  }
 
   html += '<div style="font-size:10px;color:var(--text2);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">동기화 이력</div>';
-  html += '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:12px">';
-  for (const item of syncItems) {
-    const s = syncData[item.key] || {};
-    const status = s.status || 'unknown';
-    let dotClass = 'off';
-    let statusText = '기록 없음';
-    let timeText = '';
+  html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">';
+  for (const [cat, items] of Object.entries(syncByCategory)) {
+    html += `<div style="font-size:9px;color:var(--text2);opacity:0.7;padding-left:4px">${cat}</div>`;
+    html += '<div style="display:flex;flex-direction:column;gap:4px">';
+    for (const [key, s] of items) {
+      const status = s.status || 'unknown';
+      let dotClass = 'off';
+      let statusText = '기록 없음';
+      let timeText = '';
 
-    if (status === 'success') {
-      dotClass = 'on';
-      statusText = s.updated > 0 ? `${s.updated}건 갱신` : '변경 없음';
-    } else if (status === 'failed') {
-      dotClass = 'red';
-      statusText = '실패';
-    } else if (status === 'running') {
-      dotClass = 'yellow';
-      statusText = '실행 중...';
-    }
-    // GDI enrichment N/A 처리
-    if (item.key === 'enrichment' && syncData.gdi?.enrichment_applicable === false) {
-      // enrichment에서 gdi는 제외했음을 표시하지 않음 (이미 wiki+jira만 대상)
-    }
+      if (status === 'success') {
+        dotClass = 'on';
+        statusText = s.updated > 0 ? `${s.updated}건 갱신` : '변경 없음';
+      } else if (status === 'failed' || status === 'error') {
+        dotClass = 'red';
+        statusText = '실패';
+      } else if (status === 'running') {
+        dotClass = 'yellow';
+        statusText = '실행 중...';
+      }
 
-    if (s.started_at) {
-      const ago = _timeAgo(s.started_at);
-      timeText = ago;
-      if (s.duration) timeText += ` (${s.duration}s)`;
-    }
+      if (s.started_at) {
+        const ago = _timeAgo(s.started_at);
+        timeText = ago;
+        if (s.duration) timeText += ` (${s.duration}s)`;
+      }
 
-    html += `
-      <div class="sys-status-item" style="padding:6px 10px">
-        <span class="sys-status-dot ${dotClass}"></span>
-        <span class="sys-status-name" style="font-size:11px">${item.label}</span>
-        <span class="sys-status-detail" style="margin-left:auto;display:flex;gap:8px;align-items:center">
-          <span>${statusText}</span>
-          ${timeText ? `<span style="opacity:0.6;font-size:9px">${timeText}</span>` : ''}
-        </span>
-      </div>`;
+      const colorBar = s.color ? `border-left:3px solid ${s.color}` : '';
+      // 실패 시 error_message를 tooltip + 별도 표시 — HTML 이스케이프 필수 (XSS 방어)
+      const _esc = (str) => String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+      const errorTip = s.error ? ` title="에러: ${_esc(s.error)}"` : '';
+      const errorBadge = (status === 'failed' || status === 'error') && s.error
+        ? `<span style="font-size:9px;color:var(--error);opacity:0.85">${_esc(String(s.error).slice(0, 60))}${s.error.length > 60 ? '…' : ''}</span>`
+        : '';
+      html += `
+        <div class="sys-status-item" style="padding:6px 10px;${colorBar}"${errorTip}>
+          <span class="sys-status-dot ${dotClass}"></span>
+          <span class="sys-status-name" style="font-size:11px">${s.label || key}</span>
+          <span class="sys-status-detail" style="margin-left:auto;display:flex;gap:8px;align-items:center">
+            <span>${statusText}</span>
+            ${errorBadge}
+            ${timeText ? `<span style="opacity:0.6;font-size:9px">${timeText}</span>` : ''}
+          </span>
+        </div>`;
+    }
+    html += '</div>';
   }
   html += '</div>';
 
-  // Task Scheduler 상태
+  // Task Scheduler 상태 — 카테고리별 그룹화
   const tasks = healthData?.task_scheduler || {};
   if (Object.keys(tasks).length > 0) {
-    html += '<div style="font-size:10px;color:var(--text2);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Task Scheduler</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:3px">';
+    const tasksByCategory = {};
     for (const [name, info] of Object.entries(tasks)) {
-      const shortName = name.replace('MCP-', '').replace('MCP_', '');
-      const enabled = info.enabled;
-      const dotClass = enabled === true ? 'on' : enabled === false ? 'off' : 'off';
-      html += `
-        <div class="sys-status-item" style="padding:4px 10px">
-          <span class="sys-status-dot ${dotClass}" style="width:6px;height:6px"></span>
-          <span style="font-size:10px;color:var(--text)">${shortName}</span>
-          <span class="sys-status-detail" style="font-size:9px">${enabled ? '활성' : '비활성'}${info.next_run && info.next_run !== 'N/A' ? ' · 다음: ' + info.next_run : ''}</span>
-        </div>`;
+      const cat = info.category || '기타';
+      (tasksByCategory[cat] = tasksByCategory[cat] || []).push([name, info]);
+    }
+    html += '<div style="font-size:10px;color:var(--text2);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Task Scheduler</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:8px">';
+    for (const [cat, items] of Object.entries(tasksByCategory)) {
+      html += `<div style="font-size:9px;color:var(--text2);opacity:0.7;padding-left:4px">${cat}</div>`;
+      html += '<div style="display:flex;flex-direction:column;gap:3px">';
+      for (const [name, info] of items) {
+        const enabled = info.enabled;
+        const dotClass = enabled === true ? 'on' : 'off';
+        const colorBar = info.color ? `border-left:3px solid ${info.color}` : '';
+        html += `
+          <div class="sys-status-item" style="padding:4px 10px;${colorBar}" title="${name}">
+            <span class="sys-status-dot ${dotClass}" style="width:6px;height:6px"></span>
+            <span style="font-size:10px;color:var(--text)">${info.label || name}</span>
+            <span class="sys-status-detail" style="font-size:9px">${enabled ? '활성' : '비활성'}${info.next_run && info.next_run !== 'N/A' ? ' · 다음: ' + info.next_run : ''}</span>
+          </div>`;
+      }
+      html += '</div>';
     }
     html += '</div>';
   }
@@ -4161,10 +4318,10 @@ function renderSysProcessMgmt(procData) {
     ${(zombies.length + dupes.length > 0 && canAct) ? `<button class="sys-action-btn danger" style="margin-left:8px;padding:2px 10px;font-size:10px" onclick="cleanupProcesses()">\uC804\uCCB4 \uC815\uB9AC</button>` : ''}
   </div>`;
 
-  // 프로세스 목록 — 관련 프로세스만 표시 (other_python은 좀비/중복일 때만)
-  const knownTypes = ['slack_bot', 's3_server', 'auto_sync', 'enrichment', 'init_brain', 'weekly_batch'];
+  // 프로세스 목록 — 백엔드 메타데이터(visible_default + color) 기반 렌더링
+  // 새 프로세스 타입 추가 시 백엔드 _PROC_TYPE_META 한 곳만 수정하면 자동 반영됨
   const visible = procData.processes.filter(p =>
-    knownTypes.includes(p.type) || p.status !== 'normal'
+    p.visible_default || p.status !== 'normal'
   );
   const hiddenCount = procData.processes.length - visible.length;
 
@@ -4172,13 +4329,17 @@ function renderSysProcessMgmt(procData) {
     const statusCls = proc.status || 'normal';
     const cpuCls = proc.cpu > 50 ? 'high' : 'low';
     const showKill = canAct && !proc.is_self && statusCls !== 'normal';
+    const showRestart = canAct && proc.restart_target && statusCls === 'normal';
+    // 백엔드 color 메타를 인라인 스타일로 적용 (CSS 클래스 누락 방지)
+    const typeStyle = proc.color ? `style="background:${proc.color}"` : '';
     html += `
       <div class="dash-proc-item" title="PID ${proc.pid} | ${proc.cmd_preview || ''}">
-        <span class="dash-proc-type ${proc.type}">${proc.label}</span>
+        <span class="dash-proc-type ${proc.type}" ${typeStyle}>${proc.label}</span>
         <span class="dash-proc-status ${statusCls}">${statusCls === 'normal' ? '\u2713' : statusCls}</span>
         <span class="dash-proc-pid">${proc.script || ('PID ' + proc.pid)}</span>
         <span class="dash-proc-mem">${proc.mem_mb} MB</span>
         <span class="dash-proc-cpu ${cpuCls}">${proc.cpu}%</span>
+        ${showRestart ? `<button class="dash-proc-restart" onclick="restartServer('${proc.restart_target}','${proc.label.replace(/'/g,"\\'")}')">재시작</button>` : ''}
         ${showKill ? `<button class="dash-proc-kill" onclick="killProcess(${proc.pid})">Kill</button>` : ''}
       </div>`;
   }
@@ -4233,6 +4394,28 @@ function renderSysClients(clientsData) {
 }
 
 // ── Process Actions (API 호출) ──────────────────────────────
+async function restartServer(target, label) {
+  if (!confirm(label + ' 서버를 재시작합니까?')) return;
+  const pw = IS_ADMIN_PAGE ? (window.KIS_ADMIN_PW || ADMIN_PW) : ADMIN_PW;
+  try {
+    toast(label + ' 재시작 중...', 'info');
+    const res = await fetch('/api/server/restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, password: pw }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      toast(data.message || (label + ' 재시작 완료'), 'success');
+      setTimeout(loadSysops, 3000);
+    } else {
+      toast(data.error || data.message || '재시작 실패', 'error');
+    }
+  } catch (e) {
+    toast('재시작 요청 실패: ' + e.message, 'error');
+  }
+}
+
 async function killProcess(pid) {
   if (!confirm('PID ' + pid + ' \uD504\uB85C\uC138\uC2A4\uB97C \uC885\uB8CC\uD569\uB2C8\uAE4C?')) return;
   const pw = IS_ADMIN_PAGE ? (window.KIS_ADMIN_PW || ADMIN_PW) : ADMIN_PW;
@@ -4653,6 +4836,7 @@ async function loadBrain() {
     } else {
       renderBrainOverview(data);
       renderBrainDaily(data.daily_accumulation || []);
+      renderBrainJournal(data.daily_journal || []);
       renderBrainEffectiveness(data.effectiveness_distribution || {});
       renderBrainCategories(data);
       renderBrainActivity(data.recent_activity || []);
@@ -4750,6 +4934,40 @@ function renderBrainDaily(days) {
     <span>${sorted[0]?.date?.slice(5) || ''}</span>
     <span>총 ${total}건 · 일평균 ${avg}건</span>
     <span>${sorted[sorted.length-1]?.date?.slice(5) || ''}</span>
+  </div>`;
+  el.innerHTML = html;
+}
+
+function renderBrainJournal(days) {
+  const el = document.getElementById('brainJournalBody');
+  if (!el) return;
+  if (!days.length) { el.innerHTML = '<div class="brain-unavail">기록 데이터 없음</div>'; return; }
+  const recorded = days.filter(d => d.count > 0).length;
+  const total = days.length;
+  const rate = Math.round((recorded / total) * 100);
+  const rateClass = rate >= 70 ? 'ok' : rate >= 40 ? 'warn' : 'crit';
+  let html = '<div class="journal-heatmap">';
+  for (const d of days) {
+    const dateShort = d.date.slice(5);
+    const lvl = d.count === 0 ? 0 : d.count <= 2 ? 1 : d.count <= 5 ? 2 : 3;
+    html += `<div class="journal-cell level-${lvl}" data-tip="${dateShort}: ${d.count}건" title="${dateShort}: ${d.count}건"></div>`;
+  }
+  html += '</div>';
+  html += `<div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--text2);margin-top:6px;">
+    <span>${days[0]?.date?.slice(5) || ''}</span>
+    <span>${days[days.length-1]?.date?.slice(5) || ''}</span>
+  </div>`;
+  html += `<div style="margin-top:10px;">`;
+  html += `<div class="brain-stat-row"><span class="brain-stat-label">기록률</span><span class="brain-stat-value ${rateClass}">${rate}% (${recorded}/${total}일)</span></div>`;
+  html += `<div class="brain-stat-row"><span class="brain-stat-label">총 기록</span><span class="brain-stat-value">${days.reduce((s,d)=>s+d.count,0)}건</span></div>`;
+  html += `</div>`;
+  html += `<div style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:9px;color:var(--text2);">
+    <span>적음</span>
+    <div class="journal-cell level-0" style="display:inline-block"></div>
+    <div class="journal-cell level-1" style="display:inline-block"></div>
+    <div class="journal-cell level-2" style="display:inline-block"></div>
+    <div class="journal-cell level-3" style="display:inline-block"></div>
+    <span>많음</span>
   </div>`;
   el.innerHTML = html;
 }

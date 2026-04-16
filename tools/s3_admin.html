@@ -303,6 +303,8 @@ body { font-family: 'Plus Jakarta Sans', -apple-system, sans-serif; background: 
 .dash-proc-status.zombie { background: rgba(196,92,74,0.15); color: #a04838; }
 .dash-proc-kill { background: none; border: 1px solid rgba(196,92,74,0.4); color: #a04838; padding: 1px 8px; border-radius: 3px; font-size: 10px; cursor: pointer; transition: all 0.15s; }
 .dash-proc-kill:hover { background: var(--error); color: white; }
+.dash-proc-restart { background: none; border: 1px solid rgba(74,138,196,0.4); color: #2a6a9a; padding: 1px 8px; border-radius: 3px; font-size: 10px; cursor: pointer; transition: all 0.15s; margin-right: 4px; }
+.dash-proc-restart:hover { background: #2a6a9a; color: white; }
 
 /* System Status Row */
 .sys-status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 8px; }
@@ -4215,68 +4217,92 @@ function renderSysSystemStatus(procData, healthData) {
   }
   html += '</div>';
 
-  // 배치 이력 기반 동기화 상태
+  // 배치 이력 기반 동기화 상태 — 백엔드 메타데이터 기반 동적 렌더링
+  // 새 source 추가 시 백엔드 _SYNC_META에만 등록하면 자동 표시됨
   const syncData = healthData?.sync_by_source || {};
-  const syncItems = [
-    { key: 'wiki', label: 'Wiki Sync' },
-    { key: 'jira', label: 'Jira Sync' },
-    { key: 'gdi', label: 'GDI Sync' },
-    { key: 'enrichment', label: 'Enrichment' },
-  ];
+  const syncEntries = Object.entries(syncData);
+  // 카테고리별 그룹화
+  const syncByCategory = {};
+  for (const [key, s] of syncEntries) {
+    const cat = s.category || '기타';
+    (syncByCategory[cat] = syncByCategory[cat] || []).push([key, s]);
+  }
 
   html += '<div style="font-size:10px;color:var(--text2);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">동기화 이력</div>';
-  html += '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:12px">';
-  for (const item of syncItems) {
-    const s = syncData[item.key] || {};
-    const status = s.status || 'unknown';
-    let dotClass = 'off';
-    let statusText = '기록 없음';
-    let timeText = '';
+  html += '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">';
+  for (const [cat, items] of Object.entries(syncByCategory)) {
+    html += `<div style="font-size:9px;color:var(--text2);opacity:0.7;padding-left:4px">${cat}</div>`;
+    html += '<div style="display:flex;flex-direction:column;gap:4px">';
+    for (const [key, s] of items) {
+      const status = s.status || 'unknown';
+      let dotClass = 'off';
+      let statusText = '기록 없음';
+      let timeText = '';
 
-    if (status === 'success') {
-      dotClass = 'on';
-      statusText = s.updated > 0 ? `${s.updated}건 갱신` : '변경 없음';
-    } else if (status === 'failed') {
-      dotClass = 'red';
-      statusText = '실패';
-    } else if (status === 'running') {
-      dotClass = 'yellow';
-      statusText = '실행 중...';
+      if (status === 'success') {
+        dotClass = 'on';
+        statusText = s.updated > 0 ? `${s.updated}건 갱신` : '변경 없음';
+      } else if (status === 'failed' || status === 'error') {
+        dotClass = 'red';
+        statusText = '실패';
+      } else if (status === 'running') {
+        dotClass = 'yellow';
+        statusText = '실행 중...';
+      }
+
+      if (s.started_at) {
+        const ago = _timeAgo(s.started_at);
+        timeText = ago;
+        if (s.duration) timeText += ` (${s.duration}s)`;
+      }
+
+      const colorBar = s.color ? `border-left:3px solid ${s.color}` : '';
+      // 실패 시 error_message를 tooltip + 별도 표시 — HTML 이스케이프 필수 (XSS 방어)
+      const _esc = (str) => String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+      const errorTip = s.error ? ` title="에러: ${_esc(s.error)}"` : '';
+      const errorBadge = (status === 'failed' || status === 'error') && s.error
+        ? `<span style="font-size:9px;color:var(--error);opacity:0.85">${_esc(String(s.error).slice(0, 60))}${s.error.length > 60 ? '…' : ''}</span>`
+        : '';
+      html += `
+        <div class="sys-status-item" style="padding:6px 10px;${colorBar}"${errorTip}>
+          <span class="sys-status-dot ${dotClass}"></span>
+          <span class="sys-status-name" style="font-size:11px">${s.label || key}</span>
+          <span class="sys-status-detail" style="margin-left:auto;display:flex;gap:8px;align-items:center">
+            <span>${statusText}</span>
+            ${errorBadge}
+            ${timeText ? `<span style="opacity:0.6;font-size:9px">${timeText}</span>` : ''}
+          </span>
+        </div>`;
     }
-
-    if (s.started_at) {
-      const ago = _timeAgo(s.started_at);
-      timeText = ago;
-      if (s.duration) timeText += ` (${s.duration}s)`;
-    }
-
-    html += `
-      <div class="sys-status-item" style="padding:6px 10px">
-        <span class="sys-status-dot ${dotClass}"></span>
-        <span class="sys-status-name" style="font-size:11px">${item.label}</span>
-        <span class="sys-status-detail" style="margin-left:auto;display:flex;gap:8px;align-items:center">
-          <span>${statusText}</span>
-          ${timeText ? `<span style="opacity:0.6;font-size:9px">${timeText}</span>` : ''}
-        </span>
-      </div>`;
+    html += '</div>';
   }
   html += '</div>';
 
-  // Task Scheduler 상태
+  // Task Scheduler 상태 — 카테고리별 그룹화
   const tasks = healthData?.task_scheduler || {};
   if (Object.keys(tasks).length > 0) {
-    html += '<div style="font-size:10px;color:var(--text2);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Task Scheduler</div>';
-    html += '<div style="display:flex;flex-direction:column;gap:3px">';
+    const tasksByCategory = {};
     for (const [name, info] of Object.entries(tasks)) {
-      const shortName = name.replace('MCP-', '').replace('MCP_', '');
-      const enabled = info.enabled;
-      const dotClass = enabled === true ? 'on' : enabled === false ? 'off' : 'off';
-      html += `
-        <div class="sys-status-item" style="padding:4px 10px">
-          <span class="sys-status-dot ${dotClass}" style="width:6px;height:6px"></span>
-          <span style="font-size:10px;color:var(--text)">${shortName}</span>
-          <span class="sys-status-detail" style="font-size:9px">${enabled ? '활성' : '비활성'}${info.next_run && info.next_run !== 'N/A' ? ' · 다음: ' + info.next_run : ''}</span>
-        </div>`;
+      const cat = info.category || '기타';
+      (tasksByCategory[cat] = tasksByCategory[cat] || []).push([name, info]);
+    }
+    html += '<div style="font-size:10px;color:var(--text2);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Task Scheduler</div>';
+    html += '<div style="display:flex;flex-direction:column;gap:8px">';
+    for (const [cat, items] of Object.entries(tasksByCategory)) {
+      html += `<div style="font-size:9px;color:var(--text2);opacity:0.7;padding-left:4px">${cat}</div>`;
+      html += '<div style="display:flex;flex-direction:column;gap:3px">';
+      for (const [name, info] of items) {
+        const enabled = info.enabled;
+        const dotClass = enabled === true ? 'on' : 'off';
+        const colorBar = info.color ? `border-left:3px solid ${info.color}` : '';
+        html += `
+          <div class="sys-status-item" style="padding:4px 10px;${colorBar}" title="${name}">
+            <span class="sys-status-dot ${dotClass}" style="width:6px;height:6px"></span>
+            <span style="font-size:10px;color:var(--text)">${info.label || name}</span>
+            <span class="sys-status-detail" style="font-size:9px">${enabled ? '활성' : '비활성'}${info.next_run && info.next_run !== 'N/A' ? ' · 다음: ' + info.next_run : ''}</span>
+          </div>`;
+      }
+      html += '</div>';
     }
     html += '</div>';
   }
@@ -4327,10 +4353,10 @@ function renderSysProcessMgmt(procData) {
     ${(zombies.length + dupes.length > 0 && canAct) ? `<button class="sys-action-btn danger" style="margin-left:8px;padding:2px 10px;font-size:10px" onclick="cleanupProcesses()">\uC804\uCCB4 \uC815\uB9AC</button>` : ''}
   </div>`;
 
-  // 프로세스 목록 — 관련 프로세스만 표시 (other_python은 좀비/중복일 때만)
-  const knownTypes = ['slack_bot', 's3_server', 'auto_sync', 'enrichment', 'init_brain', 'weekly_batch'];
+  // 프로세스 목록 — 백엔드 메타데이터(visible_default + color) 기반 렌더링
+  // 새 프로세스 타입 추가 시 백엔드 _PROC_TYPE_META 한 곳만 수정하면 자동 반영됨
   const visible = procData.processes.filter(p =>
-    knownTypes.includes(p.type) || p.status !== 'normal'
+    p.visible_default || p.status !== 'normal'
   );
   const hiddenCount = procData.processes.length - visible.length;
 
@@ -4338,13 +4364,16 @@ function renderSysProcessMgmt(procData) {
     const statusCls = proc.status || 'normal';
     const cpuCls = proc.cpu > 50 ? 'high' : 'low';
     const showKill = canAct && !proc.is_self && statusCls !== 'normal';
+    const showRestart = canAct && proc.restart_target && statusCls === 'normal';
+    const typeStyle = proc.color ? `style="background:${proc.color}"` : '';
     html += `
       <div class="dash-proc-item" title="PID ${proc.pid} | ${proc.cmd_preview || ''}">
-        <span class="dash-proc-type ${proc.type}">${proc.label}</span>
+        <span class="dash-proc-type ${proc.type}" ${typeStyle}>${proc.label}</span>
         <span class="dash-proc-status ${statusCls}">${statusCls === 'normal' ? '\u2713' : statusCls}</span>
         <span class="dash-proc-pid">${proc.script || ('PID ' + proc.pid)}</span>
         <span class="dash-proc-mem">${proc.mem_mb} MB</span>
         <span class="dash-proc-cpu ${cpuCls}">${proc.cpu}%</span>
+        ${showRestart ? `<button class="dash-proc-restart" onclick="restartServer('${proc.restart_target}','${proc.label.replace(/'/g,"\\'")}')">재시작</button>` : ''}
         ${showKill ? `<button class="dash-proc-kill" onclick="killProcess(${proc.pid})">Kill</button>` : ''}
       </div>`;
   }
@@ -4399,6 +4428,28 @@ function renderSysClients(clientsData) {
 }
 
 // ── Process Actions (API 호출) ──────────────────────────────
+async function restartServer(target, label) {
+  if (!confirm(label + ' 서버를 재시작합니까?')) return;
+  const pw = IS_ADMIN_PAGE ? (window.KIS_ADMIN_PW || ADMIN_PW) : ADMIN_PW;
+  try {
+    toast(label + ' 재시작 중...', 'info');
+    const res = await fetch('/api/server/restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, password: pw }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      toast(data.message || (label + ' 재시작 완료'), 'success');
+      setTimeout(loadSysops, 3000);
+    } else {
+      toast(data.error || data.message || '재시작 실패', 'error');
+    }
+  } catch (e) {
+    toast('재시작 요청 실패: ' + e.message, 'error');
+  }
+}
+
 async function killProcess(pid) {
   if (!confirm('PID ' + pid + ' \uD504\uB85C\uC138\uC2A4\uB97C \uC885\uB8CC\uD569\uB2C8\uAE4C?')) return;
   const pw = IS_ADMIN_PAGE ? (window.KIS_ADMIN_PW || ADMIN_PW) : ADMIN_PW;
