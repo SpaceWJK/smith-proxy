@@ -756,12 +756,46 @@ def get_file_content_text(data: dict) -> str:
     return "\n".join(_clean_chunk_text(t) for t in raw_chunks if t.strip())
 
 
+def _select_best_file(file_info: dict, others: list, target_hint: str | None) -> tuple:
+    """[task-083] 동명 파일 후보 중 best match 선택.
+
+    Returns: (selected_file_info, reason)
+        reason: "no_alternatives" | "exact_path_match" |
+                "best_prefix_match" | "fallback_first"
+    """
+    candidates = [file_info] + (others or [])
+    if len(candidates) <= 1:
+        return file_info, "no_alternatives"
+    if not target_hint:
+        return file_info, "fallback_first"
+    norm_hint = target_hint.replace('\\', '/').lower()
+    # 1차: exact match 또는 endswith
+    for c in candidates:
+        cpath = (c.get('file_path') or '').replace('\\', '/').lower()
+        if cpath and (cpath == norm_hint or cpath.endswith(norm_hint)):
+            return c, "exact_path_match"
+    # 2차: longest common prefix
+    def _score(c):
+        cpath = (c.get('file_path') or '').replace('\\', '/').lower()
+        i = 0
+        while i < min(len(cpath), len(norm_hint)) and cpath[i] == norm_hint[i]:
+            i += 1
+        return i
+    best = max(candidates, key=_score)
+    return best, "best_prefix_match"
+
+
 def get_file_content_full(file_name: str, game_name: str = "",
-                          mcp: "McpSession | None" = None) -> str:
+                          mcp: "McpSession | None" = None,
+                          target_path_hint: str | None = None) -> str:
     """파일 전체 텍스트 반환 (캐시 우선 → MCP 폴백).
 
     1) SQLite doc_content.body_text 조회 (일괄 적재 데이터 — 이미 재구성됨)
     2) 없으면 MCP search_by_filename 전체 페이지 수집 → 형식별 재구성
+
+    Args:
+        target_path_hint: [task-083] 동명 파일 다수 시 의도 경로 힌트.
+            제공 시 _select_best_file로 best match 후보 선정 + 경고 로그.
 
     Returns: 파일 전체 텍스트 (없으면 빈 문자열)
     """
@@ -821,6 +855,24 @@ def get_file_content_full(file_name: str, game_name: str = "",
             file_info = data.get("file", {})
             if file_info:
                 source_type = file_info.get("source_type", "")
+                # [task-083] 동명 파일 N>1 검증 (silent failure 방지)
+                others = data.get("other_matching_files", []) or []
+                if others:
+                    selected, reason = _select_best_file(
+                        file_info, others, target_path_hint)
+                    total = 1 + len(others)
+                    cand_paths = [file_info.get("file_path", "")] + [
+                        o.get("file_path", "") for o in others[:5]]
+                    if reason == "exact_path_match":
+                        logger.info(
+                            "[gdi:task-083] 동명 파일 %d개 — hint=%s, selected_path=%s (reason=%s)",
+                            total, target_path_hint, selected.get("file_path", ""), reason)
+                    else:
+                        logger.warning(
+                            "[gdi:task-083] 동명 파일 %d개 감지 — hint=%s, used_path=%s (reason=%s, candidates=%s)",
+                            total, target_path_hint or "(none)",
+                            file_info.get("file_path", ""), reason, cand_paths)
+                    # NOTE: MVP는 경고만. 자동 재선택 청크 수집은 향후 개선.
 
         chunks = data.get("chunks", [])
         for c in chunks:
