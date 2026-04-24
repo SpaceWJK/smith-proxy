@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-04-24 (금) — 세션 30 연장 (즉시조치 + task-105 진단 + Tesseract + 파서 확장)
+
+### 추가 완료
+- **task-082 종결 기준 6개 중 4개 충족**
+  - 기준3 SQL parity: `D:\Vibe Dev\AI Brain\_workspace\tasks\task-082\sql_parity.md`
+  - 기준5 20쿼리 smoke: **100% hit** (청크 18건, 캐시 2건, 평균 87.8ms)
+  - 기준6 이월 버킷: `_workspace/backlog/ai_context_bucket.md` + `retrieval_bucket.md`
+  - task-082 상태: `awaiting_deploy` (기준 1/2는 task-105 해제 후)
+
+- **task-105 성능 진단 완료 (수정은 세션 31)**
+  - 원인: regex 아님. `LEFT JOIN doc_meta + ORDER BY n.id + offset=0 재페치`가 매 배치 TEMP B-TREE 생성
+  - 해결: Partial Index + seek pagination (`_workspace/tasks/task-105/diagnosis.md`)
+
+- **Tesseract 설치 + 파서 확장** (task-110 completed)
+  - `winget install UB-Mannheim.TesseractOCR` (관리자 권한 불필요)
+  - 한국어 언어팩: `C:\Users\es-wjkim\tessdata\kor.traineddata`
+  - `file_parsers.py` 3종 확장:
+    - `_autodetect_tesseract()`: Windows 표준 경로 자동 탐지
+    - `parse_pptx`: 발표자 노트 추출 추가
+    - `parse_html` 신규: alt/title/figure/figcaption/base64 OCR
+  - E2E: 74MB PPTX 89슬라이드 75이미지 36.1초 파싱 + 노트 추출 검증
+
+### 교훈
+- DB 성능 문제는 cProfile보다 **EXPLAIN QUERY PLAN** 먼저
+- Tesseract 같은 도구는 **winget 관리자 권한 불필요** (이전 task-110 "관리자 권한 필요" 가정 교정)
+- 세션 내 종결 기준 엄격 체크 후 status 전환 (조기 종결 롤백 사고)
+
+---
+
 ## 2026-04-24 (금) — 세션 30 (awaiting_deploy 전수 감사 + Phase A/B 배포)
 
 ### 배경
