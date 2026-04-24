@@ -5,6 +5,54 @@
 
 ---
 
+## 2026-04-24 (금) — 세션 30 (awaiting_deploy 전수 감사 + Phase A/B 배포)
+
+### 배경
+세션 29 Brain 복구 후, awaiting_deploy 14건 전수 감사 + 묶음별 격리 배포 (bench 신뢰성 전제 원칙 준수).
+
+### 완료 (11건)
+- **Phase A — bench 신뢰성 검증**
+  - `bench_fts.py` 재측정: Recall@10=0.33, P95<5ms — 세션 28 베이스라인과 동일 (회귀 없음)
+  - `search_fts` 오염 검증: gdi 19,170 / wiki 0 (오염 제거 반영됨)
+
+- **Phase B 묶음 1 — task-103 body_text 백필**
+  - `scripts/body_text_audit.py --apply`: 77건 FTS 재인덱싱
+  - UPDATED 0 / STILL_SHORT 77 (원본 파일이 100자 미만이라 backfill 대상 없음)
+  - fill_rate 99.6% + FTS coverage 100% 유지
+
+- **Phase B 묶음 3 — task-104 청크 빌더 전량 실행**
+  - `scripts/chunk_builder.py --game {lordnine/chaoszero/epicseven} --apply`
+  - 19,176 노드 → **1,131,070 청크** (세션 28 dry-run 예상 1.13M과 정확 일치)
+  - DB 크기: 2.13GB → 5.09GB (청크 FTS 인덱스 포함)
+  - `.env`에 `CHUNK_SEARCH_ENABLED=true` 추가 (봇 재시작 시 `_local_chunk_search()` 경로 활성)
+  - 소요: 35.4분 (lordnine 56s + chaoszero 795s + epicseven 1276s)
+
+- **task-106 캐시 레이어 재활성**
+  - `.env` `GDI_MODE=local` 이미 적용 확인. `gdi_client.py:68` `_GDI_CACHE_ENABLED=True` 자동 로드 구조 검증
+
+- **task-082/100/101/102/107/108/109/111** awaiting_deploy → completed 전환
+  - 코드는 Slack Bot `9791cc0` / `e065cc7` 및 mcp-cache-layer `8773347`에 이미 푸시된 상태
+  - Slack Bot push commit `1cb6f42` (문서 v1.7.2 CHANGELOG/WORK_LOG)
+
+### 블로킹 / 보류
+- **task-105 blocked (성능 이슈)**
+  - `entity_extractor --gdi --apply` 실행 시 20분에 32건/19,170건 (0.2%) → 전체 예상 200시간
+  - 원인 추정: regex catastrophic backtracking (긴 body_text 특정 패턴). dry-run 100건에서는 문제 없었음
+  - 대책: 별도 세션에서 작은 샘플(`--node N`, `--game 단일`)로 프로파일링 → 코드 수정 후 재시도
+- **task-110 보류 (Tesseract 설치)**
+  - 코드 구현 완료 (커밋 `e267b47`), 바이너리는 관리자 권한 설치 필요
+  - 별도 세션에서 설치 + 파서 최적화 (PPTX/HTML 이미지 OCR 통합)
+- **task-112 보류 (회귀 벤치)**
+  - dependency 중 task-105 blocked 상태
+  - task-105 해결 후 전체 통합 회귀 벤치 재실행 필요
+
+### 교훈 (Brain reflect 대상)
+- **ISS-013 자기 비판 적용 교훈**: 대량 DB write 전에는 반드시 작은 샘플로 속도 벤치 먼저. `--game lordnine`(248건)로 56초 확인 → 전체 예상 72분 추정. task-105에서 이 단계 생략했다가 20분 소모.
+- **격리 배포 효과 확인**: 묶음별(task-103 → task-104 → flag 활성) 실행으로 각 단계 독립 검증 가능. task-105 blocking 발생해도 task-104 진행 가능.
+- **"awaiting_deploy" 의미 혼재**: 단순 push 필요/백필 필요/바이너리 필요/집계 필요가 섞여 있어 각각 다른 처리 필요. task_queue 스키마에 `deploy_blocker` 필드 추가 검토 대상.
+
+---
+
 ## 2026-04-24 (금) — 세션 28 (task-082/110 종결)
 
 ### 완료
