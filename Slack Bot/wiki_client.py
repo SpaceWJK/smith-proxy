@@ -27,6 +27,7 @@ import requests
 
 from mcp_session import McpSession
 from game_aliases import detect_game_in_text
+from search.cql_parallel import run_parallel_cql
 
 # ── MCP 캐시 레이어 (optional — import 실패 시 캐시 없이 동작) ──────────────
 try:
@@ -422,24 +423,20 @@ class ConfluenceWikiClient:
 
         # ── 1차: 게임명 + 연도 + 키워드 조합 CQL ─────────────────
         if game_ancestor_id and year:
-            for kw in keywords[:3]:
-                cql = (
-                    f'ancestor = {game_ancestor_id} AND '
-                    f'title ~ "{year}" AND title ~ "{kw}" '
-                    f'AND space = "{sk}" AND type=page '
-                    f'ORDER BY lastmodified DESC'
-                )
-                page = self._try_smart_cql(cql, year, title, fetch_full)
-                if page:
-                    return page, None
-
-            # 연도만으로 ancestor 내 검색
-            cql = (
+            _cqls_1 = [
+                f'ancestor = {game_ancestor_id} AND '
+                f'title ~ "{year}" AND title ~ "{kw}" '
+                f'AND space = "{sk}" AND type=page '
+                f'ORDER BY lastmodified DESC'
+                for kw in keywords[:3]
+            ] + [
                 f'ancestor = {game_ancestor_id} AND '
                 f'title ~ "{year}" AND space = "{sk}" AND type=page '
                 f'ORDER BY lastmodified DESC'
+            ]
+            page = run_parallel_cql(
+                [lambda c=c: self._try_smart_cql(c, year, title, fetch_full) for c in _cqls_1]
             )
-            page = self._try_smart_cql(cql, year, title, fetch_full)
             if page:
                 return page, None
 
@@ -449,30 +446,40 @@ class ConfluenceWikiClient:
 
         # ── 2차: 게임명 + 키워드 (연도 없이) ─────────────────────
         if game_ancestor_id:
-            for kw in keywords[:3]:
-                cql = (
+            _game_canonical = game["canonical"] if game else ""
+
+            def _search_kw_2nd(kw):
+                _cql = (
                     f'ancestor = {game_ancestor_id} AND '
                     f'title ~ "{kw}" '
                     f'AND space = "{sk}" AND type=page '
                     f'ORDER BY lastmodified DESC'
                 )
-                logger.info(f"[wiki][스마트검색] 게임+키워드 CQL: {cql}")
+                logger.info(f"[wiki][스마트검색] 게임+키워드 CQL: {_cql}")
                 raw, err = self._mcp.call_tool(
                     "cql_search",
-                    {"cql": cql, "limit": 5, "expand": "body.view"},
+                    {"cql": _cql, "limit": 5, "expand": "body.view"},
+                    timeout=5,
                 )
                 if err:
-                    continue
+                    return None
                 results = self._parse_cql_results(raw)
                 if results:
-                    page = self._cql_result_to_page_dict(
+                    _page = self._cql_result_to_page_dict(
                         results[0], title, fetch_full=fetch_full
                     )
                     logger.info(
-                        f"[wiki][스마트검색] 게임+키워드 발견: {page['title']} "
-                        f"(game={game['canonical']}, kw={kw})"
+                        f"[wiki][스마트검색] 게임+키워드 발견: {_page['title']} "
+                        f"(game={_game_canonical}, kw={kw})"
                     )
-                    return page, None
+                    return _page
+                return None
+
+            page = run_parallel_cql(
+                [lambda kw=kw: _search_kw_2nd(kw) for kw in keywords[:3]]
+            )
+            if page:
+                return page, None
 
             logger.info(
                 f"[wiki][스마트검색] 게임 ancestor 내 미발견 → 연도 검색 폴백"
@@ -480,15 +487,17 @@ class ConfluenceWikiClient:
 
         # ── 3차: 연도 + 키워드 (게임명 없이, 기존 로직) ──────────
         if year:
-            for kw in keywords[:3]:
-                cql = (
-                    f'title ~ "{year}" AND title ~ "{kw}" '
-                    f'AND space = "{sk}" AND type=page '
-                    f'ORDER BY lastmodified DESC'
-                )
-                page = self._try_smart_cql(cql, year, title, fetch_full)
-                if page:
-                    return page, None
+            _cqls_3 = [
+                f'title ~ "{year}" AND title ~ "{kw}" '
+                f'AND space = "{sk}" AND type=page '
+                f'ORDER BY lastmodified DESC'
+                for kw in keywords[:3]
+            ]
+            page = run_parallel_cql(
+                [lambda c=c: self._try_smart_cql(c, year, title, fetch_full) for c in _cqls_3]
+            )
+            if page:
+                return page, None
 
             logger.info(
                 f"[wiki][스마트검색] 연도 특정 페이지 미발견 → 일반 검색 폴백 "
@@ -575,7 +584,7 @@ class ConfluenceWikiClient:
             return None
 
     def _try_smart_cql(self, cql: str, year: str, title: str,
-                       fetch_full: bool) -> "dict | None":
+                       fetch_full: bool, timeout: int = 5) -> "dict | None":
         """스마트 CQL을 실행하여 연도가 제목에 포함된 최적 결과를 반환.
 
         결과 중 연도가 제목에 포함된 것을 우선 선택합니다.
@@ -586,6 +595,7 @@ class ConfluenceWikiClient:
         raw, err = self._mcp.call_tool(
             "cql_search",
             {"cql": cql, "limit": 5, "expand": "body.view"},
+            timeout=timeout,
         )
         if err:
             return None

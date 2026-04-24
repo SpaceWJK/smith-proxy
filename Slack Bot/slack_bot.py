@@ -993,6 +993,9 @@ def _jira_search(client, jql: str, user_id: str, user_name: str,
                           elapsed_ms=elapsed)
         return
     respond(text=jc.format_search_results(data, jql))
+    mirror_age = data.get("_mirror_age") if isinstance(data, dict) else None
+    if mirror_age:
+        respond(text=f"_(미러 기준 {mirror_age} — MCP 장애로 로컬 캐시 사용)_")
     jc.log_jira_query(user_id=user_id, user_name=user_name,
                       action="search", query=jql, result="검색 완료",
                       elapsed_ms=elapsed)
@@ -2212,12 +2215,16 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                                               action="ask_claude_project", query=text,
                                               error=str(err), elapsed_ms=elapsed)
                             return
+                        # 미러 fallback 사용 시 타임스탬프 표시 (task-108)
+                        mirror_age = data.get("_mirror_age") if isinstance(data, dict) else None
                         context = jc.get_search_context_text(data)
                         if not context:
                             respond(text=f":information_source: *{target}* 프로젝트에서 관련 이슈를 찾을 수 없습니다.")
                             return
                         _jira_ask_claude(context, target, question, respond,
                                         display_question=f"/jira {text}")
+                        if mirror_age:
+                            respond(text=f"_(미러 기준 {mirror_age} — MCP 장애로 로컬 캐시 사용)_")
                         jc.log_jira_query(user_id=user_id, user_name=user_name,
                                           action="ask_claude_project", query=text,
                                           result=f"프로젝트: {project_key}",

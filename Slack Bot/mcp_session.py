@@ -12,6 +12,7 @@ MCP Streamable HTTP 프로토콜 세션 관리 클래스.
 
 import json
 import logging
+import threading
 import requests
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class McpSession:
         self._label       = label
         self._session_id  = None
         self._initialized = False
+        self._initializing = False
         self._req_id      = 0
 
         self._http = requests.Session()
@@ -43,11 +45,14 @@ class McpSession:
         if headers:
             self._http.headers.update(headers)
 
+        self._lock = threading.Lock()
+
     # -- 내부 헬퍼 ----------------------------------------------------------
 
     def _next_id(self) -> int:
-        self._req_id += 1
-        return self._req_id
+        with self._lock:
+            self._req_id += 1
+            return self._req_id
 
     def _extra_headers(self) -> dict:
         return {"Mcp-Session-Id": self._session_id} if self._session_id else {}
@@ -86,15 +91,17 @@ class McpSession:
             sid = (r.headers.get("Mcp-Session-Id")
                    or r.headers.get("mcp-session-id"))
             if sid:
-                self._session_id = sid
+                with self._lock:
+                    self._session_id = sid
 
             if r.status_code == 202:          # 알림에 대한 정상 응답
                 return None, None
             if r.status_code >= 400:
                 # 세션 만료/인증 오류 -> 세션 상태 초기화 (call_tool 재연결 대비)
                 if r.status_code in (400, 401, 403):
-                    self._initialized = False
-                    self._session_id  = None
+                    with self._lock:
+                        self._initialized = False
+                        self._session_id  = None
                 return None, f"HTTP {r.status_code}: {r.text[:300]}"
 
             ct = r.headers.get("Content-Type", "")
@@ -123,35 +130,52 @@ class McpSession:
 
     def initialize(self) -> tuple:
         """MCP 세션 초기화 (최초 1회). -> (True/False, error_str)"""
-        if self._initialized:
+        with self._lock:
+            if self._initialized:
+                return True, None
+            if self._initializing:
+                return False, "초기화 진행 중"  # 이중 초기화 방지
+            self._initializing = True
+
+        try:
+            result, err = self._post({
+                "jsonrpc": "2.0",
+                "method" : "initialize",
+                "id"     : self._next_id(),
+                "params" : {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities"   : {},
+                    "clientInfo"     : {"name": "slack-bot", "version": "1.0"},
+                },
+            })
+            if err:
+                logger.error(f"[{self._label}] MCP 초기화 실패: {err}")
+                with self._lock:
+                    self._initializing = False
+                return False, f"MCP 초기화 실패: {err}"
+
+            # notifications/initialized (응답 무시)
+            self._post({"jsonrpc": "2.0", "method": "notifications/initialized"},
+                       timeout=10)
+
+            with self._lock:
+                self._initialized = True
+                self._initializing = False
+            logger.info(f"[{self._label}] MCP 세션 초기화 완료. session_id={self._session_id}")
             return True, None
-
-        result, err = self._post({
-            "jsonrpc": "2.0",
-            "method" : "initialize",
-            "id"     : self._next_id(),
-            "params" : {
-                "protocolVersion": "2024-11-05",
-                "capabilities"   : {},
-                "clientInfo"     : {"name": "slack-bot", "version": "1.0"},
-            },
-        })
-        if err:
-            logger.error(f"[{self._label}] MCP 초기화 실패: {err}")
-            return False, f"MCP 초기화 실패: {err}"
-
-        # notifications/initialized (응답 무시)
-        self._post({"jsonrpc": "2.0", "method": "notifications/initialized"},
-                   timeout=10)
-
-        self._initialized = True
-        logger.info(f"[{self._label}] MCP 세션 초기화 완료. session_id={self._session_id}")
-        return True, None
+        except Exception as e:
+            with self._lock:
+                self._initializing = False
+            return False, str(e)
 
     def call_tool(self, name: str, arguments: dict,
-                  _retry: bool = True) -> tuple:
+                  _retry: bool = True, timeout: int = 30) -> tuple:
         """
         MCP 도구 호출. 세션 만료 감지 시 자동 재연결 후 1회 재시도.
+
+        Parameters
+        ----------
+        timeout : HTTP 요청 타임아웃(초). 병렬 실행 시 5 전달 권장.
 
         Returns
         -------
@@ -167,16 +191,17 @@ class McpSession:
             "method" : "tools/call",
             "id"     : self._next_id(),
             "params" : {"name": name, "arguments": arguments},
-        })
+        }, timeout=timeout)
 
         # 세션 만료 감지 -> 세션 리셋 후 1회 재시도
         if err and _retry and self._is_session_error(err):
             logger.warning(
                 f"[{self._label}] 세션 만료 감지, 재연결 후 재시도 ({name}): {err[:80]}"
             )
-            self._initialized = False
-            self._session_id  = None
-            return self.call_tool(name, arguments, _retry=False)
+            with self._lock:
+                self._initialized = False
+                self._session_id  = None
+            return self.call_tool(name, arguments, _retry=False, timeout=timeout)
 
         if err:
             logger.error(f"[{self._label}] MCP 도구 호출 오류 ({name}): {err}")

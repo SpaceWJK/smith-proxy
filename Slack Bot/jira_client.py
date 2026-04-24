@@ -63,6 +63,21 @@ try:
 except Exception as _e:
     logger.info("[jira] 캐시 레이어 미사용: %s", _e)
 
+# ── Jira 미러 fallback (옵셔널 — task-108) ─────────────────────────────────
+_mirror_search = None    # scripts.jira_mirror.search_mirror
+_mirror_age_fn = None    # scripts.jira_mirror.get_mirror_age_str
+try:
+    _mirror_cache_path = "D:/Vibe Dev/QA Ops/mcp-cache-layer"
+    if _mirror_cache_path not in _sys.path:
+        _sys.path.insert(0, _mirror_cache_path)
+    from scripts.jira_mirror import (
+        search_mirror as _mirror_search,
+        get_mirror_age_str as _mirror_age_fn,
+    )
+    logger.info("[jira] 미러 fallback 로드 완료")
+except Exception as _me:
+    logger.info("[jira] 미러 fallback 미사용: %s", _me)
+
 # ── L1 인메모리 캐시 ─────────────────────────────────────────────────────
 _JIRA_MEM_CACHE: dict = {}  # {key: (data, timestamp)}
 
@@ -80,10 +95,30 @@ def _mem_set(key: str, data):
     _JIRA_MEM_CACHE[key] = (data, time.time())
 
 
+def _jql_to_query_text(jql: str) -> str:
+    """JQL에서 검색어 텍스트를 추출한다 (미러 fallback용)."""
+    import re as _re
+    m = _re.search(r'(?:text|summary)\s*~\s*["\'](.+?)["\']', jql, _re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return jql
+
+
+def _extract_project_from_jql(jql: str) -> str:
+    """JQL에서 project 키를 추출한다."""
+    import re as _re
+    m = _re.search(r'project\s*=\s*["\']?([A-Z][A-Z0-9_-]+)["\']?', jql, _re.IGNORECASE)
+    return m.group(1).upper() if m else ""
+
+
 JIRA_MCP_URL = os.getenv(
     "JIRA_MCP_URL", "http://mcp.sginfra.net/confluence-jira-mcp"
 )
-_DEFAULT_USERNAME = "es-wjkim"
+if JIRA_MCP_URL.startswith("http://"):
+    logger.warning("[jira] JIRA_MCP_URL이 평문 HTTP입니다 — 토큰이 평문 전송될 수 있습니다.")
+_JIRA_USERNAME = os.getenv("JIRA_USERNAME", "")
+if not _JIRA_USERNAME:
+    logger.warning("[jira] JIRA_USERNAME 환경변수가 설정되지 않았습니다.")
 
 # ── Jira 조회 전용 로거 (logs/jira_query.log) ────────────────────────────
 _jira_query_logger: "logging.Logger | None" = None
@@ -152,7 +187,7 @@ def _get_mcp() -> McpSession:
         _mcp_session = McpSession(
             url=JIRA_MCP_URL,
             headers={
-                "x-confluence-jira-username": os.getenv("JIRA_USERNAME", _DEFAULT_USERNAME),
+                "x-confluence-jira-username": _JIRA_USERNAME,
                 "x-confluence-jira-token": os.getenv("JIRA_TOKEN", ""),
             },
             label="jira",
@@ -486,6 +521,7 @@ class JiraClient:
     def search_issues(self, jql: str, max_results: int = 10) -> tuple:
         """
         JQL 검색 (캐시 미적용 — 검색 결과는 매번 달라질 수 있음).
+        MCP 장애 시 jira_mirror 테이블 fallback (task-108).
 
         Returns: (parsed_data, error_str)
         """
@@ -494,6 +530,18 @@ class JiraClient:
             "limit": max_results,
         })
         if err:
+            # MCP 실패 → 미러 fallback 시도
+            if _mirror_search:
+                try:
+                    pkey = _extract_project_from_jql(jql) or None
+                    query = _jql_to_query_text(jql)
+                    mirror_results = _mirror_search(query, project_key=pkey)
+                    if mirror_results:
+                        age = _mirror_age_fn(pkey) if _mirror_age_fn else "미러 없음"
+                        logger.info("[jira] MCP 장애 → 미러 fallback (%d건, %s)", len(mirror_results), age)
+                        return {"issues": mirror_results, "_mirror_age": age}, None
+                except Exception as _fe:
+                    logger.warning("[jira] 미러 fallback 실패: %s", _fe)
             return None, err
         return self._parse_raw(raw), None
 
