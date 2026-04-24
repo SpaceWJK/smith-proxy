@@ -4198,20 +4198,27 @@ function renderSysSystemStatus(procData, healthData) {
   if (!ss) { el.innerHTML = '<span style="color:var(--text2);font-size:11px">데이터 없음</span>'; return; }
 
   // 프로세스 상태 (봇/서버)
-  const procItems = [
-    { key: 'slack_bot', label: 'Slack Bot', icon: '\u{1F916}' },
-    { key: 's3_server', label: 'KIS Server', icon: '\u{1F4BE}' },
-  ];
+  // 프로세스 상태 — 백엔드 system_status 동적 렌더링
+  const procIcons = {
+    slack_bot: '\u{1F916}', s3_server: '\u{1F4BE}', auto_sync: '\u{1F504}',
+    enrichment: '\u{2728}', vite_dev: '\u{1F310}', qa_workflow_api: '\u{1F527}',
+    issue_backend: '\u{1F4CA}',
+  };
+  const procLabels = {
+    slack_bot: 'Slack Bot', s3_server: 'KIS Server', auto_sync: 'Auto Sync',
+    enrichment: 'Enrichment', vite_dev: 'Dev Servers', qa_workflow_api: 'QA Workflow API',
+    issue_backend: 'Issue Dashboard API',
+  };
 
   let html = '<div style="font-size:10px;color:var(--text2);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">프로세스</div>';
   html += '<div class="sys-status-grid" style="grid-template-columns:1fr 1fr;margin-bottom:12px">';
-  for (const item of procItems) {
-    const s = ss[item.key] || {};
+  for (const [key, s] of Object.entries(ss)) {
+    if (!s || !procLabels[key]) continue;
     const on = s.running;
     html += `
       <div class="sys-status-item">
         <span class="sys-status-dot ${on ? 'on' : 'off'}"></span>
-        <span class="sys-status-name">${item.icon} ${item.label}</span>
+        <span class="sys-status-name">${procIcons[key] || ''} ${procLabels[key]}</span>
         <span class="sys-status-detail">${on ? (s.count > 1 ? s.count + '\uAC1C \uC2E4\uD589 \uC911' : '\uC2E4\uD589 \uC911') : 'Stopped'}</span>
       </div>`;
   }
@@ -4350,7 +4357,8 @@ function renderSysProcessMgmt(procData) {
   html += `<div style="font-size:11px;color:var(--text2);margin-bottom:6px">
     <span style="color:#a04838">\uC880\uBE44 ${zombies.length}</span> \u00B7
     <span style="color:#96712e">\uC911\uBCF5 ${dupes.length}</span>
-    ${(zombies.length + dupes.length > 0 && canAct) ? `<button class="sys-action-btn danger" style="margin-left:8px;padding:2px 10px;font-size:10px" onclick="cleanupProcesses()">\uC804\uCCB4 \uC815\uB9AC</button>` : ''}
+    ${(zombies.length + dupes.length > 0 && canAct) ? `<button class="sys-action-btn danger" style="margin-left:8px;padding:2px 10px;font-size:10px" onclick="cleanupProcesses()">전체 정리</button>` : ''}
+    ${canAct ? `<button class="sys-action-btn" style="margin-left:8px;padding:2px 10px;font-size:10px;background:#2a6a9a;color:white;border:none;border-radius:3px;cursor:pointer" onclick="restartAllServers()">전체 재시작</button>` : ''}
   </div>`;
 
   // 프로세스 목록 — 백엔드 메타데이터(visible_default + color) 기반 렌더링
@@ -4428,6 +4436,29 @@ function renderSysClients(clientsData) {
 }
 
 // ── Process Actions (API 호출) ──────────────────────────────
+async function restartAllServers() {
+  if (!confirm('모든 서버를 순차 재시작합니까?\n(KIS Server 제외 — 수동 재시작 필요)')) return;
+  const pw = IS_ADMIN_PAGE ? (window.KIS_ADMIN_PW || ADMIN_PW) : ADMIN_PW;
+  try {
+    toast('전체 서버 재시작 중...', 'info');
+    const res = await fetch('/api/server/restart-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      const msg = (data.results || []).map(r => `${r.label}: ${r.ok ? '✓' : '✗'}`).join(', ');
+      toast(data.message || msg, data.success ? 'success' : 'error');
+      setTimeout(loadSysops, 5000);
+    } else {
+      toast(data.error || '전체 재시작 실패', 'error');
+    }
+  } catch (e) {
+    toast('전체 재시작 요청 실패: ' + e.message, 'error');
+  }
+}
+
 async function restartServer(target, label) {
   if (!confirm(label + ' 서버를 재시작합니까?')) return;
   const pw = IS_ADMIN_PAGE ? (window.KIS_ADMIN_PW || ADMIN_PW) : ADMIN_PW;

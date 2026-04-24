@@ -170,6 +170,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_process_restart_bot()
         elif self.path == "/api/server/restart":
             self._handle_server_restart()
+        elif self.path == "/api/server/restart-all":
+            self._handle_server_restart_all()
         elif self.path == "/api/server/shutdown":
             self._handle_server_shutdown()
         elif self.path == "/api/heartbeat":
@@ -624,11 +626,15 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         _TASK_KEYWORDS = ("MCP", "mcp", "Slack", "slack", "Brain", "brain", "KIS", "kis", "QA", "qa")
         try:
             # 1) CSV로 전체 태스크 + NextRun 조회
-            csv_out = subprocess.check_output(
+            csv_raw = subprocess.check_output(
                 ['schtasks', '/query', '/fo', 'CSV', '/nh'],
-                text=True, timeout=10, creationflags=_NO_WINDOW,
-                encoding='utf-8', errors='replace',
+                timeout=10, creationflags=_NO_WINDOW,
             )
+            # Windows schtasks는 시스템 로케일(CP949)로 출력 — UTF-8 디코딩 시 한글 깨짐
+            try:
+                csv_out = csv_raw.decode('utf-8')
+            except UnicodeDecodeError:
+                csv_out = csv_raw.decode('cp949', errors='replace')
             seen_tasks = set()
             matched_tasks = []  # [(full_path, display_name, next_run)]
             for line in csv_out.strip().splitlines():
@@ -1073,6 +1079,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         "weekly_batch": {"color": "#2a8a9e", "visible": True},
         "vite_dev":     {"color": "#1e7e6f", "visible": True},
         "issue_backend": {"color": "#3b6ea5", "visible": True},
+        "qa_workflow_api": {"color": "#b86d3b", "visible": True},
         "other_python": {"color": "#9a8e7d", "visible": False},  # 좀비/중복일 때만 표시
     }
 
@@ -1135,10 +1142,12 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             # ── 서비스 포트 → 라벨/pm2 앱명 매핑 ──
             # pm2 로 관리되는 dev 서버들. restart target 은 pm2 앱명(문자열).
             _VITE_PORTS = {
-                "5174": ("vite_dev", "QA 대시보드", "issue-dashboard"),
-                "5175": ("vite_dev", "에이전트 팀", "agent-dashboard"),
-                "5176": ("vite_dev", "QA Workflow Client", "qa-workflow-client"),
-                "4000": ("vite_dev", "QA Workflow API", "qa-workflow-server"),
+                "5174": ("vite_dev", "QA 대시보드"),
+                "5175": ("vite_dev", "에이전트 팀"),
+                "5176": ("vite_dev", "QA Workflow Client"),
+            }
+            _SERVICE_PORTS = {
+                "4000": ("qa_workflow_api", "QA Workflow API"),
             }
             # 전체 정리에서 Vite/Node 화이트리스트 (절대 zombie/duplicate 판정 안 함)
             _NODE_WHITELIST_CMD = ("claude", ".claude", "mcp-remote", "pdf-filler", "context7")
@@ -1160,16 +1169,14 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                     # 화이트리스트: Claude/MCP 관련 → 목록에서 제외
                     if any(w in cmd for w in _NODE_WHITELIST_CMD):
                         continue
-                    # Vite 서버: 리스닝 포트 기반 식별
-                    vite_label = None
-                    pm2_app_name = None
-                    for port, (vtype, vlabel, pm2_name) in _VITE_PORTS.items():
+                    # Vite/서비스 포트 기반 식별
+                    matched = False
+                    for port, (vtype, vlabel) in {**_VITE_PORTS, **_SERVICE_PORTS}.items():
                         if port in pid_ports:
-                            vite_label = vlabel
                             ptype, label = vtype, vlabel
-                            pm2_app_name = pm2_name
+                            matched = True
                             break
-                    if vite_label is None:
+                    if not matched:
                         # 포트 미매핑 node: 알 수 없는 node → 목록 제외
                         continue
                 else:
@@ -1212,9 +1219,12 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 # s3_server는 자기 자신 보호 위해 제외 (관리자가 KIS 서버를 재시작하면 이 핸들러가 죽음)
                 restart_target = None
                 if ptype == "vite_dev":
-                    # pm2 앱명을 그대로 restart target 으로 사용 — 이름 기반 단일 진실.
-                    # 프로세스가 사라져도 pm2 list 에는 남아있으므로 다른 곳에서 복구 가능.
-                    restart_target = pm2_app_name
+                    for port in ("5174", "5175", "5176"):
+                        if port in pid_ports:
+                            restart_target = f"vite_dev_{port}"
+                            break
+                elif ptype == "qa_workflow_api":
+                    restart_target = "qa_workflow_api"
                 elif ptype == "slack_bot":
                     restart_target = "slack_bot"
                 elif ptype == "issue_backend":
@@ -1238,6 +1248,28 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
                 seen_types.setdefault(ptype, []).append(proc_info)
                 procs.append(proc_info)
 
+            # ── 부모-자식 병합 ──
+            # pythonw.exe는 부모(~5MB)+자식(메인) 쌍으로 실행됨.
+            # mem < 5MB인 프로세스를 부모로 간주하여 표시에서 제거.
+            _MERGE_TYPES = {"slack_bot", "s3_server"}
+            for mtype in _MERGE_TYPES:
+                group = seen_types.get(mtype, [])
+                if len(group) >= 2:
+                    # mem < 5MB인 부모 프로세스 식별 후 제거
+                    parents = [p for p in group if p["mem_mb"] < 10]
+                    children = [p for p in group if p["mem_mb"] >= 10]
+                    if parents and children:
+                        # 가장 큰 자식에 병합 정보 기록
+                        main_child = max(children, key=lambda p: p["mem_mb"])
+                        main_child["parent_pid"] = parents[0]["pid"]
+                        total = len(parents) + len(children)
+                        main_child["script"] = f'{main_child["script"]} ({total} procs)'
+                        # 부모들 표시 제거
+                        for parent in parents:
+                            if parent in procs:
+                                procs.remove(parent)
+                        seen_types[mtype] = children
+
             # ── 좀비 판정: python only, vite_dev는 절대 zombie 아님 ──
             zombies = []
             for proc in procs:
@@ -1252,7 +1284,7 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             duplicates = []
             warnings = []
             DUP_THRESHOLD = {"slack_bot": 2, "s3_server": 2}
-            _DUP_EXEMPT = {"vite_dev", "other_python"}  # 중복 판정 면제 타입
+            _DUP_EXEMPT = {"vite_dev", "qa_workflow_api", "issue_backend", "other_python"}  # 중복 판정 면제 타입
             for ptype, group in seen_types.items():
                 if ptype in _DUP_EXEMPT:
                     continue
@@ -1271,7 +1303,8 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
             # ── 시스템 상태 요약 ──
             system_status = {}
-            for ptype in ("slack_bot", "s3_server", "auto_sync", "enrichment"):
+            for ptype in ("slack_bot", "s3_server", "auto_sync", "enrichment",
+                         "vite_dev", "qa_workflow_api", "issue_backend"):
                 group = seen_types.get(ptype, [])
                 normal = [p for p in group if p["status"] == "normal"]
                 system_status[ptype] = {
@@ -1587,6 +1620,12 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         "vite_dev_5175": {"label": "에이전트 팀", "pm2_name": "agent-dashboard"},
         "vite_dev_5176": {"label": "QA Workflow Client", "pm2_name": "qa-workflow-client"},
         "vite_dev_4000": {"label": "QA Workflow API", "pm2_name": "qa-workflow-server"},
+        "qa_workflow_api": {
+            "label": "QA Workflow API",
+            "kill_port": 4000,
+            "exec": ["cmd", "/c", "pm2", "restart", "qa-workflow-server"],
+            "cwd": "D:/Vibe Dev/QA Workflow",
+        },
         "issue_backend": {
             "label": "Issue Dashboard API",
             "kill_port": 9100,
@@ -1716,6 +1755,101 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             "killed_pids": killed_pids,
             "new_pid": new_pid,
             "message": f"{cfg['label']} 재시작 완료 (PID: {new_pid})" if new_pid else f"{cfg['label']} 재시작 실패",
+        })
+
+    def _handle_server_restart_all(self):
+        """POST /api/server/restart-all — 등록된 모든 서버 순차 재시작 (Admin 전용).
+
+        s3_server 자기 자신은 제외 (자기 kill 시 응답 유실 위험).
+        순서: API 서버 → 클라이언트 순서 보장.
+        """
+        body = self._read_json_body()
+        if not self._check_admin_pw(body):
+            return
+
+        # s3_server 제외, API 우선 순서 정의
+        restart_order = [
+            "slack_bot",
+            "qa_workflow_api",
+            "issue_backend",
+            "vite_dev_5174",
+            "vite_dev_5175",
+            "vite_dev_5176",
+        ]
+
+        results = []
+        for target in restart_order:
+            cfg = self._RESTART_TARGETS.get(target)
+            if not cfg:
+                continue
+            try:
+                # 각 target 재시작 로직 (기존 _handle_server_restart 로직 재사용)
+                if target == "slack_bot":
+                    # slack_bot은 전용 핸들러의 로직 직접 호출 대신 간략화
+                    proc_data = self._dash_processes()
+                    bot_pids = [p["pid"] for p in proc_data.get("processes", [])
+                                if p["type"] == "slack_bot" and not p.get("is_self")]
+                    for pid in bot_pids:
+                        subprocess.run(['taskkill', '/pid', str(pid), '/f'],
+                                       capture_output=True, timeout=10, creationflags=_NO_WINDOW)
+
+                    venv_python = os.path.join(_PROJECT_ROOT, "venv", "Scripts", "python.exe")
+                    python_exe = venv_python if os.path.exists(venv_python) else "python"
+                    bot_script = os.path.join(_BOT_SRC, "slack_bot.py")
+                    if os.path.exists(bot_script):
+                        env = os.environ.copy()
+                        env["PYTHONIOENCODING"] = "utf-8"
+                        subprocess.Popen([python_exe, bot_script, '--commands-only'],
+                                         cwd=_PROJECT_ROOT, env=env, creationflags=_NO_WINDOW,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    results.append({"target": target, "label": cfg["label"], "ok": True})
+                    continue
+
+                # kill (포트 기반)
+                if cfg.get("kill_port"):
+                    ps_kill = (
+                        f"Get-NetTCPConnection -State Listen -LocalPort {cfg['kill_port']} "
+                        "-ErrorAction SilentlyContinue | ForEach-Object {{ $_.OwningProcess }} | Sort-Object -Unique"
+                    )
+                    out = subprocess.check_output(
+                        ['powershell', '-NoProfile', '-Command', ps_kill],
+                        text=True, timeout=8, creationflags=_NO_WINDOW,
+                    ).strip()
+                    for line in out.splitlines():
+                        if line.strip().isdigit():
+                            subprocess.run(['taskkill', '/pid', line.strip(), '/f', '/t'],
+                                           capture_output=True, timeout=10, creationflags=_NO_WINDOW)
+
+                # start (WMI)
+                venv_pythonw = os.path.join(_PROJECT_ROOT, "venv", "Scripts", "pythonw.exe")
+                subs = {
+                    "venv_python": os.path.join(_PROJECT_ROOT, "venv", "Scripts", "python.exe"),
+                    "venv_pythonw": venv_pythonw if os.path.exists(venv_pythonw) else "pythonw",
+                    "root": _PROJECT_ROOT,
+                }
+                cmd_list = [c.format(**subs) if isinstance(c, str) else c for c in cfg["exec"]]
+                cwd = cfg["cwd"].format(**subs) if isinstance(cfg["cwd"], str) else cfg["cwd"]
+
+                ps_create = (
+                    "$wmi = [wmiclass]'Win32_Process'; "
+                    f"$r = $wmi.Create('{' '.join(cmd_list)}', '{cwd}'); "
+                    "$r.ProcessId"
+                )
+                subprocess.check_output(
+                    ['powershell', '-NoProfile', '-Command', ps_create],
+                    text=True, timeout=15, creationflags=_NO_WINDOW,
+                )
+                results.append({"target": target, "label": cfg["label"], "ok": True})
+            except Exception as e:
+                results.append({"target": target, "label": cfg["label"], "ok": False, "error": str(e)[:100]})
+
+        ok_count = sum(1 for r in results if r["ok"])
+        self._json_response({
+            "success": ok_count == len(results),
+            "results": results,
+            "ok_count": ok_count,
+            "total": len(results),
+            "message": f"{ok_count}/{len(results)} 서버 재시작 완료 (KIS Server 제외 — 수동 재시작 필요)",
         })
 
     def _handle_server_shutdown(self):
@@ -3162,20 +3296,41 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def _fix_pythonw_stdio():
-    """pythonw.exe 환경에서 stdout/stderr가 None일 때 파일로 리다이렉트.
+    """stdout/stderr 안전 보장 — 두 가지 문제 해결:
 
-    pythonw.exe는 콘솔이 없어 sys.stdout/stderr가 None이 됨.
-    http.server의 log_request()가 stderr.write()를 호출하면 크래시 →
-    TCP 연결은 맺히지만 빈 응답(Empty reply) 반환하는 문제 발생.
+    1. pythonw.exe: stdout/stderr가 None → 파일로 리다이렉트
+    2. CP949 콘솔: non-ASCII 문자 print 시 UnicodeEncodeError → 서버 크래시
+       (ISS-016: 2026-04-24 em dash '—' 로 서버 사망)
+
+    두 경우 모두 UTF-8 인코딩 로그 파일로 출력하여 근본 해결.
     """
     log_dir = os.path.join(os.path.dirname(STATIC_DIR), "logs")
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, "s3_server.log")
 
+    # Case 1: pythonw.exe — stdout/stderr가 None
     if sys.stdout is None:
         sys.stdout = open(log_path, "a", encoding="utf-8", buffering=1)
     if sys.stderr is None:
         sys.stderr = open(log_path, "a", encoding="utf-8", buffering=1)
+
+    # Case 2: CP949 콘솔 — non-ASCII 문자에서 UnicodeEncodeError 발생 방지
+    # stdout 인코딩이 utf-8이 아니면 UTF-8 래퍼로 교체
+    import io
+    for stream_name in ('stdout', 'stderr'):
+        stream = getattr(sys, stream_name, None)
+        if stream is not None and hasattr(stream, 'encoding'):
+            if stream.encoding and stream.encoding.lower().replace('-', '') != 'utf8':
+                try:
+                    wrapped = io.TextIOWrapper(
+                        stream.buffer, encoding='utf-8', errors='replace',
+                        line_buffering=True,
+                    )
+                    setattr(sys, stream_name, wrapped)
+                except (AttributeError, ValueError):
+                    # buffer 속성 없거나 이미 닫힌 경우 → 파일로 대체
+                    setattr(sys, stream_name,
+                            open(log_path, "a", encoding="utf-8", buffering=1))
 
 
 def main():
@@ -3187,14 +3342,14 @@ def main():
     args = parser.parse_args()
 
     server = http.server.ThreadingHTTPServer(("0.0.0.0", args.port), ProxyHandler)
-    print(f"GDI S3 File Manager → http://localhost:{args.port}/s3_manager.html")
-    print(f"GDI API proxy       → http://localhost:{args.port}/api/*")
+    print(f"GDI S3 File Manager -> http://localhost:{args.port}/s3_manager.html")
+    print(f"GDI API proxy       -> http://localhost:{args.port}/api/*")
 
     if not args.silent:
         import webbrowser
         webbrowser.open(f"http://localhost:{args.port}/s3_manager.html")
     else:
-        print("Silent mode — browser not opened")
+        print("Silent mode - browser not opened")
 
     try:
         server.serve_forever()
