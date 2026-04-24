@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-04-24 (금) — 세션 28 (task-082/110 종결)
+
+### 완료
+- **task-082: 검색 정확도 고도화 Phase A 종결**
+  - `bench_fts.py` `measure()` SQL 수정: raw FTS MATCH → JOIN nodes+doc_content + `source_type='gdi'` + BM25 ORDER — gdi_client._local_unified_search() 패턴 이식
+  - `search_fts` wiki 46개 오염 엔트리 삭제 (19,216 → 19,170)
+  - KPI 베이스라인: Miss Rate 82.5%, Body Text 99.2%(PASS), P90 3.9ms
+  - 커밋: `f3d50c9`
+- **task-110: PPTX 이미지 OCR — Tesseract 한국어 (task-110)**
+  - `file_parsers.py` `_ocr_image()` 추가: pytesseract+PIL, graceful degradation (Tesseract 미설치 시 경고 1회 후 스킵)
+  - 4개 단위 테스트 (`tests/test_file_parsers_ocr.py`) — T-2/T-4/T-5/T-6 PASS
+  - 커밋: `e267b47`
+- **task-108: jira_mirror.py 버그 수정**
+  - `MCPSession` → `McpSession` 클래스명 수정, 인증 헤더 누락 수정
+  - 커밋: `19f9954`
+
+### KPI 현황
+| KPI | 결과 | 임계값 | 판정 |
+|-----|------|--------|------|
+| Miss Rate | 82.5% | <40% | FAIL (베이스라인 — 고도화 백로그 이관) |
+| 시간범위 Hit | 17.9% | ≥80% | FAIL (베이스라인) |
+| P90 레이턴시 | 3.9ms | - | 우수 |
+| Body Text 비율 | 99.2% | ≥98% | PASS |
+
+### 다음 단계 (백로그)
+- AI 맥락 고도화 bucket: PPTX 텍스트 박스 누락 보완, XLSX 병합 셀, 이미지 OCR (Tesseract 설치 후)
+- 구조적 검색 고도화 bucket: 하이브리드 BM25+임베딩, 날짜/타임레인지 필터, query 확장
+
+---
+
 ## 2026-04-24 (금) — 세션 27
 
 ### 완료

@@ -20,6 +20,19 @@
 
 ---
 
+## [1.7.2] - 2026-04-24
+
+### 개선
+- **PPTX 이미지 OCR** (`mcp-cache-layer/scripts/file_parsers.py`) — Tesseract 한국어+영어 OCR 통합. 미설치 환경에서 graceful degradation (경고 1회 후 기존 동작 유지)
+- **벤치마크 측정 방법론 수정** (`mcp-cache-layer/scripts/bench_fts.py`) — `measure()` SQL을 `gdi_client._local_unified_search()` 패턴으로 교체. `source_type='gdi'` 필터 + BM25 랭킹 + `doc_content` JOIN으로 wiki 오염 원천 차단
+- **KPI 베이스라인 확보** — 200쿼리 kpi_bench 결과: Miss Rate 82.5%, Body Text 99.2%(PASS), P90 3.9ms. Phase A/B 검색 품질 향상은 고도화 백로그로 이관
+
+### 수정
+- `search_fts` wiki 46개 오염 엔트리 삭제 (19,216 → 19,170) — bench_fts miss_rate 허위 92.1% 원인 제거
+- `jira_mirror.py`: `MCPSession` → `McpSession` 클래스명 수정, 인증 헤더 누락 수정
+
+---
+
 ## [1.7.1] - 2026-04-24
 
 ### 개선
