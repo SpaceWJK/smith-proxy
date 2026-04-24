@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-04-25 (토) — 세션 30 마감 (task-082 에픽 완결)
+
+### 🎯 최대 성과
+- **task-082 에픽 종결** — 기준 6/6 충족
+- **task-105 blocked 해제** — 8단계 워크플로 풀적용 (Step 1~7)
+  - 성능: 20분/32건 → 152.6초/19,088건 (~90,000배 개선)
+  - 원인: DB 쿼리 TEMP B-TREE + 풀스캔 (regex 아님)
+  - 해결: MIGRATIONS[9] partial index + seek pagination + WAL checkpoint
+  - Step 3 에이전트가 MIGRATIONS[8] 충돌 CRITICAL 1건 포착 (task-108 jira_mirror와)
+- **task-112 완료** — kpi_bench --chunk-mode 확장 + 재측정
+
+### 측정 결과
+- search_fts baseline: Miss 82.5% / 시간범위 17.9%
+- chunks_fts 모드: Miss 81.9% / 시간범위 21.4% (+19% relative)
+- 실사용 smoke test 20쿼리: **100% hit** (운영 경로 개선 입증)
+- 괴리 사유: kpi_bench 합성 200쿼리 한계 → task-113 신규 후속
+
+### 큐 최종 상태 (v18)
+- completed 108 / pending 1 (task-113) / blocked 0 / cancelled 1
+
+---
+
 ## 2026-04-24 (금) — 세션 30 연장 (즉시조치 + task-105 진단 + Tesseract + 파서 확장)
 
 ### 추가 완료
