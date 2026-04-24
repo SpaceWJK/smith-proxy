@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-04-24 (금) — 세션 27
+
+### 완료
+- **task-108: Jira 최소 로컬 미러** (8단계 워크플로우 완료)
+  - SQLite `jira_mirror` 테이블 (schema v8, mcp-cache-layer) — MCP 장애 fallback 전용
+  - `jira_client.py`: `_mirror_search`/`_mirror_age_fn` 옵셔널 임포트, JIRA_USERNAME 하드코딩 제거
+  - `slack_bot.py`: MCP 장애 시 "_(미러 기준 N분 전)_" UX 메시지 추가
+- **task-111: CQL 병렬 검색** (8단계 워크플로우 완료)
+  - `search/cql_parallel.py` 신규: `run_parallel_cql()` ThreadPoolExecutor + 5s 상한
+  - `mcp_session.py`: `threading.Lock` thread-safety, `_initializing` double-init 방지
+  - `wiki_client.py`: 1·2·3차 단계 for-loop → `run_parallel_cql` 교체 (최악 300s → 15s)
+
+### 변경 파일
+- `Slack Bot/jira_client.py`, `Slack Bot/slack_bot.py`
+- `Slack Bot/mcp_session.py`, `Slack Bot/wiki_client.py`
+- `Slack Bot/search/__init__.py` (신규), `Slack Bot/search/cql_parallel.py` (신규)
+
+### 커밋
+- `e065cc7` — feat: task-082 서브태스크 완료 — Jira 미러 + CQL 병렬화 → Railway 자동 재배포
+
+---
+
 ## 2026-03-26 (수) — 세션 26
 
 ### 완료

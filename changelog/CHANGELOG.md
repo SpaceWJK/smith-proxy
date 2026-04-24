@@ -20,6 +20,19 @@
 
 ---
 
+## [1.7.1] - 2026-04-24
+
+### 개선
+- **Jira 로컬 미러 fallback** (`jira_client.py`, `mcp_session.py`) — MCP 장애 시 SQLite 캐시에서 즉시 반환. "미러 기준 N분 전" UX 메시지로 사용자에게 캐시 기준 시각 명시 (`slack_bot.py`)
+- **CQL 병렬 검색** (`wiki_client.py`, `search/cql_parallel.py`) — Confluence CQL variant 순차 실행(최악 300s) → ThreadPoolExecutor 병렬 실행(최악 15s, -95%). 단계당 5s 상한 적용
+- **McpSession thread-safety** (`mcp_session.py`) — `threading.Lock`으로 상태 변수 경쟁 조건 차단. `call_tool(timeout=30)` 파라미터 추가
+
+### 보안
+- `jira_client.py`: `JIRA_USERNAME` 하드코딩 제거 → `os.getenv()` 전환, HTTP URL 평문 경고 추가
+- `jira_mirror.py`: `project_key` JQL 인젝션 방어 (`re.fullmatch` 정규식 검증)
+
+---
+
 ## [1.7.0] - 2026-03-26
 
 ### 추가
