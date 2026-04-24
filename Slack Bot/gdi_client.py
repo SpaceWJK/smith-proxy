@@ -28,6 +28,7 @@ import os
 import json
 import logging
 import re
+import sqlite3
 import time
 
 from mcp_session import McpSession
@@ -42,6 +43,9 @@ _perf = None
 _GDI_FOLDER_TTL = 6     # 기본값 (config 로드 실패 시)
 _GDI_FILE_TTL = 24
 _GDI_MEM_TTL = 300
+
+# try 블록 내 logger.info(GDI_MODE) 참조보다 먼저 정의해야 NameError 방지
+GDI_MODE = os.getenv("GDI_MODE", "local")
 
 try:
     import sys as _sys
@@ -66,6 +70,33 @@ try:
                 _GDI_FOLDER_TTL, _GDI_FILE_TTL, _GDI_MEM_TTL, GDI_MODE)
 except Exception as _e:
     logger.info("[gdi] 캐시 레이어 미사용: %s", _e)
+
+# ── 쿼리 전처리 (task-101) ──────────────────────────────────────────────
+_QUERY_PREPROCESSOR_ENABLED = False
+_preprocess_query_fn = None
+_apply_aliases_fn = None
+_preprocess_with_ranges_fn = None
+try:
+    from analytics.query_preprocessor import (
+        preprocess_query as _preprocess_query_fn,
+        apply_aliases as _apply_aliases_fn,
+        preprocess_query_with_ranges as _preprocess_with_ranges_fn,
+    )
+    _QUERY_PREPROCESSOR_ENABLED = True
+except ImportError:
+    logger.warning("[gdi] query_preprocessor 로드 실패, 전처리 비활성화")
+
+# ── TTL 정책 (task-107) ──────────────────────────────────────────────────
+_ttl_classify_fn = None
+_ttl_get_fn = None
+_QueryType = None
+try:
+    from analytics.ttl_policy import classify_query as _ttl_classify_fn
+    from analytics.ttl_policy import get_ttl as _ttl_get_fn
+    from analytics.ttl_policy import QueryType as _QueryType
+    logger.info("[gdi] TTL 정책 모듈 로드 완료")
+except ImportError:
+    logger.info("[gdi] TTL 정책 모듈 미사용 — 기존 고정 TTL 사용")
 
 # ── 폴더 택소노미 인덱스 (옵셔널) ─────────────────────────────────────────
 _TAXONOMY_ENABLED = False
@@ -121,6 +152,23 @@ def _mem_get(key: str):
     return None
 
 
+def _mem_get_with_ttl(key: str, ttl_sec: int = None):
+    """L1 메모리 캐시 조회. ttl_sec 미지정 시 기본 _GDI_MEM_TTL 사용.
+
+    Args:
+        key: 캐시 키
+        ttl_sec: TTL(초). None 이면 _GDI_MEM_TTL(300s) 기본값 사용.
+
+    Returns:
+        캐시 데이터 또는 None
+    """
+    effective_ttl = ttl_sec if ttl_sec is not None else _GDI_MEM_TTL
+    entry = _GDI_MEM_CACHE.get(key)
+    if entry and (time.time() - entry[1]) < effective_ttl:
+        return entry[0]
+    return None
+
+
 def _mem_set(key: str, data):
     """L1 메모리 캐시 저장."""
     _GDI_MEM_CACHE[key] = (data, time.time())
@@ -132,7 +180,12 @@ GDI_MCP_URL = os.getenv(
 # ── GDI 모드 스위치 ──────────────────────────────────────────────────────
 # "local"  : 캐시(SQLite) 전용, MCP 폴백 차단 (gdi-repo/ 로컬 파일 기반)
 # "cloud"  : 기존 동작 유지 (캐시 → MCP 폴백)
-GDI_MODE = os.getenv("GDI_MODE", "local")
+# 정의 위치: L46 (캐시 레이어 try 블록 이전으로 이동 — NameError 방지)
+
+# ── 청크 검색 활성화 플래그 (task-104) ───────────────────────────────────
+# CHUNK_SEARCH_ENABLED=true 로 설정 시 _local_chunk_search() 경로 사용.
+# 기본 false — 기존 FTS MATCH 경로 100% 유지. chunk 0건 또는 예외 시 자동 fallback.
+CHUNK_SEARCH_ENABLED = os.getenv("CHUNK_SEARCH_ENABLED", "false").lower() == "true"
 
 # ── GDI 청크 메타데이터 정제 ──────────────────────────────────────────────
 # GDI MCP가 반환하는 각 청크에는 인덱싱용 메타데이터 접두사가 붙는다:
@@ -269,6 +322,75 @@ def _get_mcp() -> McpSession:
     return _mcp_session
 
 
+# ── FTS5 LIKE 폴백 유틸 (task-102) ──────────────────────────────────────────
+
+def _escape_like(kw: str) -> str:
+    """LIKE 절에서 사용할 특수문자 이스케이프 (\\, %, _)."""
+    return kw.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
+def _build_like_clauses(kws: list) -> tuple:
+    """키워드 리스트 → (LIKE AND 절 리스트, 파라미터 리스트).
+
+    각 키워드에 대해 title 또는 body_text LIKE 조건을 생성한다.
+    """
+    clauses = []
+    params = []
+    for kw in kws:
+        escaped = _escape_like(kw)
+        clauses.append(
+            "(n.title LIKE ? ESCAPE '\\' OR dc.body_text LIKE ? ESCAPE '\\')"
+        )
+        params.extend([f"%{escaped}%", f"%{escaped}%"])
+    return clauses, params
+
+
+def _run_case_b(conn: sqlite3.Connection, fts_kws: list, short_kws: list,
+                game_filter_clause: str, game_filter_params: list,
+                limit: int,
+                date_filter_clause: str = "",
+                date_filter_params: list = None) -> list:
+    """case B: nodes 드라이빙 LIKE 검색 (trigram 불가 키워드 포함 시 사용).
+
+    fts_kws + short_kws 모두 LIKE AND 조건으로 처리한다.
+    SELECT 컬럼은 case A/C와 동일한 8-tuple (rank=NULL).
+
+    date_filter_clause: "AND (dm.last_modified BETWEEN ? AND ? ...)" 형태 절.
+    date_filter_params: BETWEEN 바인딩 파라미터 (start+'T00:00:00', end+'T23:59:59').
+    """
+    if date_filter_params is None:
+        date_filter_params = []
+
+    all_kws = fts_kws + short_kws
+    if not all_kws and not game_filter_clause:
+        return []
+
+    like_clauses, params_like = _build_like_clauses(all_kws)
+
+    where_extra = ""
+    if like_clauses:
+        where_extra += " AND " + " AND ".join(like_clauses)
+    if game_filter_clause:
+        where_extra += f" {game_filter_clause}"  # "AND LOWER(n.path) LIKE ? ESCAPE '\\'" 포함
+
+    sql = f"""
+        SELECT n.id, n.title, n.path, n.node_type,
+               SUBSTR(dc.body_text, 1, 500) AS body_text,
+               dc.summary, dc.keywords,
+               NULL AS rank
+        FROM nodes n
+        JOIN doc_content dc ON dc.node_id = n.id
+        LEFT JOIN doc_meta dm ON dm.node_id = n.id
+        WHERE n.source_type = 'gdi'{where_extra}
+          {date_filter_clause}
+        ORDER BY n.created_at DESC
+        LIMIT ?
+    """
+    return conn.execute(
+        sql, params_like + game_filter_params + date_filter_params + [limit]
+    ).fetchall()
+
+
 # ── GdiClient ────────────────────────────────────────────────────────────
 
 class GdiClient:
@@ -312,13 +434,19 @@ class GdiClient:
     def _cache_key_file(filename: str) -> str:
         return f"file:{filename}"
 
-    def _try_cache_get(self, cache_key: str) -> tuple:
-        """L1→L2 캐시 조회. (data, cache_status) 반환. 미스 시 (None, status)."""
+    def _try_cache_get(self, cache_key: str, l1_ttl_sec: int = None) -> tuple:
+        """L1→L2 캐시 조회. (data, cache_status) 반환. 미스 시 (None, status).
+
+        Args:
+            cache_key: 캐시 키
+            l1_ttl_sec: L1 TTL(초). None이면 기본 _GDI_MEM_TTL 사용.
+                        TIME_BOUNDED 쿼리 시 60 전달 → L1 TTL 단축.
+        """
         if not _GDI_CACHE_ENABLED:
             return None, "DISABLED"
 
-        # L1: 메모리
-        mem = _mem_get(cache_key)
+        # L1: 메모리 (l1_ttl_sec 적용)
+        mem = _mem_get_with_ttl(cache_key, l1_ttl_sec)
         if mem is not None:
             if _ops_log:
                 _ops_log.cache_hit(cache_key, source="memory")
@@ -398,67 +526,303 @@ class GdiClient:
             return None, err
         return self._parse_raw(raw), None
 
+    def _local_chunk_search(self, query_text: str, game_name: str = None,
+                            top_k: int = 10, date_ranges=None) -> tuple:
+        """doc_chunks + chunks_fts FTS5 trigram 청크 검색 (task-104).
+
+        SQL: chunks_fts MATCH → JOIN doc_chunks + nodes, LIMIT top_k*3
+        Python dedupe: node_id 기준 best BM25 chunk 1건만 보존 → top_k 반환.
+
+        반환 포맷: content_preview + chunk_content (동일값, 양쪽 키 필수)
+          - chunk_content: format_search_results() L726이 읽음
+          - content_preview: format_context_for_claude() L1174가 읽음
+        2자 이하 키워드만 있으면 빈 결과 즉시 반환 (unified fallback 유도).
+
+        date_ranges: DateRange list. None 또는 빈 list 시 날짜 필터 없음.
+        """
+        if not _GDI_CACHE_ENABLED or not _gdi_cache:
+            return {"success": True, "results": [], "total_count": 0}, None
+
+        conn = _gdi_cache._conn()
+        try:
+            keywords = [kw.strip() for kw in query_text.split() if kw.strip()]
+            if not keywords:
+                return {"success": True, "results": [], "total_count": 0}, None
+
+            # trigram: 3자 이상만 FTS MATCH 가능
+            fts_kws = [kw for kw in keywords if len(kw) >= 3]
+            if not fts_kws:
+                # 2자 이하 키워드만 → chunks_fts MATCH 불가 → 즉시 빈 결과
+                logger.debug("[gdi] chunk_search: 2자 이하 키워드만 → unified fallback")
+                return {"success": True, "results": [], "total_count": 0}, None
+
+            fts_query = " AND ".join(
+                '"' + kw.replace('"', '""') + '"' for kw in fts_kws
+            )
+
+            # game_name 필터 절
+            game_filter_clause = ""
+            game_filter_params: list = []
+            if game_name:
+                escaped_game = game_name.lower().replace(
+                    "\\", "\\\\"
+                ).replace("%", "\\%").replace("_", "\\_")
+                game_filter_clause = "AND LOWER(n.path) LIKE ? ESCAPE '\\'"
+                game_filter_params = [f"%{escaped_game}%"]
+
+            # date_ranges 필터 절
+            # last_modified: YYYY-MM-DDTHH:MM:SS 형식 → end에 T23:59:59 suffix 필수
+            date_filter_clause = ""
+            date_filter_params: list = []
+            effective_ranges = date_ranges or []
+            if effective_ranges:
+                clauses = " OR ".join(
+                    "dm.last_modified BETWEEN ? AND ?"
+                    for _ in effective_ranges
+                )
+                date_filter_clause = f"AND ({clauses})"
+                date_filter_params = [
+                    v
+                    for dr in effective_ranges
+                    for v in (dr.start + "T00:00:00", dr.end + "T23:59:59")
+                ]
+
+            sql = f"""
+                SELECT dc.node_id, n.title, n.path, n.node_type,
+                       dc.text AS chunk_text,
+                       dc.section_path,
+                       bm25(chunks_fts) AS rank
+                FROM chunks_fts
+                JOIN doc_chunks dc ON dc.id = chunks_fts.rowid
+                JOIN nodes n ON n.id = dc.node_id
+                LEFT JOIN doc_meta dm ON dm.node_id = n.id
+                WHERE chunks_fts MATCH ?
+                  AND n.source_type = 'gdi'
+                  {game_filter_clause}
+                  {date_filter_clause}
+                ORDER BY rank
+                LIMIT ?
+            """
+            params = [fts_query] + game_filter_params + date_filter_params + [top_k * 3]
+            rows = conn.execute(sql, params).fetchall()
+
+            # node_id 기준 dedupe — best BM25(낮을수록 좋음) chunk 1건 보존
+            seen_nodes: dict = {}
+            for row in rows:
+                nid = row[0]
+                rank = row[6]
+                if nid not in seen_nodes or rank < seen_nodes[nid]["rank"]:
+                    seen_nodes[nid] = {
+                        "node_id": nid,
+                        "title": row[1] or "",
+                        "path": row[2] or "",
+                        "node_type": row[3] or "gdi",
+                        "chunk_text": row[4] or "",
+                        "section_path": row[5],
+                        "rank": rank,
+                    }
+
+            deduped = list(seen_nodes.values())[:top_k]
+
+            results = []
+            for item in deduped:
+                preview = item["chunk_text"][:200]
+                results.append({
+                    "file_name": item["title"],
+                    "file_path": item["path"],
+                    "source_type": item["node_type"],
+                    "content_preview": preview,      # format_context_for_claude() L1174
+                    "chunk_content": preview,         # format_search_results() L726 (필수)
+                    "summary": "",
+                    "keywords": "",
+                    "_rank": item["rank"],
+                    "_collection": "gdi_local_chunks",
+                    "matched_section": item["section_path"],
+                })
+
+            return {
+                "success": True,
+                "results": results,
+                "total_count": len(results),
+                "breakdown": {"gdi_local_chunks": len(results)},
+                "_mode": "local_chunk_fts",
+            }, None
+
+        except sqlite3.OperationalError as e:
+            logger.warning("[gdi] chunk_search FTS MATCH 오류 (query=%r): %s",
+                           query_text, e)
+            return {"success": True, "results": [], "total_count": 0,
+                    "_mode": "local_chunk_fts", "_error": str(e)}, None
+        except Exception as e:
+            logger.error("[gdi] _local_chunk_search 오류: %s", e)
+            return None, f"chunk 검색 오류: {e}"
+        finally:
+            conn.close()
+
     def _local_unified_search(self, query_text: str, game_name: str = None,
-                              top_k: int = 10) -> tuple:
-        """SQLite FTS5 MATCH 기반 검색 (local 모드 전용, task-077).
+                              top_k: int = 10, date_ranges=None) -> tuple:
+        """SQLite FTS5 MATCH 기반 검색 (local 모드 전용, task-077/102).
 
-        search_fts MATCH + bm25 랭킹 사용. 기존 LIKE full scan 대비 10배+ 빠름.
-        한국어 unicode61 phrase match 실측 확인 (task-077 Step 3).
+        trigram FTS5 + 2자 이하 키워드 LIKE 폴백 (task-102).
+        3경로 분기:
+          case A: fts_kws만 있을 때 — FTS MATCH 드라이빙
+          case B: short_kws만 있을 때 — 순수 LIKE
+          case C: 둘 다 있을 때 — FTS + Python 후필터, 0건 시 case B 재실행
 
+        date_ranges: DateRange list (task-106). None 또는 빈 list 시 날짜 필터 없음.
         반환 포맷은 기존과 100% 호환 (content_preview 키 유지).
         """
         if not _GDI_CACHE_ENABLED or not _gdi_cache:
             return None, "캐시 레이어 미사용 (local 모드에서는 캐시 필수)"
 
+        # ── CHUNK_SEARCH_ENABLED 분기 (task-104) ─────────────────────────
+        # CHUNK_SEARCH_ENABLED=true 시 _local_chunk_search() 우선 시도.
+        # chunk 0건 또는 예외 발생 시 아래 기존 FTS MATCH 경로로 자동 fallback.
+        # CHUNK_SEARCH_ENABLED=false(기본) 시 이 블록 완전히 통과 — 기존 경로 100% 유지.
+        if CHUNK_SEARCH_ENABLED:
+            try:
+                chunk_data, chunk_err = self._local_chunk_search(
+                    query_text, game_name, top_k, date_ranges=date_ranges
+                )
+                if chunk_data and chunk_data.get("total_count", 0) > 0:
+                    return chunk_data, chunk_err
+                # chunk 0건 → fallback (청킹 누락 탐지용 로그)
+                logger.debug(
+                    "[gdi] chunk 0건 → unified fallback: query=%r", query_text
+                )
+            except Exception as _chunk_ex:
+                logger.warning(
+                    "[gdi] _local_chunk_search 예외 → unified fallback: %s",
+                    _chunk_ex,
+                )
+        # ── 기존 FTS MATCH 경로 (변경 없음) — unified fallback 영구 유지 ──
+
+        # 쿼리 전처리 — task-101/106 (alias 교정 + 날짜 정규화 + 시간 범위 추출)
+        date_ranges_from_query = None
+        if _QUERY_PREPROCESSOR_ENABLED and _preprocess_with_ranges_fn:
+            query_text, date_ranges_from_query = _preprocess_with_ranges_fn(query_text)
+            if game_name and _apply_aliases_fn:
+                # game_name alias 교정 (CRITICAL: Choaszero→Chaoszero 폴더 필터링)
+                game_name = _apply_aliases_fn(game_name)
+        elif _QUERY_PREPROCESSOR_ENABLED and _preprocess_query_fn:
+            query_text = _preprocess_query_fn(query_text)
+            if game_name and _apply_aliases_fn:
+                game_name = _apply_aliases_fn(game_name)
+
+        # 호출자가 date_ranges를 직접 전달한 경우 우선, 없으면 쿼리 추출값 사용
+        effective_ranges = date_ranges or date_ranges_from_query or []
+
+        # ── TTL 정책 분류 (task-107) ──────────────────────────────────────
+        _query_type = None
+        _l1_ttl, _l2_skip, _l2_ttl = 300, False, _GDI_FILE_TTL  # ImportError 폴백
+        if _ttl_classify_fn and _ttl_get_fn:
+            _query_type = _ttl_classify_fn(query_text, effective_ranges)
+            _l1_ttl, _l2_skip, _l2_ttl = _ttl_get_fn(_query_type)
+
+        # date_filter 절 생성
+        # ⚠ last_modified는 YYYY-MM-DDTHH:MM:SS 형식 → end에 T23:59:59 suffix 필수
+        date_filter_clause = ""
+        date_filter_params: list = []
+        if effective_ranges:
+            clauses = " OR ".join(
+                "dm.last_modified BETWEEN ? AND ?"
+                for _ in effective_ranges
+            )
+            date_filter_clause = f"AND ({clauses})"
+            date_filter_params = [
+                v
+                for dr in effective_ranges
+                for v in (dr.start + "T00:00:00", dr.end + "T23:59:59")
+            ]
+
+        conn = _gdi_cache._conn()
         try:
-            conn = _gdi_cache._conn()
-            # 키워드 분리 (공백 구분)
+            # ── 키워드 분리 ──────────────────────────────────────────────
             keywords = [kw.strip() for kw in query_text.split() if kw.strip()]
             if not keywords:
                 return {"success": True, "results": [], "total_count": 0}, None
 
-            # FTS5 MATCH 쿼리 구성:
-            # 각 키워드를 phrase("...") 로 감싸서 AND 연결
-            # - 한국어 연속 음절 matching 보장
-            # - 다중 키워드는 교집합 (AND)
-            # 특수문자(double quote) 포함 키워드는 내부 따옴표 이스케이프
-            def escape_fts_phrase(kw: str) -> str:
-                # FTS5 phrase 내부의 " 는 "" 로 이스케이프
-                return '"' + kw.replace('"', '""') + '"'
+            # trigram: 3자 이상만 FTS MATCH 가능, 2자 이하는 LIKE 폴백
+            fts_kws   = [kw for kw in keywords if len(kw) >= 3]
+            short_kws = [kw for kw in keywords if len(kw) < 3]
 
-            fts_query = " AND ".join(escape_fts_phrase(kw) for kw in keywords)
-
-            # game_name 필터: path LIKE 조건 (FTS 외부에서 JOIN 필터)
-            game_filter = ""
-            params = [fts_query]
+            # ── game_name 필터 절 ─────────────────────────────────────────
+            game_filter_clause = ""
+            game_filter_params = []
             if game_name:
-                game_filter = "AND LOWER(n.path) LIKE ?"
-                params.append(f"%{game_name.lower()}%")
-            params.append(top_k)
+                escaped_game = _escape_like(game_name.lower())
+                game_filter_clause = "AND LOWER(n.path) LIKE ? ESCAPE '\\'"
+                game_filter_params = [f"%{escaped_game}%"]
 
-            # bm25 랭킹 사용 (낮은 값일수록 높은 관련도)
-            sql = f"""
-                SELECT n.title, n.path, n.node_type,
-                       SUBSTR(dc.body_text, 1, 500) AS snippet,
-                       dc.summary, dc.keywords,
-                       bm25(search_fts) AS rank
-                FROM search_fts
-                JOIN nodes n ON n.id = search_fts.rowid
-                JOIN doc_content dc ON dc.node_id = n.id
-                WHERE search_fts MATCH ?
-                  AND n.source_type = 'gdi'
-                  {game_filter}
-                ORDER BY rank
-                LIMIT ?
-            """
-            rows = conn.execute(sql, params).fetchall()
-            conn.close()
+            # ── 경로 분기 ─────────────────────────────────────────────────
+            if fts_kws:
+                # case A 또는 case C: FTS MATCH 드라이빙
+                fts_query = " AND ".join(
+                    '"' + kw.replace('"', '""') + '"' for kw in fts_kws
+                )
+                sql = f"""
+                    SELECT n.id, n.title, n.path, n.node_type,
+                           SUBSTR(dc.body_text, 1, 500) AS body_text,
+                           dc.summary, dc.keywords,
+                           bm25(search_fts) AS rank
+                    FROM search_fts
+                    JOIN nodes n ON n.id = search_fts.rowid
+                    JOIN doc_content dc ON dc.node_id = n.id
+                    LEFT JOIN doc_meta dm ON dm.node_id = n.id
+                    WHERE search_fts MATCH ?
+                      AND n.source_type = 'gdi'
+                      {game_filter_clause}
+                      {date_filter_clause}
+                    ORDER BY rank LIMIT ?
+                """
+                params = [fts_query] + game_filter_params + date_filter_params + [top_k]
+                rows = conn.execute(sql, params).fetchall()
 
+                if short_kws:
+                    # case C: Python 후필터 (short_kws를 title/body_text에서 확인)
+                    filtered = [
+                        row for row in rows
+                        if all(
+                            skw.lower() in (row[1] or "").lower() or
+                            skw.lower() in (row[4] or "").lower()
+                            for skw in short_kws
+                        )
+                    ]
+                    if not filtered:
+                        # 0건 → case B 재실행 (fts_kws + short_kws 모두 LIKE)
+                        rows = _run_case_b(
+                            conn,
+                            fts_kws=fts_kws,
+                            short_kws=short_kws,
+                            game_filter_clause=game_filter_clause,
+                            game_filter_params=game_filter_params,
+                            limit=top_k,
+                            date_filter_clause=date_filter_clause,
+                            date_filter_params=date_filter_params,
+                        )
+                    else:
+                        rows = filtered
+                # else: case A — FTS 결과 그대로 사용
+
+            else:
+                # case B: fts_kws 없음, 순수 LIKE
+                rows = _run_case_b(
+                    conn,
+                    fts_kws=[],
+                    short_kws=short_kws,
+                    game_filter_clause=game_filter_clause,
+                    game_filter_params=game_filter_params,
+                    limit=top_k,
+                    date_filter_clause=date_filter_clause,
+                    date_filter_params=date_filter_params,
+                )
+
+            # ── 결과 변환 ────────────────────────────────────────────────
             results = []
             for row in rows:
-                title, path, node_type, snippet, summary, keywords_col, rank = row
-                # 스니펫 첫 200자 preview
-                preview = snippet[:200] if snippet else ""
+                row_id, title, path, node_type, body_text, summary, keywords_col, rank = row
+                # body_text 첫 200자 preview
+                preview = body_text[:200] if body_text else ""
                 results.append({
                     "file_name": title or "",
                     "file_path": path or "",
@@ -476,6 +840,9 @@ class GdiClient:
                 "total_count": len(results),
                 "breakdown": {"gdi_local_cache": len(results)},
                 "_mode": "local_fts",
+                "_query_type": (_query_type.value if _query_type else "normal"),
+                "_l2_skip": _l2_skip,
+                "_l2_ttl": _l2_ttl,
             }
             return data, None
 
@@ -487,14 +854,24 @@ class GdiClient:
         except Exception as e:
             logger.error("[gdi] local unified_search 오류: %s", e)
             return None, f"local 검색 오류: {e}"
+        finally:
+            conn.close()
 
     def search_by_filename(self, filename_query: str, page: int = 1,
                            game_name: str = None,
                            page_size: int = 10,
-                           exact_match: bool = False) -> tuple:
+                           exact_match: bool = False,
+                           ttl_hours: float = None,
+                           skip_l2: bool = False) -> tuple:
         """
         파일명 기반 검색 (청크 내용 포함, 페이지네이션).
         page=1 + page_size ≤ 20 일 때만 캐시 적용.
+
+        Args:
+            ttl_hours: L2 캐시 TTL(시간). None이면 _GDI_FILE_TTL(24h) 사용.
+                       unified_search()에서 TTL 정책(task-107)에 따라 전달.
+            skip_l2: True이면 _cache_store 호출 skip (TIME_BOUNDED 쿼리용).
+                     독립 호출 시 기본 False → 기존 동작 100% 유지.
 
         Returns: (parsed_data, error_str, cache_status)
         """
@@ -504,7 +881,9 @@ class GdiClient:
         use_cache = (page == 1 and page_size <= 20)
         if use_cache:
             cache_key = self._cache_key_file(filename_query)
-            cached, cache_status = self._try_cache_get(cache_key)
+            # skip_l2=True(TIME_BOUNDED)이면 L1 TTL도 단축 적용 (task-107)
+            l1_ttl = 60 if skip_l2 else None
+            cached, cache_status = self._try_cache_get(cache_key, l1_ttl_sec=l1_ttl)
             if cached is not None:
                 return cached, None
 
@@ -527,13 +906,15 @@ class GdiClient:
         data = self._parse_raw(raw)
 
         # 캐시 저장 (성공 + 파일 정보 있을 때)
-        if use_cache and data and isinstance(data, dict) and data.get("file"):
+        # skip_l2=True(TIME_BOUNDED) 시 저장 skip → stale hit 방지 (task-107)
+        if use_cache and not skip_l2 and data and isinstance(data, dict) and data.get("file"):
             file_info = data["file"]
             title = file_info.get("file_name", filename_query)
             fpath = file_info.get("file_path", "")
+            effective_ttl = ttl_hours if ttl_hours is not None else _GDI_FILE_TTL
             self._cache_store(
                 self._cache_key_file(filename_query), title, data,
-                node_type="file", ttl_hours=_GDI_FILE_TTL, path=fpath,
+                node_type="file", ttl_hours=effective_ttl, path=fpath,
             )
             if not cache_status:
                 cache_status = "STORE"
@@ -541,10 +922,17 @@ class GdiClient:
         return data, None
 
     def list_files_in_folder(self, folder_path: str, page: int = 1,
-                             page_size: int = 20) -> tuple:
+                             page_size: int = 20,
+                             ttl_hours: float = None,
+                             skip_l2: bool = False) -> tuple:
         """
         폴더 내 파일 목록 조회.
         page=1 일 때만 캐시 적용.
+
+        Args:
+            ttl_hours: L2 캐시 TTL(시간). None이면 _GDI_FOLDER_TTL(6h) 사용.
+            skip_l2: True이면 _cache_store 호출 skip (TIME_BOUNDED 쿼리용).
+                     독립 호출 시 기본 False → 기존 동작 100% 유지.
 
         Returns: (parsed_data, error_str)
         """
@@ -574,10 +962,12 @@ class GdiClient:
         data = self._parse_raw(raw)
 
         # 캐시 저장
-        if use_cache and data and isinstance(data, dict) and data.get("success"):
+        # skip_l2=True(TIME_BOUNDED) 시 저장 skip → stale hit 방지 (task-107)
+        if use_cache and not skip_l2 and data and isinstance(data, dict) and data.get("success"):
+            effective_ttl = ttl_hours if ttl_hours is not None else _GDI_FOLDER_TTL
             self._cache_store(
                 self._cache_key_folder(folder_path), folder_path, data,
-                node_type="folder", ttl_hours=_GDI_FOLDER_TTL, path=folder_path,
+                node_type="folder", ttl_hours=effective_ttl, path=folder_path,
             )
             if not cache_status:
                 cache_status = "STORE"

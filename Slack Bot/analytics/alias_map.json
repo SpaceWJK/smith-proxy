@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "gdi_folder_aliases": {
+    "Choaszero": "Chaoszero",
+    "ChaosZero": "Chaoszero",
+    "chaoszero": "Chaoszero",
+    "epicseven": "Epicseven",
+    "EpicSeven": "Epicseven",
+    "에픽세븐": "Epicseven"
+  },
+  "gdi_query_aliases": {
+    "카오스제로": "Chaoszero",
+    "카오스 제로": "Chaoszero",
+    "카제나 카오스 나이트메어": "Chaoszero",
+    "카제나": "Chaoszero",
+    "에픽세븐": "Epicseven",
+    "에픽 세븐": "Epicseven",
+    "epic seven": "Epicseven"
+  }
+}
