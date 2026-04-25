@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-04-25 (토) — 세션 30 연장 2 (task-113 설계 3라운드 + advisor 3회)
+
+### task-113 Step 3 완료 (design-approved v3)
+- **3 라운드 설계 검수 + advisor 3회 자문**
+  - Round 1 (qa-structural + qa-functional): FAIL (CRITICAL 4, MAJOR 4)
+  - Round 2 (web-architect + data-quality-engineer): FAIL (CRITICAL 5, MAJOR 7)
+  - Round 3 (원 검수자 재검증): **PASS** 양쪽 모두
+- Advisor 자문:
+  - 1회: 설계 방향 (unified_search + adapter seam)
+  - 2회: Round 2 conflict reconcile (3-way JOIN 오진 철회, descope 결정)
+  - 3회: 최종 pre-commit (dual path patch 리스크, baseline 하향, determinism 추가 3종)
+
+### 최종 설계 핵심
+- **측정 경로**: `GdiClient.unified_search` 직접 호출 (`ProductionSearchAdapter`)
+- **Gold set**: 16건 (8 real + 8 miss) — manual_rewrite 15건 R9로 descope
+- **sys.path 변형 금지** → `importlib.util.spec_from_file_location`
+- **Determinism 9 artifacts**: tie-break, reference-date, env pin, FTS tokenizer, gold SHA, alias SHA, page cache warmup, WAL freeze, 5-module SHA
+- **Baseline pre-commit**: real_log nDCG@10 = 0.60±0.07 (prod) / 0.45±0.10 (rawFTS)
+
+### Procedural Lesson
+> "rowid 매핑 주장은 INSERT-site binding code file:line 인용 후 runtime-output 해석."
+Round 1 CRITICAL-3 (search_fts.rowid ≠ nodes.id) 오진 원인 — INSERT 코드 추적 없이 title 불일치 현상만 보고 결론. Round 2 web-architect가 실측으로 철회.
+
+### Step 4 이관 (다음 세션)
+- 위치: `D:\Vibe Dev\AI Brain\_workspace\tasks\task-113\resume_prompt.md`
+- 🔴 Slack Bot gdi_client.py dual path 필수: `_local_unified_search:822-835` + `_local_chunk_search:627-641`
+
+---
+
 ## 2026-04-25 (토) — 세션 30 마감 (task-082 에픽 완결)
 
 ### 🎯 최대 성과
