@@ -1995,7 +1995,7 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     user_id=user_id, user_name=user_name,
                     action="ask_claude",
                     query=text,
-                    result=f"키워드: {search_kw}, 파일: {file_name}",
+                    result=f"키워드: {search_kw}\n파일: {file_name}",
                     elapsed_ms=int((time.time() - t0) * 1000),
                 )
                 return
@@ -2020,10 +2020,16 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                         ) if _tax_folders else search_query
                         _gdi_ask_claude(context, _tax_label, question, respond,
                                        display_question=f"/gdi {text}")
+                        _tax_files = tax_data.get("files", [])
+                        _tax_top1 = "-"
+                        if _tax_files:
+                            _candidate = _tax_files[0].get("title", "") or _tax_files[0].get("file_name", "")
+                            if _candidate:
+                                _tax_top1 = _candidate
                         gc.log_gdi_query(
                             user_id=user_id, user_name=user_name,
                             action="ask_claude", query=text,
-                            result=f"택소노미: {search_query}",
+                            result=f"택소노미: {search_query}\n파일: {_tax_top1}",
                             elapsed_ms=int((time.time() - t0) * 1000),
                             cache_status="TAXONOMY",
                         )
