@@ -2077,10 +2077,11 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                     _src_label = search_query
                 _gdi_ask_claude(context, _src_label, question, respond,
                                display_question=f"/gdi {text}")
+                _top1_name = (_res_items[0].get("file_name", "") if _res_items else "") or "-"
                 gc.log_gdi_query(
                     user_id=user_id, user_name=user_name,
                     action="ask_claude", query=text,
-                    result=f"검색어: {search_query}",
+                    result=f"검색어: {search_query}\n파일: {_top1_name}",
                     elapsed_ms=int((time.time() - t0) * 1000),
                 )
                 return
