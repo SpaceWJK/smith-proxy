@@ -63,7 +63,7 @@ GAMES = [
             "lordnine asia", "lna",
         ],
         "jira_key": "LNA",
-        "wiki_path_keywords": ["로드나인 아시아", "LNA", "Lordnine_asia"],
+        "wiki_path_keywords": ["로드나인 아시아", "LNA", "Lordnine_Asia"],
         "wiki_ancestor_id": None,
     },
 ]
