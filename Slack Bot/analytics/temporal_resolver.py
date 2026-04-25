@@ -74,6 +74,13 @@ _RE_THIS_LAST = re.compile(
 # 7. 오늘/어제
 _RE_TODAY_YEST = re.compile(r'(오늘|어제)')
 
+# 8. (task-115 R-4) "최근/가장 최근" 단독 (숫자/시간단위 미동반)
+# - 뒤에 숫자/일주달월개 동반 시 _RE_RECENT가 처리 → has_recent_bare()는 False 반환
+# - 한글 직전 lookbehind 차단 (예: "바로최근" 미매칭)
+_RE_RECENT_BARE = re.compile(
+    r'(?<![가-힣])(가장\s*)?최근(?!\s*\d)(?!\s*[일주달월개])'
+)
+
 
 # ── 헬퍼 함수 ─────────────────────────────────────────────────────────────
 
@@ -117,6 +124,18 @@ def _month_range(year: int, month: int) -> tuple:
 
 class TemporalResolver:
     """자연어 텍스트에서 시간 범위 표현을 추출하여 DateRange list로 반환."""
+
+    def has_recent_bare(self, text: str) -> bool:
+        """task-115 R-4 — '최근/가장 최근' 단독 (숫자/시간단위 미동반) 매칭 여부.
+
+        충돌 방지: _RE_RECENT (절대 N일/N주/N달) 또는 _RE_THIS_LAST (이번주/이번달)가
+        먼저 매칭되면 False 반환. ref_date DESC 정렬 trigger 용 (gdi_client.py R-4).
+        """
+        if not text:
+            return False
+        if _RE_RECENT.search(text) or _RE_THIS_LAST.search(text):
+            return False
+        return bool(_RE_RECENT_BARE.search(text))
 
     def resolve(self, text: str, ref_date=None) -> list:
         """텍스트에서 시간 범위 표현 추출 → DateRange list.

@@ -56,6 +56,59 @@ import threading
 _token_logger = None
 _token_logger_lock = threading.Lock()
 
+# ── task-115 helpers (R-2/R-3/R-4) ────────────────────────────────────
+# routing_spec.yaml folder_routing 정책 inline 코드화.
+# - tsv_policy: TSV 키워드 명시 시에만 game_data 폴더 검색 (R-3)
+# - intent_keywords: 질문 키워드 → folder_role list (R-2)
+
+_TSV_WHITELIST = ("tsv", "게임 데이터", "데이터 db", "데이터db")  # 소문자 정규화 후 매칭
+
+_INTENT_KEYWORDS: dict = {
+    "planning":   ["기획", "기획서", "기획안", "명세", "패치노트", "빌드", "핫픽스"],
+    "qa_result":  ["qa", "테스트", "bat", "bug verification", "update checklist"],
+    "live_issue": ["라이브", "운영 이슈", "커뮤니티 버그", "cs 이슈", "인앱 이슈"],
+    "game_data":  ["tsv", "게임 데이터", "테이블", "데이터 db", "데이터db"],
+}
+
+
+def _is_tsv_explicit(search_query: str) -> bool:
+    """task-115 R-3 — TSV 키워드 명시 여부 (Master 정책: 명시 시에만 조회)."""
+    if not search_query:
+        return False
+    q = search_query.lower()
+    return any(kw in q for kw in _TSV_WHITELIST)
+
+
+def _detect_folder_role(question: str) -> "list | None":
+    """task-115 R-2 — 사용자 질문에서 folder_role 의도 추출 (intent 라우팅)."""
+    if not question:
+        return None
+    q = question.lower()
+    matched = []
+    for role, kws in _INTENT_KEYWORDS.items():
+        if any(kw.lower() in q for kw in kws):
+            matched.append(role)
+    return matched if matched else None
+
+
+# task-115 R-4: TemporalResolver 싱글톤 (has_recent_bare 전용)
+try:
+    from analytics.temporal_resolver import TemporalResolver as _TR
+    _temporal_resolver_115 = _TR()
+except Exception:
+    _temporal_resolver_115 = None
+
+
+def _has_recent_bare(text: str) -> bool:
+    """task-115 R-4 — '최근/가장 최근' 단독 매칭 (충돌 방지 포함)."""
+    if not _temporal_resolver_115:
+        return False
+    try:
+        return _temporal_resolver_115.has_recent_bare(text or "")
+    except Exception:
+        return False
+
+
 def _log_token_usage(source: str, input_tokens: int, output_tokens: int):
     """Claude API 호출 후 토큰 사용량을 별도 로그 파일에 기록."""
     global _token_logger
@@ -2044,7 +2097,21 @@ def create_bolt_app(bot_token: str, slack_sender: SlackSender) -> App:
                         game_name=gdi_rule.get("game_name"),
                     )
                 else:
-                    data, err = gdi_client.unified_search(search_query)
+                    # task-115 v1 hooks (R-2/R-3/R-4/R-5)
+                    from game_aliases import detect_game_in_text
+                    _game_115 = detect_game_in_text(question) or detect_game_in_text(search_query)
+                    _game_name_115 = _game_115["canonical"] if _game_115 else None
+                    _folder_role_115 = _detect_folder_role(question)
+                    _tsv_explicit_115 = _is_tsv_explicit(search_query)
+                    _order_recent_115 = _has_recent_bare(question)
+
+                    data, err = gdi_client.unified_search(
+                        search_query,
+                        game_name=_game_name_115,
+                        folder_role_filter=_folder_role_115,
+                        tsv_explicit=_tsv_explicit_115,
+                        order_by_recent=_order_recent_115,
+                    )
                 if err:
                     gc.log_gdi_query(
                         user_id=user_id, user_name=user_name,

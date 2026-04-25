@@ -39,7 +39,7 @@ GAMES = [
             "chaos zero nightmare", "gcz", "cz",
         ],
         "jira_key": "GCZ",
-        "wiki_path_keywords": ["카제나", "CZ |", "GCZ", "카오스"],
+        "wiki_path_keywords": ["카제나", "CZ |", "GCZ", "카오스", "Chaoszero"],
         "wiki_ancestor_id": 650589593,      # CZ | Hotfix 이슈 부모 페이지 ID
     },
     {
@@ -63,7 +63,7 @@ GAMES = [
             "lordnine asia", "lna",
         ],
         "jira_key": "LNA",
-        "wiki_path_keywords": ["로드나인 아시아", "LNA"],
+        "wiki_path_keywords": ["로드나인 아시아", "LNA", "Lordnine_asia"],
         "wiki_ancestor_id": None,
     },
 ]

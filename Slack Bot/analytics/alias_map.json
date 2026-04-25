@@ -1,12 +1,15 @@
 {
-  "version": 2,
+  "version": 3,
   "gdi_folder_aliases": {
     "Choaszero": "Chaoszero",
     "ChaosZero": "Chaoszero",
     "chaoszero": "Chaoszero",
     "epicseven": "Epicseven",
     "EpicSeven": "Epicseven",
-    "에픽세븐": "Epicseven"
+    "에픽세븐": "Epicseven",
+    "Lordnine_Asia": "Lordnine_asia",
+    "lordnine_asia": "Lordnine_asia",
+    "LordnineAsia": "Lordnine_asia"
   },
   "gdi_query_aliases": {
     "카오스제로": "Chaoszero",
@@ -15,6 +18,12 @@
     "카제나": "Chaoszero",
     "에픽세븐": "Epicseven",
     "에픽 세븐": "Epicseven",
-    "epic seven": "Epicseven"
+    "epic seven": "Epicseven",
+    "로드나인 아시아": "Lordnine_asia",
+    "로드나인아시아": "Lordnine_asia",
+    "로드나인": "Lordnine_asia",
+    "lordnine asia": "Lordnine_asia",
+    "lordnine": "Lordnine_asia",
+    "lna": "Lordnine_asia"
   }
 }

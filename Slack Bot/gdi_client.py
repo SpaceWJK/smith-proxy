@@ -351,7 +351,10 @@ def _run_case_b(conn: sqlite3.Connection, fts_kws: list, short_kws: list,
                 game_filter_clause: str, game_filter_params: list,
                 limit: int,
                 date_filter_clause: str = "",
-                date_filter_params: list = None) -> list:
+                date_filter_params: list = None,
+                folder_filter_clause: str = "",
+                folder_filter_params: list = None,
+                order_by_recent: bool = False) -> list:
     """case B: nodes 드라이빙 LIKE 검색 (trigram 불가 키워드 포함 시 사용).
 
     fts_kws + short_kws 모두 LIKE AND 조건으로 처리한다.
@@ -359,9 +362,13 @@ def _run_case_b(conn: sqlite3.Connection, fts_kws: list, short_kws: list,
 
     date_filter_clause: "AND (dm.last_modified BETWEEN ? AND ? ...)" 형태 절.
     date_filter_params: BETWEEN 바인딩 파라미터 (start+'T00:00:00', end+'T23:59:59').
+    folder_filter_clause / folder_filter_params: task-115 R-3 (TSV 차단/folder_role).
+    order_by_recent: True 시 ref_date DESC NULLS LAST 우선 (task-115 R-4).
     """
     if date_filter_params is None:
         date_filter_params = []
+    if folder_filter_params is None:
+        folder_filter_params = []
 
     all_kws = fts_kws + short_kws
     if not all_kws and not game_filter_clause:
@@ -374,7 +381,14 @@ def _run_case_b(conn: sqlite3.Connection, fts_kws: list, short_kws: list,
         where_extra += " AND " + " AND ".join(like_clauses)
     if game_filter_clause:
         where_extra += f" {game_filter_clause}"  # "AND LOWER(n.path) LIKE ? ESCAPE '\\'" 포함
+    if folder_filter_clause:
+        where_extra += f" {folder_filter_clause}"  # task-115 R-3
 
+    order_by_b = (
+        "ORDER BY n.ref_date DESC NULLS LAST, n.created_at DESC"
+        if order_by_recent
+        else "ORDER BY n.created_at DESC"
+    )
     sql = f"""
         SELECT n.id, n.title, n.path, n.node_type,
                SUBSTR(dc.body_text, 1, 500) AS body_text,
@@ -385,11 +399,11 @@ def _run_case_b(conn: sqlite3.Connection, fts_kws: list, short_kws: list,
         LEFT JOIN doc_meta dm ON dm.node_id = n.id
         WHERE n.source_type = 'gdi'{where_extra}
           {date_filter_clause}
-        ORDER BY n.created_at DESC
+        {order_by_b}
         LIMIT ?
     """
     return conn.execute(
-        sql, params_like + game_filter_params + date_filter_params + [limit]
+        sql, params_like + game_filter_params + folder_filter_params + date_filter_params + [limit]
     ).fetchall()
 
 
@@ -506,19 +520,35 @@ class GdiClient:
     # ── MCP 호출 메서드 (캐시 통합) ───────────────────────────
 
     def unified_search(self, query_text: str, game_name: str = None,
-                       top_k: int = 10) -> tuple:
+                       top_k: int = 10,
+                       date_ranges=None,
+                       folder_role_filter: list = None,
+                       tsv_explicit: bool = False,
+                       order_by_recent: bool = False) -> tuple:
         """
         크로스 컬렉션 통합 검색.
         - local 모드: SQLite 캐시 DB에서 LIKE 검색
         - cloud 모드: MCP unified_search 호출
 
+        task-115 v1 신규 kwargs (local 모드 전용, default 후방호환):
+        - date_ranges: DateRange list (기존 _local_unified_search 위임)
+        - folder_role_filter: ['planning', 'qa_result', ...] 매칭 폴더만 검색
+        - tsv_explicit: False(default) 시 TSV 폴더 완전 차단 (task-115 R-3)
+        - order_by_recent: True 시 ORDER BY ref_date DESC (task-115 R-4)
+
         Returns: (parsed_data, error_str)
         """
         # ── local 모드: SQLite 캐시에서 직접 검색 ──
         if GDI_MODE == "local":
-            return self._local_unified_search(query_text, game_name, top_k)
+            return self._local_unified_search(
+                query_text, game_name, top_k,
+                date_ranges=date_ranges,
+                folder_role_filter=folder_role_filter,
+                tsv_explicit=tsv_explicit,
+                order_by_recent=order_by_recent,
+            )
 
-        # ── cloud 모드: MCP 호출 ──
+        # ── cloud 모드: MCP 호출 (task-115 v1 kwargs 무시 — local 전용) ──
         args = {"query_text": query_text, "top_k": top_k}
         if game_name:
             args["game_name"] = game_name
@@ -529,7 +559,10 @@ class GdiClient:
         return self._parse_raw(raw), None
 
     def _local_chunk_search(self, query_text: str, game_name: str = None,
-                            top_k: int = 10, date_ranges=None) -> tuple:
+                            top_k: int = 10, date_ranges=None,
+                            folder_role_filter: list = None,
+                            tsv_explicit: bool = False,
+                            order_by_recent: bool = False) -> tuple:
         """doc_chunks + chunks_fts FTS5 trigram 청크 검색 (task-104).
 
         SQL: chunks_fts MATCH → JOIN doc_chunks + nodes, LIMIT top_k*3
@@ -572,6 +605,16 @@ class GdiClient:
                 game_filter_clause = "AND LOWER(n.path) LIKE ? ESCAPE '\\'"
                 game_filter_params = [f"%{escaped_game}%"]
 
+            # folder_role 필터 절 (task-115 R-3 — qa-structural MAJOR fix)
+            folder_filter_clause = ""
+            folder_filter_params: list = []
+            if folder_role_filter:
+                placeholders = ",".join("?" * len(folder_role_filter))
+                folder_filter_clause = f"AND COALESCE(n.folder_role,'unknown') IN ({placeholders})"
+                folder_filter_params = list(folder_role_filter)
+            elif not tsv_explicit:
+                folder_filter_clause = "AND COALESCE(n.folder_role,'unknown') != 'game_data'"
+
             # date_ranges 필터 절
             # last_modified: YYYY-MM-DDTHH:MM:SS 형식 → end에 T23:59:59 suffix 필수
             date_filter_clause = ""
@@ -589,6 +632,11 @@ class GdiClient:
                     for v in (dr.start + "T00:00:00", dr.end + "T23:59:59")
                 ]
 
+            order_clause_chunk = (
+                "ORDER BY n.ref_date DESC NULLS LAST, rank"
+                if order_by_recent
+                else "ORDER BY rank"
+            )
             sql = f"""
                 SELECT dc.node_id, n.title, n.path, n.node_type,
                        dc.text AS chunk_text,
@@ -601,11 +649,15 @@ class GdiClient:
                 WHERE chunks_fts MATCH ?
                   AND n.source_type = 'gdi'
                   {game_filter_clause}
+                  {folder_filter_clause}
                   {date_filter_clause}
-                ORDER BY rank
+                {order_clause_chunk}
                 LIMIT ?
             """
-            params = [fts_query] + game_filter_params + date_filter_params + [top_k * 3]
+            params = (
+                [fts_query] + game_filter_params + folder_filter_params
+                + date_filter_params + [top_k * 3]
+            )
             rows = conn.execute(sql, params).fetchall()
 
             # node_id 기준 dedupe — best BM25(낮을수록 좋음) chunk 1건 보존
@@ -663,7 +715,10 @@ class GdiClient:
             conn.close()
 
     def _local_unified_search(self, query_text: str, game_name: str = None,
-                              top_k: int = 10, date_ranges=None) -> tuple:
+                              top_k: int = 10, date_ranges=None,
+                              folder_role_filter: list = None,
+                              tsv_explicit: bool = False,
+                              order_by_recent: bool = False) -> tuple:
         """SQLite FTS5 MATCH 기반 검색 (local 모드 전용, task-077/102).
 
         trigram FTS5 + 2자 이하 키워드 LIKE 폴백 (task-102).
@@ -685,7 +740,10 @@ class GdiClient:
         if CHUNK_SEARCH_ENABLED:
             try:
                 chunk_data, chunk_err = self._local_chunk_search(
-                    query_text, game_name, top_k, date_ranges=date_ranges
+                    query_text, game_name, top_k, date_ranges=date_ranges,
+                    folder_role_filter=folder_role_filter,
+                    tsv_explicit=tsv_explicit,
+                    order_by_recent=order_by_recent,
                 )
                 if chunk_data and chunk_data.get("total_count", 0) > 0:
                     return chunk_data, chunk_err
@@ -757,6 +815,26 @@ class GdiClient:
                 game_filter_clause = "AND LOWER(n.path) LIKE ? ESCAPE '\\'"
                 game_filter_params = [f"%{escaped_game}%"]
 
+            # ── folder_role 필터 절 (task-115 R-3) ────────────────────────
+            # tsv_explicit=False (default) 시 game_data 폴더(TSV) 완전 차단.
+            # folder_role_filter 명시 시 해당 role만 통과 (intent 기반 라우팅).
+            folder_filter_clause = ""
+            folder_filter_params: list = []
+            if folder_role_filter:
+                placeholders = ",".join("?" * len(folder_role_filter))
+                folder_filter_clause = f"AND COALESCE(n.folder_role,'unknown') IN ({placeholders})"
+                folder_filter_params = list(folder_role_filter)
+            elif not tsv_explicit:
+                folder_filter_clause = "AND COALESCE(n.folder_role,'unknown') != 'game_data'"
+
+            # ── ORDER BY 분기 (task-115 R-4) ──────────────────────────────
+            # order_by_recent=True 시 ref_date DESC NULLS LAST 우선, default 기존 rank.
+            order_clause_a = (
+                "ORDER BY n.ref_date DESC NULLS LAST, rank LIMIT ?"
+                if order_by_recent
+                else "ORDER BY rank LIMIT ?"
+            )
+
             # ── 경로 분기 ─────────────────────────────────────────────────
             if fts_kws:
                 # case A 또는 case C: FTS MATCH 드라이빙
@@ -775,10 +853,14 @@ class GdiClient:
                     WHERE search_fts MATCH ?
                       AND n.source_type = 'gdi'
                       {game_filter_clause}
+                      {folder_filter_clause}
                       {date_filter_clause}
-                    ORDER BY rank LIMIT ?
+                    {order_clause_a}
                 """
-                params = [fts_query] + game_filter_params + date_filter_params + [top_k]
+                params = (
+                    [fts_query] + game_filter_params + folder_filter_params
+                    + date_filter_params + [top_k]
+                )
                 rows = conn.execute(sql, params).fetchall()
 
                 if short_kws:
@@ -802,6 +884,9 @@ class GdiClient:
                             limit=top_k,
                             date_filter_clause=date_filter_clause,
                             date_filter_params=date_filter_params,
+                            folder_filter_clause=folder_filter_clause,
+                            folder_filter_params=folder_filter_params,
+                            order_by_recent=order_by_recent,
                         )
                     else:
                         rows = filtered
@@ -818,6 +903,9 @@ class GdiClient:
                     limit=top_k,
                     date_filter_clause=date_filter_clause,
                     date_filter_params=date_filter_params,
+                    folder_filter_clause=folder_filter_clause,
+                    folder_filter_params=folder_filter_params,
+                    order_by_recent=order_by_recent,
                 )
 
             # ── 결과 변환 ────────────────────────────────────────────────
