@@ -301,6 +301,8 @@ def log_gdi_query(*, user_id: str = "", user_name: str = "",
     if elapsed_ms > 0:
         msg += f" | {elapsed_ms}ms"
 
+    msg = msg.replace('\r\n', '\\n').replace('\n', '\\n')
+
     if error:
         gl.error(msg)
     else:

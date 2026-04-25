@@ -278,7 +278,8 @@ def parse_gdi_query_log(path: str | Path = GDI_QUERY_LOG) -> list[GdiEntry]:
         # query 접두사 제거
         query = query_f[6:] if query_f.startswith('query=') else query_f
 
-        # result_or_error 접두사 제거 (MAJOR-2 반영)
+        # result_or_error 접두사 제거 (MAJOR-2 반영) + escape 해제 (task-114 R-1 호환)
+        result_or_error = result_or_error.replace('\\n', '\n')
         if result_or_error.startswith('result='):
             rval = result_or_error[7:]
         elif result_or_error.startswith('error='):
