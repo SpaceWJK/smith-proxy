@@ -55,7 +55,7 @@ class GdiEntry:
     query: str              # folder_path 또는 통합 쿼리
     keyword: Optional[str]  # 9-field 형식에서만 존재
     question: Optional[str] # 9-field 형식에서만 존재
-    result_or_error: str    # result=.../error=... 접두사 제거 후 저장
+    result_or_error: str    # result=.../error=... 접두사 제거 후 저장 (log에서는 \n이 \\n literal로 escape, parse 시 unescape — gdi_client.py:303 + L280 양방향 contract)
     cache: Optional[str]    # ask_claude OK 중 cache=TAXONOMY 등
     duration_ms: int        # "7335ms" → 7335
     category: str           # OK | CONTENT_EMPTY | KEYWORD_MISS | FOLDER_MISS |
