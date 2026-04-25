@@ -637,6 +637,7 @@ class GdiClient:
                     "keywords": "",
                     "_rank": item["rank"],
                     "_collection": "gdi_local_chunks",
+                    "_node_id": item["node_id"],     # task-113: bench adapter 의존
                     "matched_section": item["section_path"],
                 })
 
@@ -832,6 +833,7 @@ class GdiClient:
                     "keywords": keywords_col or "",
                     "_rank": rank,
                     "_collection": "gdi_local_cache",
+                    "_node_id": row_id,           # task-113: bench adapter 의존
                 })
 
             data = {
